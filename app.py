@@ -7,25 +7,17 @@ from scipy.stats import norm
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
-# --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(layout="wide", page_title="PRO GEX Intelligence Terminal", initial_sidebar_state="expanded")
+# --- CONFIGURAZIONE ---
+st.set_page_config(layout="wide", page_title="Institutional GEX Dashboard", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
-# --- DATABASE TICKER (50+) ---
-TICKER_LIST = [
-    "NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", 
-    "AMD", "NFLX", "COIN", "MARA", "IBIT", "BITO", "SMCI", "AVGO", "ARM", "MU", "INTC", "ASML",
-    "JPM", "GS", "BAC", "V", "MA", "DIS", "BA", "CAT", "XOM", "CVX", "TLT", "GLD", "SLV", "USO",
-    "PLTR", "UBER", "ABNB", "PYPL", "SQ", "BABA", "NIO", "MSTR", "HOOD", "SHOP", "ADBE", "CRM"
-]
+TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR"]
 
 def fix_ticker(symbol):
     if not symbol: return None
     s = symbol.upper().strip()
-    if s in ["NDX", "SPX", "RUT", "VIX", "DJI"]: return f"^{s}"
-    return s
+    return f"^{s}" if s in ["NDX", "SPX", "RUT", "VIX", "DJI"] else s
 
-# --- MOTORE GRECHE ---
 def get_all_greeks(row, spot, t_yrs):
     try:
         s, k, v, oi = spot, row['strike'], row['impliedVolatility'], row['openInterest']
@@ -45,87 +37,85 @@ def get_all_greeks(row, spot, t_yrs):
 def analyze_tf(t_obj, spot, exp_idx):
     try:
         exps = t_obj.options
-        if not exps: return "N/D", "#555", "Nessun dato"
+        if not exps: return "N/D", "#555"
         sel = exps[min(exp_idx, len(exps)-1)]
         t_yrs = max((datetime.strptime(sel, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
         ch = t_obj.option_chain(sel)
-        c = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-        p = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-        g, v = c[0].sum() - p[0].sum(), c[1].sum() - p[1].sum()
-        if g > 0 and v > 0: return "LONG", "#00ff00", "Strong"
-        if g < 0 and v < 0: return "SHORT", "#ff4444", "Strong"
-        return "NEUTRAL", "#ffff00", "Volatile"
-    except: return "ERR", "#555", "Errore"
+        c = ch.calls.apply(lambda r: (norm.pdf((np.log(spot/r['strike']) + (0.045 + 0.5 * r['impliedVolatility']**2) * t_yrs) / (r['impliedVolatility'] * np.sqrt(t_yrs))) / (spot * r['impliedVolatility'] * np.sqrt(t_yrs))) * r['openInterest'] * 100, axis=1)
+        p = ch.puts.apply(lambda r: (norm.pdf((np.log(spot/r['strike']) + (0.045 + 0.5 * r['impliedVolatility']**2) * t_yrs) / (r['impliedVolatility'] * np.sqrt(t_yrs))) / (spot * r['impliedVolatility'] * np.sqrt(t_yrs))) * r['openInterest'] * 100, axis=1)
+        g_net = c.sum() - p.sum()
+        return ("LONG", "#00ff00") if g_net > 0 else ("SHORT", "#ff4444")
+    except: return "ERR", "#555"
 
-# --- SIDEBAR: CONTROLLO COMPLETO ---
-st.sidebar.header("🚀 CONTROLLO TERMINALE")
-sel_ticker = st.sidebar.selectbox("SELEZIONA ASSET (Preimpostati)", ["CERCA..."] + sorted(TICKER_LIST))
-manual_ticker = st.sidebar.text_input("OPPURE INSERISCI MANUALE", "")
-active_ticker = manual_ticker if manual_ticker else (sel_ticker if sel_ticker != "CERCA..." else "NDX")
+# --- SIDEBAR ---
+st.sidebar.header("🕹️ TERMINAL SETTINGS")
+sel_ticker = st.sidebar.selectbox("ASSET", ["CERCA..."] + sorted(TICKER_LIST))
+manual_t = st.sidebar.text_input("MANUAL TICKER", "")
+active_t = manual_t if manual_t else (sel_ticker if sel_ticker != "CERCA..." else "NDX")
+trade_mode = st.sidebar.selectbox("TIMEFRAME", ["SCALPING (0DTE)", "INTRADAY (Weekly)", "SWING (Monthly)"])
+zoom_val = st.sidebar.slider("ZOOM %", 1, 30, 5)
+main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
-trade_mode = st.sidebar.selectbox("MODALITÀ OPERATIVA", ["SCALPING (0DTE)", "INTRADAY (Weekly)", "SWING (Monthly)"])
-zoom_val = st.sidebar.slider("ZOOM AREA %", 1, 40, 5)
-main_metric = st.sidebar.radio("METRICA GRAFICO PRINCIPALE", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
-
-# --- LOGICA DI CARICAMENTO ---
-t_str = fix_ticker(active_ticker)
-
+t_str = fix_ticker(active_t)
 if t_str:
     try:
         t_obj = yf.Ticker(t_str)
         hist = t_obj.history(period='1d')
         if not hist.empty:
             spot = hist['Close'].iloc[-1]
-            
-            # 1. BIAS MULTI-TIMEFRAME (Sempre visibile)
-            st.subheader(f"📡 Radar Bias: {active_ticker.upper()}")
-            m1, m2, m3 = st.columns(3)
-            with st.spinner('Analisi flussi...'):
-                b1, c1, p1 = analyze_tf(t_obj, spot, 0) # Scalp
-                b2, c2, p2 = analyze_tf(t_obj, spot, 2) # Weekly
-                b3, c3, p3 = analyze_tf(t_obj, spot, 5) # Swing
-            
-            m1.markdown(f"<div style='text-align:center; padding:15px; border:2px solid {c1}; border-radius:10px;'><h3>SCALP</h3><h1 style='color:{c1};'>{b1}</h1><p>{p1}</p></div>", unsafe_allow_html=True)
-            m2.markdown(f"<div style='text-align:center; padding:15px; border:2px solid {c2}; border-radius:10px;'><h3>INTRA</h3><h1 style='color:{c2};'>{b2}</h1><p>{p2}</p></div>", unsafe_allow_html=True)
-            m3.markdown(f"<div style='text-align:center; padding:15px; border:2px solid {c3}; border-radius:10px;'><h3>SWING</h3><h1 style='color:{c3};'>{b3}</h1><p>{p3}</p></div>", unsafe_allow_html=True)
-
-            # 2. GRAFICO ADATTIVO IN BASE AL TRADE MODE
-            st.divider()
             exps = t_obj.options
             idx = 0 if "SCALPING" in trade_mode else (2 if "INTRADAY" in trade_mode else 5)
             sel_exp = exps[min(idx, len(exps)-1)]
             
-            t_yrs_main = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
-            ch_data = t_obj.option_chain(sel_exp)
+            # --- CALCOLO DATI ---
+            t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
+            ch = t_obj.option_chain(sel_exp)
+            c_m = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+            p_m = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
             
-            c_m = ch_data.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs_main), axis=1)
-            p_m = ch_data.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs_main), axis=1)
-            
-            df = pd.DataFrame({'strike': ch_data.calls['strike']})
+            df = pd.DataFrame({'strike': ch.calls['strike']})
             df['Gamma'], df['Vanna'], df['Charm'] = c_m[0]-p_m[0], c_m[1]-p_m[1], c_m[2]-p_m[2]
             df['Vega'], df['Theta'] = c_m[3]+p_m[3], c_m[4]+p_m[4]
             
+            # IDENTIFICAZIONE MURI (WALLS)
+            call_wall_strike = df.loc[df['Gamma'].idxmax(), 'strike']
+            put_wall_strike = df.loc[df['Gamma'].idxmin(), 'strike']
+
+            # --- HEADER BIAS ---
+            st.subheader(f"📡 Radar: {active_t.upper()}")
+            m1, m2, m3 = st.columns(3)
+            b1, c1 = analyze_tf(t_obj, spot, 0)
+            b2, c2 = analyze_tf(t_obj, spot, 2)
+            b3, c3 = analyze_tf(t_obj, spot, 5)
+            m1.metric("SCALP", b1, delta_color="normal")
+            m2.metric("INTRA", b2, delta_color="normal")
+            m3.metric("SWING", b3, delta_color="normal")
+
+            # --- GRAFICO DINAMICO ---
             l, u = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
             df_z = df[(df['strike']>=l) & (df['strike']<=u)]
-            
-            # Grafico
             z_flip = df_z.loc[df_z[main_metric].abs().idxmin(), 'strike']
+            
             fig = go.Figure()
+            # Barre Metrica
             fig.add_trace(go.Bar(y=df_z['strike'], x=df_z[main_metric], orientation='h', 
-                                 marker_color=np.where(df_z[main_metric]>=0, '#00ff00', '#00aaff')))
-            fig.add_hline(y=spot, line_color="cyan", annotation_text=f"PREZZO: {spot:.2f}")
-            fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text=f"ZERO {main_metric.upper()}")
-            fig.update_layout(template="plotly_dark", height=700, title=f"Profilo {main_metric} - Scadenza: {sel_exp}")
+                                 marker_color=np.where(df_z[main_metric]>=0, '#00ff00', '#00aaff'), name=main_metric))
+            # Linea Prezzo Live
+            fig.add_hline(y=spot, line_color="cyan", line_width=3, annotation_text=f"SPOT: {spot:.2f}", annotation_position="top right")
+            # Linea Zero Flip
+            fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text="ZERO FLIP")
+            # CALL WALL & PUT WALL
+            fig.add_hline(y=call_wall_strike, line_color="red", line_width=4, annotation_text=f"CALL WALL: {call_wall_strike}", annotation_font_color="red")
+            fig.add_hline(y=put_wall_strike, line_color="green", line_width=4, annotation_text=f"PUT WALL: {put_wall_strike}", annotation_font_color="green")
+
+            fig.update_layout(template="plotly_dark", height=750, title=f"Profilo {main_metric} - Scadenza: {sel_exp}", showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # 3. DASHBOARD COMPLETA METRICHE TOTALI (Sempre visibile in basso)
+            # --- RIEPILOGO METRICHE ---
             st.divider()
-            st.subheader("📊 Esposizione Globale (Tutte le Metriche)")
             cols = st.columns(5)
             for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
-                total = df[m].sum()
-                cols[i].metric(f"Total {m}", f"{total/1e6:.2f}M" if abs(total)>1e5 else f"{total:.2f}")
-                
-        else: st.warning("Dati non disponibili per questo ticker.")
-    except Exception as e:
-        st.error(f"Errore: Inserisci un ticker valido o attendi il caricamento. {e}")
+                val = df[m].sum()
+                cols[i].metric(f"Total {m}", f"{val/1e6:.2f}M" if abs(val)>1e5 else f"{val:.2f}")
+
+    except Exception as e: st.error(f"Seleziona un asset o attendi... {e}")
