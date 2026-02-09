@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="Dynamic Wall Terminal")
+st.set_page_config(layout="wide", page_title="PRO Visual Analyzer")
 st_autorefresh(interval=600000, key="datarefresh")
 
 def calculate_all_greeks(row, spot, t, r=0.04):
@@ -36,14 +36,13 @@ def get_data_engine(symbol, exp_idx, noise_pct):
     
     calls, puts = opts.calls.copy(), opts.puts.copy()
     
-    # --- FILTRO DINAMICO "ZOOM" ---
+    # Range dinamico basato sul nuovo filtro potenziato
     l_lim, u_lim = price * (1 - noise_pct/100), price * (1 + noise_pct/100)
     
-    # Filtriamo gli strike PRIMA del calcolo dei muri
+    # Calcolo Walls sui dati filtrati per evitare gli strike "fantasma" a 600
     f_calls = calls[(calls['strike'] >= price) & (calls['strike'] <= u_lim)]
     f_puts = puts[(puts['strike'] <= price) & (puts['strike'] >= l_lim)]
     
-    # Se il filtro è vuoto, prendiamo i più vicini
     cw = f_calls.loc[f_calls['openInterest'].idxmax(), 'strike'] if not f_calls.empty else price
     pw = f_puts.loc[f_puts['openInterest'].idxmax(), 'strike'] if not f_puts.empty else price
     
@@ -57,55 +56,56 @@ def get_data_engine(symbol, exp_idx, noise_pct):
     return price, df, sel_exp, cw, pw, l_lim, u_lim
 
 # --- UI ---
-st.sidebar.header("🔍 Controllo Zoom Muri")
+st.sidebar.header("🔍 Radar Sensibilità")
 ticker = st.sidebar.selectbox("Asset", ['QQQ', 'SPY', 'NVDA', 'AAPL', 'TSLA'])
 t_obj_side = yf.Ticker(ticker)
 exps = t_obj_side.options
 exp_idx = st.sidebar.selectbox("Scadenza", range(len(exps)), format_func=lambda x: exps[x])
 
-# Lo slider ora agisce come uno zoom ottico
-noise_zoom = st.sidebar.slider("Zoom Area Muri (%)", 1, 15, 5, help="Riduci per ingrandire i muri vicini al prezzo")
+# Filtro potenziato fino al 50%
+noise_zoom = st.sidebar.slider("Ampiezza Analisi (%)", 1, 50, 10)
 metric = st.sidebar.selectbox("Metrica", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
 try:
     spot, df, date, cw, pw, low, high = get_data_engine(ticker, exp_idx, noise_zoom)
     
-    # Prepariamo i dati filtrati per il grafico
     df_plot = df[(df['strike'] >= low) & (df['strike'] <= high)].copy()
-    df_plot['dist_pct'] = ((df_plot['strike'] / spot) - 1) * 100
+    
+    # Calcolo spessore dinamico: più zoommi, più le barre diventano "cicciotte"
+    bar_width = 0.05 if noise_zoom < 5 else 0.2
 
     fig = go.Figure()
 
-    # Barre proporzionali allo zoom
+    # Rappresentazione fisica delle barre
     fig.add_trace(go.Bar(
         y=df_plot['strike'],
         x=df_plot[metric],
         orientation='h',
         marker_color=np.where(df_plot[metric] >= 0, '#00ff88', '#ff4444'),
-        hovertemplate="<b>Strike: %{y}</b><br>Valore: %{x}<br>Distanza: %{customdata:.2f}%<extra></extra>",
-        customdata=df_plot['dist_pct']
+        name=metric,
+        # Questo rende le barre più o meno "massicce" visivamente
+        marker_line_width=1,
+        marker_line_color="rgba(255,255,255,0.2)"
     ))
 
-    # Linee Muri dinamiche
-    fig.add_hline(y=cw, line_dash="dot", line_color="#00ff88", line_width=4,
-                  annotation_text=f"CALL WALL: {cw}", annotation_position="top right")
-    fig.add_hline(y=pw, line_dash="dot", line_color="#ff4444", line_width=4,
-                  annotation_text=f"PUT WALL: {pw}", annotation_position="bottom right")
+    # Linee Muri con spessore maggiorato
+    fig.add_hline(y=cw, line_dash="dot", line_color="#00ff88", line_width=5,
+                  annotation_text=f"🔴 CALL WALL: {cw}", annotation_position="top right")
+    fig.add_hline(y=pw, line_dash="dot", line_color="#ff4444", line_width=5,
+                  annotation_text=f"🟢 PUT WALL: {pw}", annotation_position="bottom right")
     fig.add_hline(y=spot, line_color="cyan", line_width=2,
-                  annotation_text=f"SPOT: {spot:.2f}", annotation_position="bottom left")
+                  annotation_text=f"📍 PREZZO ATTUALE: {spot:.2f}")
 
     fig.update_layout(
-        template="plotly_dark", height=850,
-        title=f"FOCUS {metric.upper()} - {ticker} ({date})",
-        yaxis=dict(title="STRIKE", range=[low, high], autorange=False), # Forza lo zoom verticale
-        xaxis=dict(title=f"IMPULSO {metric}", autorange=True), # Forza lo zoom orizzontale delle barre
-        hovermode="y unified"
+        template="plotly_dark", height=900,
+        title=f"STRUTTURA FISICA {metric.upper()} - {ticker}",
+        yaxis=dict(title="STRIKE", range=[low, high], autorange=False, gridcolor='rgba(255,255,255,0.1)'),
+        xaxis=dict(title="VOLUME ESPOSIZIONE", autorange=True, gridcolor='rgba(255,255,255,0.1)'),
+        # Bargap gestisce quanto le barre sono vicine tra loro (più basso = più spesse)
+        bargap=bar_width 
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Info Box
-    st.info(f"🎯 **Analisi Zoom:** Stai osservando un raggio del ±{noise_zoom}% dallo Spot. Le barre sono scalate automaticamente per mostrarti la dominanza relativa degli strike in questa zona.")
-
 except Exception as e:
-    st.error(f"Regola lo zoom o cambia scadenza: {e}")
+    st.error(f"Errore: {e}")
