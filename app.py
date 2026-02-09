@@ -5,113 +5,114 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm
 from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="Advanced Trading Terminal")
+st.set_page_config(layout="wide", page_title="Strike Intelligence Terminal")
 st_autorefresh(interval=900000, key="datarefresh")
 
-# --- FUNZIONI MATEMATICHE ---
+# --- MOTORE DI CALCOLO ---
 def calculate_all_greeks(row, spot, t, r=0.04):
     s, k, v, oi = spot, row['strike'], row['impliedVolatility'], row['openInterest']
     if v <= 0 or t <= 0: return pd.Series([0]*5, index=['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
-    
     d1 = (np.log(s/k) + (r + 0.5 * v**2) * t) / (v * np.sqrt(t))
-    d2 = d1 - v * np.sqrt(t)
     pdf = norm.pdf(d1)
-    
     gamma = pdf / (s * v * np.sqrt(t))
     vanna = (pdf * d1) / v
     charm = (pdf * ( (r/(v*np.sqrt(t))) - (d1/(2*t)) ))
     vega = s * pdf * np.sqrt(t)
-    theta = -(s * pdf * v) / (2 * np.sqrt(t)) - r * k * np.exp(-r * t) * norm.cdf(d2)
-
+    theta = -(s * pdf * v) / (2 * np.sqrt(t)) - r * k * np.exp(-r * t) * norm.cdf(d1 - v * np.sqrt(t))
     return pd.Series([gamma*oi, vanna*oi, charm*oi, vega*oi, theta*oi], index=['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
-def format_number(num):
-    if abs(num) >= 1_000_000: return f"{num / 1_000_000:.2f} M"
-    if abs(num) >= 1_000: return f"{num / 1_000:.2f} K"
+def format_num(num):
+    if abs(num) >= 1_000_000: return f"{num / 1_000_000:.2f}M"
+    if abs(num) >= 1_000: return f"{num / 1_000:.2f}K"
     return f"{num:.2f}"
 
-# --- LOGICA DI SCARICO DATI INTELLIGENTE ---
-def get_smart_data(symbol, expiry_index, noise_filter):
+@st.cache_data(ttl=600)
+def get_data_engine(symbol, exp_idx, noise):
     t_obj = yf.Ticker(symbol)
     price = t_obj.history(period='1d')['Close'].iloc[-1]
+    all_exps = t_obj.options
+    sel_exp = all_exps[exp_idx]
+    opts = t_obj.option_chain(sel_exp)
     
-    # Selezione della scadenza scelta dall'utente
-    all_expiries = t_obj.options
-    selected_expiry = all_expiries[expiry_index]
-    opts = t_obj.option_chain(selected_expiry)
-    
-    # Calcolo tempo alla scadenza (T)
-    from datetime import datetime
-    t_days = (datetime.strptime(selected_expiry, '%Y-%m-%d') - datetime.now()).days
-    t_years = max(t_days, 0.5) / 365 # 0.5 giorni minimo per evitare divisioni per zero
+    t_days = (datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days
+    t_yrs = max(t_days, 0.5) / 365
     
     calls, puts = opts.calls.copy(), opts.puts.copy()
     
-    # FILTRO RUMORE DINAMICO: l'utente sceglie la % di distanza dallo spot
-    lower_limit = price * (1 - noise_filter/100)
-    upper_limit = price * (1 + noise_filter/100)
+    # Filtro Rumore
+    l_lim, u_lim = price * (1 - noise/100), price * (1 + noise/100)
+    r_calls = calls[(calls['strike'] >= price) & (calls['strike'] <= u_lim)]
+    r_puts = puts[(puts['strike'] <= price) & (puts['strike'] >= l_lim)]
     
-    # Cerchiamo i muri solo nell'area "sensata" scelta dall'utente
-    relevant_calls = calls[(calls['strike'] >= price) & (calls['strike'] <= upper_limit)]
-    relevant_puts = puts[(puts['strike'] <= price) & (puts['strike'] >= lower_limit)]
+    c_wall = r_calls.loc[r_calls['openInterest'].idxmax(), 'strike'] if not r_calls.empty else price
+    p_wall = r_puts.loc[r_puts['openInterest'].idxmax(), 'strike'] if not r_puts.empty else price
     
-    # Se il filtro è troppo stretto, prendiamo il più vicino possibile allo spot
-    c_wall = relevant_calls.loc[relevant_calls['openInterest'].idxmax(), 'strike'] if not relevant_calls.empty else calls.loc[(calls['strike']-price).abs().idxmin(), 'strike']
-    p_wall = relevant_puts.loc[relevant_puts['openInterest'].idxmax(), 'strike'] if not relevant_puts.empty else puts.loc[(puts['strike']-price).abs().idxmin(), 'strike']
-    
-    # Calcolo Greche
-    c_greeks = calls.apply(lambda r: calculate_all_greeks(r, price, t_years), axis=1)
-    p_greeks = puts.apply(lambda r: calculate_all_greeks(r, price, t_years), axis=1)
+    c_grk = calls.apply(lambda r: calculate_all_greeks(r, price, t_yrs), axis=1)
+    p_grk = puts.apply(lambda r: calculate_all_greeks(r, price, t_yrs), axis=1)
     
     df = pd.DataFrame({'strike': calls['strike']})
-    for m in ['Gamma', 'Vanna', 'Charm']: df[m] = c_greeks[m] - p_greeks[m]
-    for m in ['Vega', 'Theta']: df[m] = c_greeks[m] + p_greeks[m]
-        
-    return price, df, selected_expiry, c_wall, p_wall
+    for m in ['Gamma', 'Vanna', 'Charm']: df[m] = c_grk[m] - p_grk[m]
+    for m in ['Vega', 'Theta']: df[m] = c_grk[m] + p_grk[m]
+    
+    return price, df, sel_exp, c_wall, p_wall
 
 # --- INTERFACCIA ---
-st.title("🏹 Smart Greeks & Walls Terminal")
-
-# Sidebar controlli
-st.sidebar.header("Impostazioni Analisi")
-target_ticker = st.sidebar.selectbox("Asset", ['QQQ', 'SPY', 'NVDA', 'TSLA', 'AAPL'], index=0)
-
-# Scelta Scadenza
-ticker_obj = yf.Ticker(target_ticker)
-expiries = ticker_obj.options
-expiry_choice = st.sidebar.selectbox("Scadenza (0DTE è la prima)", range(len(expiries)), format_func=lambda x: expiries[x])
-
-# Slider Rumore
-noise_val = st.sidebar.slider("Filtro Rumore Strike (%)", 5, 30, 15, help="Ignora strike troppo lontani dal prezzo attuale")
-
-selected_metric = st.sidebar.selectbox("Metrica Grafico", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
+st.sidebar.header("⚙️ Parametri Muri")
+ticker = st.sidebar.selectbox("Asset", ['QQQ', 'SPY', 'NVDA', 'AAPL', 'TSLA'])
+t_obj_side = yf.Ticker(ticker)
+exps = t_obj_side.options
+exp_idx = st.sidebar.selectbox("Scadenza", range(len(exps)), format_func=lambda x: exps[x])
+noise = st.sidebar.slider("Filtro Rumore (%)", 5, 25, 10)
+metric = st.sidebar.selectbox("Visualizza", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
 try:
-    spot, full_df, exp_date, call_wall, put_wall = get_smart_data(target_ticker, expiry_choice, noise_val)
+    spot, df, date, cw, pw = get_data_engine(ticker, exp_idx, noise)
     
-    # Grafico
-    df_plot = full_df[(full_df['strike'] > spot * 0.9) & (full_df['strike'] < spot * 1.1)]
+    # Preparazione dati Grafico
+    df['dist_pct'] = ((df['strike'] / spot) - 1) * 100
+    df_plot = df[(df['strike'] > spot * 0.92) & (df['strike'] < spot * 1.08)]
+
     fig = go.Figure()
-    
-    m_colors = {'Gamma': '#00ff88', 'Vanna': '#ffcc00', 'Charm': '#ff00ff', 'Vega': '#00aaff', 'Theta': '#ff4444'}
-    
-    fig.add_trace(go.Bar(y=df_plot['strike'], x=df_plot[selected_metric], orientation='h', marker_color=m_colors[selected_metric]))
-    
-    # Linee Muri e Spot
-    fig.add_hline(y=spot, line_dash="dash", line_color="cyan", annotation_text=f"SPOT: {spot:.2f}")
-    fig.add_hline(y=call_wall, line_dash="dot", line_color="#00ff88", line_width=3, annotation_text="CALL WALL", annotation_position="top right")
-    fig.add_hline(y=put_wall, line_dash="dot", line_color="#ff4444", line_width=3, annotation_text="PUT WALL", annotation_position="bottom right")
-    
-    fig.update_layout(template="plotly_dark", height=700, title=f"{target_ticker} {selected_metric} Profile - {exp_date}")
+
+    # Barre con Hover personalizzato
+    fig.add_trace(go.Bar(
+        y=df_plot['strike'],
+        x=df_plot[metric],
+        orientation='h',
+        marker_color='#00ff88' if df_plot[metric].sum() > 0 else '#ff4444',
+        hovertemplate="<b>Strike: %{y}</b><br>" +
+                      "Valore: %{x}<br>" +
+                      "Distanza Spot: %{customdata:.2f}%<extra></extra>",
+        customdata=df_plot['dist_pct']
+    ))
+
+    # Linee Muri con Etichette Prezzo
+    fig.add_hline(y=cw, line_dash="dot", line_color="#00ff88", line_width=3,
+                  annotation_text=f"CALL WALL: {cw}", annotation_position="top right")
+    fig.add_hline(y=pw, line_dash="dot", line_color="#ff4444", line_width=3,
+                  annotation_text=f"PUT WALL: {pw}", annotation_position="bottom right")
+    fig.add_hline(y=spot, line_color="cyan", line_width=2,
+                  annotation_text=f"SPOT: {spot:.2f}", annotation_position="bottom left")
+
+    fig.update_layout(
+        template="plotly_dark", height=800,
+        title=f"STRUTTURA {metric.upper()} - {ticker} ({date})",
+        yaxis=dict(title="STRIKE PRICE", side="left", tickformat=".2f"),
+        xaxis=dict(title=f"ESPOSIZIONE {metric}"),
+        hovermode="y unified"
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
-    # Metriche in basso
+    # Recap Metriche
     st.divider()
-    cols = st.columns(5)
-    for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
-        cols[i].metric(f"Total {m}", format_number(full_df[m].sum()))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Current Spot", f"{spot:.2f}")
+    c2.metric("Call Wall Strike", cw)
+    c3.metric("Put Wall Strike", pw)
 
 except Exception as e:
-    st.error(f"Seleziona un'altra scadenza o ticker. Errore: {e}")
+    st.error(f"Errore nel caricamento dati: {e}")
