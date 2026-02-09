@@ -8,18 +8,14 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="Real-Index GEX Terminal", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="Institutional Multi-Timeframe Terminal", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
-# --- FUNZIONE CORREZIONE SIMBOLI PER INDICI ---
 def fix_ticker(symbol):
     s = symbol.upper().strip()
-    # YFinance richiede il cappelletto ^ per gli indici diretti
-    if s in ["NDX", "SPX", "RUT", "VIX"]:
-        return f"^{s}"
+    if s in ["NDX", "SPX", "RUT", "VIX"]: return f"^{s}"
     return s
 
-# --- MOTORE GRECHE ---
 def get_all_greeks(row, spot, t_yrs):
     try:
         s, k, v, oi = spot, row['strike'], row['impliedVolatility'], row['openInterest']
@@ -28,7 +24,6 @@ def get_all_greeks(row, spot, t_yrs):
         d1 = (np.log(s/k) + (r + 0.5 * v**2) * t_yrs) / (v * np.sqrt(t_yrs))
         d2 = d1 - v * np.sqrt(t_yrs)
         pdf = norm.pdf(d1)
-        
         gamma = (pdf / (s * v * np.sqrt(t_yrs))) * oi * 100
         vanna = ((pdf * d1) / v) * oi
         charm = (pdf * ( (r/(v*np.sqrt(t_yrs))) - (d1/(2*t_yrs)) )) * oi
@@ -37,83 +32,80 @@ def get_all_greeks(row, spot, t_yrs):
         return pd.Series([gamma, vanna, charm, vega, theta])
     except: return pd.Series([0]*5)
 
-# --- CARICAMENTO DATI ---
 @st.cache_data(ttl=60)
-def load_market_data(symbol, exp_idx, zoom_val):
+def analyze_timeframe(t_obj, spot, exp_idx):
+    try:
+        exps = t_obj.options
+        sel_exp = exps[min(exp_idx, len(exps)-1)]
+        t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
+        chain = t_obj.option_chain(sel_exp)
+        c_res = chain.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+        p_res = chain.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+        g_net = c_res[0].sum() - p_res[0].sum()
+        v_net = c_res[1].sum() - p_res[1].sum()
+        
+        if g_net > 0 and v_net > 0: return "LONG", "#00ff00", "Alta Probabilità"
+        elif g_net < 0 and v_net < 0: return "SHORT", "#ff4444", "Alta Probabilità"
+        elif g_net < 0: return "SHORT", "#ffaa00", "Debole/Volatile"
+        else: return "LONG", "#00aaff", "Debole/Accumulo"
+    except: return "N/D", "#555555", "Dati Assenti"
+
+@st.cache_data(ttl=60)
+def load_main_data(symbol, exp_idx, zoom_val):
     ticker_str = fix_ticker(symbol)
     t_obj = yf.Ticker(ticker_str)
-    
-    # Per gli indici usiamo il prezzo 'last' più preciso
     hist = t_obj.history(period='1d')
-    if hist.empty: return None
+    if hist.empty: return None, None, None, None, None
     spot = hist['Close'].iloc[-1]
-    
     exps = t_obj.options
-    if not exps: return None
-    
     sel_exp = exps[min(exp_idx, len(exps)-1)]
     t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
     chain = t_obj.option_chain(sel_exp)
-    
-    # Processiamo CALL e PUT
     c_res = chain.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
     p_res = chain.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-    
     df = pd.DataFrame({'strike': chain.calls['strike']})
-    df['Gamma'] = c_res[0] - p_res[0]
-    df['Vanna'] = c_res[1] - p_res[1]
-    df['Charm'] = c_res[2] - p_res[2]
-    df['Vega'] = c_res[3] + p_res[3]
-    df['Theta'] = c_res[4] + p_res[4]
-    
+    df['Gamma'], df['Vanna'], df['Charm'] = c_res[0]-p_res[0], c_res[1]-p_res[1], c_res[2]-p_res[2]
+    df['Vega'], df['Theta'] = c_res[3]+p_res[3], c_res[4]+p_res[4]
     l, u = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
-    return spot, df[(df['strike']>=l) & (df['strike']<=u)], sel_exp, df
+    return spot, df[(df['strike']>=l) & (df['strike']<=u)], sel_exp, df, t_obj
 
-# --- UI ---
-st.sidebar.header("🕹️ CONTROLLO INDICI")
-input_ticker = st.sidebar.text_input("TICKER (NDX, SPX, NVDA)", "NDX").upper()
+# --- INTERFACCIA ---
+st.sidebar.header("🕹️ TERMINAL CONTROL")
+input_ticker = st.sidebar.text_input("TICKER (es. NDX, SPX, NVDA)", "NDX").upper()
+zoom = st.sidebar.slider("ZOOM %", 1, 30, 5)
+metric = st.sidebar.radio("METRICA GRAFICO", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
-mode = st.sidebar.selectbox("TRADING MODE", ["SCALPING", "INTRADAY", "SWING"])
-exp_def = 0 if mode == "SCALPING" else 2
-
-try:
-    ticker_ready = fix_ticker(input_ticker)
-    t_info = yf.Ticker(ticker_ready)
-    avail_exps = t_info.options
+res = load_main_data(input_ticker, 0, zoom)
+if res[0]:
+    spot, df_z, exp_d, df_f, t_obj = res
     
-    sel_idx = st.sidebar.selectbox("SCADENZA", range(len(avail_exps)), index=min(exp_def, len(avail_exps)-1), format_func=lambda x: avail_exps[x])
-    zoom = st.sidebar.slider("ZOOM %", 1, 30, 5)
-    metric = st.sidebar.radio("METRICA GRAFICO", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
-
-    data = load_market_data(input_ticker, sel_idx, zoom)
+    # --- MATRICE DI INTELLIGENZA (IL MOTORE CHE VOLEVI) ---
+    st.subheader("📡 Multi-Timeframe Market Bias")
+    m1, m2, m3 = st.columns(3)
     
-    if data:
-        spot, df_z, exp_d, df_f = data
-        z_flip = df_z.loc[df_z[metric].abs().idxmin(), 'strike']
+    # Calcolo dei 3 stadi
+    b_scalp, c_scalp, p_scalp = analyze_timeframe(t_obj, spot, 0) # 0DTE
+    b_intra, c_intra, p_intra = analyze_timeframe(t_obj, spot, 2) # Weekly
+    b_swing, c_swing, p_swing = analyze_timeframe(t_obj, spot, 5) # Monthly
+    
+    m1.markdown(f"<div style='text-align:center; padding:15px; border-radius:10px; border:2px solid {c_scalp};'><h3 style='margin:0;'>SCALPING (Breve)</h3><h1 style='color:{c_scalp};'>{b_scalp}</h1><p>{p_scalp}</p></div>", unsafe_allow_html=True)
+    m2.markdown(f"<div style='text-align:center; padding:15px; border-radius:10px; border:2px solid {c_intra};'><h3 style='margin:0;'>INTRADAY (Medio)</h3><h1 style='color:{c_intra};'>{b_intra}</h1><p>{p_intra}</p></div>", unsafe_allow_html=True)
+    m3.markdown(f"<div style='text-align:center; padding:15px; border-radius:10px; border:2px solid {c_swing};'><h3 style='margin:0;'>SWING (Lungo)</h3><h1 style='color:{c_swing};'>{b_swing}</h1><p>{p_swing}</p></div>", unsafe_allow_html=True)
 
-        # LOGICA BIAS STATISTICO
-        g_sum, v_sum = df_f['Gamma'].sum(), df_f['Vanna'].sum()
-        bias, color = ("STRONG LONG", "#00ff00") if g_sum > 0 and v_sum > 0 else (("STRONG SHORT", "#ff4444") if g_sum < 0 and v_sum < 0 else ("NEUTRAL/VOLATILE", "#ffff00"))
+    # GRAFICO
+    st.divider()
+    z_flip = df_z.loc[df_z[metric].abs().idxmin(), 'strike']
+    max_v = df_z[metric].abs().max()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=df_z['strike'], x=df_z[metric], orientation='h', marker_color=np.where(df_z[metric]>=0, '#00ff00', '#00aaff')))
+    fig.add_hline(y=spot, line_color="cyan", annotation_text=f"LIVE: {spot:.2f}")
+    fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text="ZERO FLIP")
+    fig.update_layout(template="plotly_dark", height=600, title=f"PROFILO {metric} - {input_ticker} (FOCUS BREVE TERMINE)")
+    st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown(f"<div style='padding:20px; background:#151515; border-left:10px solid {color};'>"
-                    f"<h1 style='color:{color};'>{bias} | {input_ticker} @ {spot:.2f}</h1></div>", unsafe_allow_html=True)
-
-        # GRAFICO
-        max_v = df_z[metric].abs().max()
-        fig = go.Figure()
-        fig.add_trace(go.Bar(y=df_z['strike'], x=df_z[metric], orientation='h', 
-                             marker_color=np.where(df_z[metric]>=0, '#00ff00', '#00aaff')))
-        fig.add_hline(y=spot, line_color="cyan", annotation_text=f"PREZZO INDICE: {spot:.2f}")
-        fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text="ZERO GAMMA")
-        fig.update_layout(template="plotly_dark", height=700, xaxis=dict(range=[-max_v*1.1, max_v*1.1]))
-        st.plotly_chart(fig, use_container_width=True)
-
-        # DASHBOARD METRICHE TOTALI
-        st.subheader("📊 Analisi Greche Totali (Catena Completa)")
-        cols = st.columns(5)
-        for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
-            val = df_f[m].sum()
-            cols[i].metric(f"Total {m}", f"{val/1e6:.2f}M" if abs(val)>1e5 else f"{val:.2f}")
-
-except Exception as e:
-    st.error(f"Errore: {input_ticker} potrebbe non avere opzioni attive o il simbolo è errato.")
+    # TUTTE LE METRICHE
+    st.subheader("📊 Greche Totali (Asset Global Exposure)")
+    cols = st.columns(5)
+    for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
+        val = df_f[m].sum()
+        cols[i].metric(f"Total {m}", f"{val/1e6:.2f}M" if abs(val)>1e5 else f"{val:.2f}")
