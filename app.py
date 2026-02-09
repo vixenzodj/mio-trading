@@ -8,16 +8,16 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="Professional GEX Terminal V5", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="Professional GEX Terminal V6", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
-TICKER_LIST = ["NDX", "SPX", "QQQ", "SPY", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR"]
+TICKER_LIST = ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA", "AAPL", "IBIT", "MSTR"]
 
 def fix_ticker(symbol):
     s = symbol.upper().strip()
-    return f"^{s}" if s in ["NDX", "SPX", "RUT", "VIX"] else s
+    return f"^{s}" if s in ["NDX", "SPX", "RUT"] else s
 
-# --- MOTORE CALCOLO GRECHE ---
+# --- MOTORE GRECHE ---
 def get_all_greeks(row, spot, t_yrs):
     try:
         s, k, v, oi = float(spot), float(row['strike']), float(row['impliedVolatility']), float(row['openInterest'])
@@ -44,91 +44,80 @@ def analyze_tf(t_obj, spot, exp_idx):
         c = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
         p = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
         g_net = c[0].sum() - p[0].sum()
-        v_net = c[1].sum() - p[1].sum()
-        if g_net > 0 and v_net > 0: return "LONG", "#00ff00", "Strong"
-        if g_net < 0 and v_net < 0: return "SHORT", "#ff4444", "Strong"
-        return "NEUTRAL", "#ffff00", "Volatile"
-    except: return "ERR", "#555", "Error"
+        return ("LONG", "#00ff00") if g_net > 0 else ("SHORT", "#ff4444")
+    except: return "ERR", "#555"
 
 # --- SIDEBAR ---
-st.sidebar.header("🕹️ CONTROLLO TERMINALE")
-sel_ticker = st.sidebar.selectbox("ASSET PREIMPOSTATI", ["CERCA..."] + sorted(TICKER_LIST))
-manual_t = st.sidebar.text_input("MANUAL TICKER", "")
-active_t = manual_t if manual_t else (sel_ticker if sel_ticker != "CERCA..." else "NDX")
-
-trade_mode = st.sidebar.selectbox("MODALITÀ", ["SCALPING (0DTE)", "INTRADAY (Weekly)", "SWING (Monthly)"])
-strike_step = st.sidebar.selectbox("STEP STRIKE", [1, 5, 10, 25, 50, 100], index=2)
-num_strikes = st.sidebar.slider("NUMERO STRIKE", 10, 100, 40)
+st.sidebar.header("🎯 GEX SETTINGS")
+active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
+trade_mode = st.sidebar.selectbox("TIMEFRAME", ["SCALPING (0DTE)", "INTRADAY (Weekly)", "SWING (Monthly)"])
+strike_step = st.sidebar.selectbox("GRANULARITÀ (Step)", [5, 10, 25, 50, 100, 250], index=3)
+num_levels = st.sidebar.slider("LIVELLI VISIBILI", 10, 60, 30)
 main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
 t_str = fix_ticker(active_t)
-if t_str:
-    try:
-        t_obj = yf.Ticker(t_str)
-        hist = t_obj.history(period='1d')
-        if not hist.empty:
-            spot = hist['Close'].iloc[-1]
-            
-            # --- 1. MATRICE BIAS (Sempre visibile) ---
-            st.subheader(f"📡 Radar Intelligence: {active_t.upper()}")
-            m1, m2, m3 = st.columns(3)
-            with st.spinner('Analizzando liquidità...'):
-                b1, c1, p1 = analyze_tf(t_obj, spot, 0)
-                b2, c2, p2 = analyze_tf(t_obj, spot, 2)
-                b3, c3, p3 = analyze_tf(t_obj, spot, 5)
-            m1.markdown(f"<div style='text-align:center; padding:10px; border:2px solid {c1}; border-radius:10px;'><h4>SCALP</h4><h2 style='color:{c1};'>{b1}</h2><p>{p1}</p></div>", unsafe_allow_html=True)
-            m2.markdown(f"<div style='text-align:center; padding:10px; border:2px solid {c2}; border-radius:10px;'><h4>INTRA</h4><h2 style='color:{c2};'>{b2}</h2><p>{p2}</p></div>", unsafe_allow_html=True)
-            m3.markdown(f"<div style='text-align:center; padding:10px; border:2px solid {c3}; border-radius:10px;'><h4>SWING</h4><h2 style='color:{c3};'>{b3}</h2><p>{p3}</p></div>", unsafe_allow_html=True)
+try:
+    t_obj = yf.Ticker(t_str)
+    hist = t_obj.history(period='1d')
+    if not hist.empty:
+        spot = hist['Close'].iloc[-1]
+        exps = t_obj.options
+        idx = 0 if "SCALPING" in trade_mode else (2 if "INTRADAY" in trade_mode else 5)
+        sel_exp = exps[min(idx, len(exps)-1)]
+        
+        # --- CALCOLO ---
+        t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
+        ch = t_obj.option_chain(sel_exp)
+        c_res = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+        p_res = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+        
+        df = pd.DataFrame({'strike': ch.calls['strike']})
+        df['Gamma'], df['Vanna'], df['Charm'] = c_res[0]-p_res[0], c_res[1]-p_res[1], c_res[2]-p_res[2]
+        df['Vega'], df['Theta'] = c_res[3]+p_res[3], c_res[4]+p_res[4]
 
-            # --- 2. ELABORAZIONE DATI ---
-            exps = t_obj.options
-            idx = 0 if "SCALPING" in trade_mode else (2 if "INTRADAY" in trade_mode else 5)
-            sel_exp = exps[min(idx, len(exps)-1)]
-            t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
-            ch = t_obj.option_chain(sel_exp)
-            
-            calls = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-            puts = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-            
-            df = pd.DataFrame({'strike': ch.calls['strike']})
-            df['Gamma'], df['Vanna'], df['Charm'] = calls[0]-puts[0], calls[1]-puts[1], calls[2]-puts[2]
-            df['Vega'], df['Theta'] = calls[3]+puts[3], calls[4]+puts[4]
+        # --- RADAR BIAS (RIPRISTINATO) ---
+        st.subheader(f"📡 Radar: {active_t} @ {spot:.2f}")
+        r1, r2, r3 = st.columns(3)
+        b1, c1 = analyze_tf(t_obj, spot, 0)
+        b2, c2 = analyze_tf(t_obj, spot, 2)
+        b3, c3 = analyze_tf(t_obj, spot, 5)
+        r1.markdown(f"<div style='text-align:center;border:2px solid {c1};padding:10px;border-radius:10px;'>SCALP: <b style='color:{c1};'>{b1}</b></div>", unsafe_allow_html=True)
+        r2.markdown(f"<div style='text-align:center;border:2px solid {c2};padding:10px;border-radius:10px;'>INTRA: <b style='color:{c2};'>{b2}</b></div>", unsafe_allow_html=True)
+        r3.markdown(f"<div style='text-align:center;border:2px solid {c3};padding:10px;border-radius:10px;'>SWING: <b style='color:{c3};'>{b3}</b></div>", unsafe_allow_html=True)
 
-            # Muri (su intera catena)
-            call_wall = float(df.loc[df['Gamma'].idxmax(), 'strike'])
-            put_wall = float(df.loc[df['Gamma'].idxmin(), 'strike'])
+        # --- LOGICA GRANULARITÀ (MOLTO IMPORTANTE) ---
+        # Arrotondiamo gli strike allo step scelto e raggruppiamo la liquidità
+        df['strike_group'] = (df['strike'] / strike_step).round() * strike_step
+        df_grouped = df.groupby('strike_group').sum().reset_index()
+        df_grouped = df_grouped.rename(columns={'strike_group': 'strike'})
 
-            # Filtro visivo
-            df_plot = df[df['strike'] % strike_step == 0].copy()
-            df_plot['dist'] = abs(df_plot['strike'] - spot)
-            df_z = df_plot.sort_values('dist').head(num_strikes).sort_values('strike')
-            z_flip = float(df_z.loc[df_z[main_metric].abs().idxmin(), 'strike'])
+        # Filtro intorno allo Spot
+        df_grouped['dist'] = abs(df_grouped['strike'] - spot)
+        df_plot = df_grouped.sort_values('dist').head(num_levels).sort_values('strike')
 
-            # --- 3. GRAFICO DINAMICO ---
-            fig = go.Figure()
-            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_z[main_metric]]
-            
-            # Barre - Usiamo Strike come numero per evitare errori di concatenazione
-            fig.add_trace(go.Bar(y=df_z['strike'], x=df_z[main_metric], orientation='h', 
-                                 marker_color=colors, name=main_metric))
-            
-            # Linee Livelli (Senza concatenazione str + int)
-            fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text=f"CALL WALL: {call_wall}")
-            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text=f"PUT WALL: {put_wall}")
-            fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text="ZERO FLIP")
-            fig.add_hline(y=spot, line_color="cyan", line_width=2, annotation_text=f"SPOT: {spot:.2f}")
+        # Muri reali (su catena completa)
+        call_wall = df.loc[df['Gamma'].idxmax(), 'strike']
+        put_wall = df.loc[df['Gamma'].idxmin(), 'strike']
+        z_flip = df_plot.loc[df_plot[main_metric].abs().idxmin(), 'strike']
 
-            fig.update_layout(template="plotly_dark", height=850, 
-                              title=f"<b>PROFILO {main_metric.upper()} - {active_t}</b> ({sel_exp})",
-                              yaxis=dict(title="STRIKE", autorange="reversed", type='linear'), bargap=0.1)
-            
-            st.plotly_chart(fig, use_container_width=True)
+        # --- GRAFICO ---
+        fig = go.Figure()
+        colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot[main_metric]]
+        
+        # Trasformiamo strike in stringa per avere barre equispaziate e leggibili
+        fig.add_trace(go.Bar(y=df_plot['strike'].astype(str), x=df_plot[main_metric], 
+                             orientation='h', marker_color=colors))
 
-            # --- 4. RIEPILOGO ---
-            st.divider()
-            cols = st.columns(5)
-            for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
-                val = df[m].sum()
-                cols[i].metric(f"Total {m}", f"{val/1e6:.2f}M" if abs(val)>1e5 else f"{val:.2f}")
+        # Linee di Livello (usiamo l'indice della stringa per posizionarle correttamente)
+        fig.add_hline(y=str(float(call_wall)), line_color="red", line_width=3, annotation_text=f"CALL WALL: {call_wall}")
+        fig.add_hline(y=str(float(put_wall)), line_color="#00ff00", line_width=3, annotation_text=f"PUT WALL: {put_wall}")
+        fig.add_hline(y=str(float(z_flip)), line_dash="dash", line_color="yellow", annotation_text="ZERO FLIP")
 
-    except Exception as e: st.error(f"Errore caricamento dati: {e}")
+        fig.update_layout(template="plotly_dark", height=800, 
+                          yaxis=dict(title="STRIKE", autorange="reversed", type='category'),
+                          title=f"PROFILO {main_metric} - {active_t} (Step: {strike_step})")
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+except Exception as e:
+    st.error(f"Errore: {e}")
