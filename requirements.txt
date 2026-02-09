@@ -1,0 +1,6 @@
+yfinance
+pandas
+numpy
+plotly
+scipy
+streamlit-autorefresh
