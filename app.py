@@ -8,23 +8,29 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="Institutional GEX Terminal", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="Ultimate GEX Terminal V3", initial_sidebar_state="expanded")
 
-# --- CARICAMENTO DINAMICO TICKER (NDAQ 100, S&P 500, etc) ---
-@st.cache_data
-def get_all_tickers():
-    # Lista base dei più scambiati
-    top_tickers = ["QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "NDX", "SPX"]
-    # Qui il sistema può potenzialmente scaricare liste da Wikipedia o CSV per arrivare a 1000+
-    # Per ora popoliamo con i settori chiave per garantire velocità
-    return sorted(list(set(top_tickers)))
+# --- AUTO-REFRESH (Impostato a 60 secondi per Scalping) ---
+st_autorefresh(interval=60000, key="global_refresh")
 
-# --- MOTORE DI CALCOLO GRECHE (BSM) ---
+# --- FUNZIONE DI MAPPATURA INDICI ---
+def map_ticker(symbol):
+    # Gli indici puri spesso non hanno catene opzioni accessibili facilmente. 
+    # Usiamo gli ETF corrispondenti che sono il riferimento per i Market Maker.
+    mapping = {
+        "NDX": "QQQ",
+        "SPX": "SPY",
+        "RUT": "IWM",
+        "DJI": "DIA"
+    }
+    return mapping.get(symbol.upper(), symbol.upper())
+
+# --- MOTORE DI CALCOLO GRECHE COMPLETO (BSM) ---
 def get_all_greeks(row, spot, t_yrs):
     try:
         s, k, v, oi = spot, row['strike'], row['impliedVolatility'], row['openInterest']
         if v <= 0 or t_yrs <= 0 or oi <= 0: return pd.Series([0]*5)
-        r = 0.045 # Tasso risk-free aggiornato
+        r = 0.045
         d1 = (np.log(s/k) + (r + 0.5 * v**2) * t_yrs) / (v * np.sqrt(t_yrs))
         d2 = d1 - v * np.sqrt(t_yrs)
         pdf = norm.pdf(d1)
@@ -37,91 +43,89 @@ def get_all_greeks(row, spot, t_yrs):
         return pd.Series([gamma, vanna, charm, vega, theta])
     except: return pd.Series([0]*5)
 
-# --- LOGICA DI TRADING ---
-st.sidebar.header("📡 RADAR OPERATIVO")
-search_ticker = st.sidebar.selectbox("CERCA O SELEZIONA TICKER (1000+)", get_all_tickers())
-custom_ticker = st.sidebar.text_input("OPPURE SCRIVI TICKER MANUALE", "").upper()
-ticker = custom_ticker if custom_ticker else search_ticker
-
-trading_mode = st.sidebar.selectbox("MODALITÀ", ["SCALPING", "INTRADAY", "SWING"])
-zoom_val = st.sidebar.slider("ZOOM AREA %", 1, 50, 5)
-
-# Refresh differenziato
-refresh_map = {"SCALPING": 60000, "INTRADAY": 300000, "SWING": 900000}
-st_autorefresh(interval=refresh_map[trading_mode], key="global_ref")
-
 # --- CARICAMENTO DATI ---
 @st.cache_data(ttl=60)
-def load_data(t_symbol, mode, zoom):
-    t_obj = yf.Ticker(t_symbol)
-    h = t_obj.history(period='1d')
-    if h.empty: return None
-    spot = h['Close'].iloc[-1]
+def load_market_data(symbol, exp_idx, zoom_val):
+    target = map_ticker(symbol)
+    t_obj = yf.Ticker(target)
+    hist = t_obj.history(period='1d')
+    if hist.empty: return None
     
+    spot = hist['Close'].iloc[-1]
     exps = t_obj.options
-    # Selezione intelligente della scadenza in base al modo
-    idx = 0 if mode == "SCALPING" else (2 if mode == "INTRADAY" else 5)
-    sel_exp = exps[min(idx, len(exps)-1)]
+    if not exps: return None
     
+    sel_exp = exps[min(exp_idx, len(exps)-1)]
     t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
     chain = t_obj.option_chain(sel_exp)
     
-    # Calcolo parallelo
-    c_g = chain.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-    p_g = chain.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+    c_res = chain.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+    p_res = chain.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
     
     df = pd.DataFrame({'strike': chain.calls['strike']})
-    cols = ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']
-    for i, m in enumerate(cols):
-        if m in ['Gamma', 'Vanna', 'Charm']: df[m] = c_g[i] - p_g[i]
-        else: df[m] = c_g[i] + p_g[i]
-        
-    l, u = spot * (1 - zoom/100), spot * (1 + zoom/100)
+    df['Gamma'] = c_res[0] - p_res[0]
+    df['Vanna'] = c_res[1] - p_res[1]
+    df['Charm'] = c_res[2] - p_res[2]
+    df['Vega'] = c_res[3] + p_res[3]
+    df['Theta'] = c_res[4] + p_res[4]
+    
+    l, u = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
     return spot, df[(df['strike']>=l) & (df['strike']<=u)], sel_exp, df
 
-# --- DASHBOARD ---
-data_res = load_data(ticker, trading_mode, zoom_val)
-if data_res:
-    spot, df_p, exp_d, df_f = data_res
-    
-    # 1. CALCOLO STATISTICO COMBINATO (BIAS)
-    # Uniamo Gamma e Vanna per un segnale più professionale
-    g_total = df_f['Gamma'].sum()
-    v_total = df_f['Vanna'].sum()
-    
-    # LOGICA DI SEGNALE AVANZATA
-    if g_total > 0 and v_total > 0:
-        bias, b_color, b_text = "STRONG LONG", "#00ff00", "Vantaggio Statistico Rialzista - Compressione Volatilità"
-    elif g_total < 0 and v_total < 0:
-        bias, b_color, b_text = "STRONG SHORT", "#ff4444", "Vantaggio Statistico Ribassista - Espansione Volatilità"
-    elif g_total < 0 and v_total > 0:
-        bias, b_color, b_text = "VOLATILE / NEUTRAL", "#ffff00", "Conflitto tra Gamma e Vanna. Attesa direzionalità chiara."
-    else:
-        bias, b_color, b_text = "WEAK LONG", "#00aa00", "Bias Rialzista ma debole. Possibile trading di range."
+# --- INTERFACCIA ---
+st.sidebar.header("🎯 CONTROLLO ASSET")
+input_ticker = st.sidebar.text_input("INSERISCI TICKER (es. NDX, NVDA, TSLA)", "QQQ").upper()
 
-    # Visualizzazione Bias
-    st.markdown(f"""
-        <div style="background-color:#1e1e1e; padding:20px; border-radius:10px; border-left: 10px solid {b_color};">
-            <h1 style="color:{b_color}; margin:0;">{bias}</h1>
-            <p style="color:white; font-size:18px;">{b_text}</p>
-        </div>
-    """, unsafe_allow_html=True)
+trading_mode = st.sidebar.selectbox("MODALITÀ TRADING", ["SCALPING", "INTRADAY", "SWING"])
+# Auto-selezione scadenza in base al modo
+expiry_default = 0 if trading_mode == "SCALPING" else (2 if trading_mode == "INTRADAY" else 5)
 
-    # 2. GRAFICO
-    m_view = st.selectbox("METRICA GRAFICO", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
-    z_flip = df_p.loc[df_p[m_view].abs().idxmin(), 'strike']
+try:
+    ticker_mapped = map_ticker(input_ticker)
+    t_engine = yf.Ticker(ticker_mapped)
+    avail_exps = t_engine.options
     
-    fig = go.Figure()
-    fig.add_trace(go.Bar(y=df_p['strike'], x=df_p[m_view], orientation='h', 
-                         marker_color=np.where(df_p[m_view]>=0, '#00ff00', '#00aaff')))
-    fig.add_hline(y=spot, line_color="cyan", annotation_text="SPOT")
-    fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text="ZERO FLIP")
-    fig.update_layout(template="plotly_dark", height=600)
-    st.plotly_chart(fig, use_container_width=True)
+    selected_exp_idx = st.sidebar.selectbox("SCADENZA", range(len(avail_exps)), index=min(expiry_default, len(avail_exps)-1), format_func=lambda x: avail_exps[x])
+    zoom_pct = st.sidebar.slider("ZOOM AREA %", 1, 50, 5)
+    metric_to_plot = st.sidebar.radio("VISUALIZZA NEL GRAFICO", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
-    # 3. METRICHE COMPLETE
-    st.divider()
-    m_cols = st.columns(5)
-    for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
-        val = df_f[m].sum()
-        m_cols[i].metric(f"TOTAL {m}", f"{val/1e6:.2f}M" if abs(val)>1e5 else f"{val:.2f}")
+    data = load_market_data(input_ticker, selected_exp_idx, zoom_pct)
+    
+    if data:
+        spot, df_zoom, exp_date, df_full = data
+        z_flip = df_zoom.loc[df_zoom[metric_to_plot].abs().idxmin(), 'strike']
+
+        # 1. BIAS STATISTICO (LOGICA COMBINATA GAMMA + VANNA)
+        g_sum = df_full['Gamma'].sum()
+        v_sum = df_full['Vanna'].sum()
+        
+        if g_sum > 0 and v_sum > 0: bias, b_col = "STRONG LONG", "#00ff00"
+        elif g_sum < 0 and v_sum < 0: bias, b_col = "STRONG SHORT", "#ff4444"
+        elif g_sum < 0: bias, b_col = "SHORT BIAS", "#ffaa00"
+        else: bias, b_col = "LONG BIAS", "#00aaff"
+
+        st.markdown(f"<div style='padding:20px; border-radius:10px; background-color:#1e1e1e; border-left:10px solid {b_col};'>"
+                    f"<h1 style='color:{b_col}; margin:0;'>{bias} | {input_ticker}</h1>"
+                    f"<p style='color:white;'>Regime di mercato basato su esposizione Gamma e Vanna globale.</p></div>", unsafe_allow_html=True)
+
+        # 2. GRAFICO GEXBOT STYLE
+        max_val = df_zoom[metric_to_plot].abs().max()
+        fig = go.Figure()
+        fig.add_trace(go.Bar(y=df_zoom['strike'], x=df_zoom[metric_to_plot], orientation='h', 
+                             marker_color=np.where(df_zoom[metric_to_plot]>=0, '#00ff00', '#00aaff')))
+        fig.add_hline(y=spot, line_color="cyan", line_width=2, annotation_text=f"SPOT: {spot:.2f}")
+        fig.add_hline(y=z_flip, line_dash="dash", line_color="yellow", annotation_text=f"ZERO {metric_to_plot}")
+        fig.update_layout(template="plotly_dark", height=700, xaxis=dict(range=[-max_val*1.1, max_val*1.1]))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 3. TUTTE LE METRICHE (REPLACE COMPLETE)
+        st.divider()
+        st.subheader("📊 Analisi Greche Totali")
+        cols = st.columns(5)
+        m_list = ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']
+        for i, m in enumerate(m_list):
+            total_val = df_full[m].sum()
+            cols[i].metric(f"TOTAL {m}", f"{total_val/1e6:.2f}M" if abs(total_val)>1e5 else f"{total_val:.2f}")
+
+except Exception as e:
+    st.error(f"Errore nel caricamento del ticker '{input_ticker}'. Assicurati che il simbolo sia corretto (es. NVDA, AAPL, QQQ).")
