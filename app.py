@@ -68,4 +68,102 @@ if t_str:
         
         # Selezione multipla DTE (Gexbot Style)
         dte_labels = [f"{row['dte']} DTE ({row['date']})" for _, row in df_exp_map.iterrows()]
-        selected_labels = st.sidebar.multiselect("SCADENZE (DTE
+        selected_labels = st.sidebar.multiselect("SCADENZE (DTE)", options=dte_labels, default=dte_labels[:2])
+        
+        # Estrazione date selezionate
+        selected_dates = [label.split('(')[1].replace(')', '') for label in selected_labels]
+        
+        strike_step = st.sidebar.selectbox("GRANULARITÀ STRIKE", [1, 5, 10, 25, 50, 100], index=3)
+        zoom_range = st.sidebar.slider("ZOOM AREA (+/- % dallo Spot)", 1, 20, 5)
+        main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm'])
+
+        hist = t_obj.history(period='1d')
+        if not hist.empty and selected_dates:
+            spot = float(hist['Close'].iloc[-1])
+            
+            # Caricamento massivo
+            all_data = []
+            for d_str in selected_dates:
+                chain = t_obj.option_chain(d_str)
+                c = chain.calls[['strike', 'impliedVolatility', 'openInterest']].copy().assign(type='call', exp=d_str)
+                p = chain.puts[['strike', 'impliedVolatility', 'openInterest']].copy().assign(type='put', exp=d_str)
+                all_data.extend([c, p])
+            
+            df_raw = pd.concat(all_data, ignore_index=True)
+            
+            # Calcolo DTE temporale
+            df_raw['dte_years'] = df_raw['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
+            
+            # --- FIX DUPLICATE COLUMNS: Grouping radicale ---
+            df_clean = df_raw.groupby(['strike', 'type', 'dte_years'], as_index=False).agg({
+                'impliedVolatility': 'mean', 'openInterest': 'sum'
+            })
+            
+            # Esecuzione calcoli
+            df_res = fast_engine_v41(df_clean, spot)
+            
+            # Consolidamento finale per Strike (unendo le scadenze)
+            df_final = df_res.groupby('strike', as_index=False)[['Gamma', 'Vanna', 'Charm']].sum()
+
+            # --- LOGICA ZERO GAMMA ---
+            df_final['cum_gamma'] = df_final['Gamma'].cumsum()
+            z_gamma = df_final.loc[df_final['cum_gamma'].abs().idxmin(), 'strike']
+
+            # --- CAMPANELLI DI REGIME ---
+            st.markdown(f"## 🏛️ {active_t} Professional Terminal | Spot: {spot:.2f}")
+            
+            def get_regime(val):
+                if val > 0.5: return "🛡️ POSITIVO", "#00ff00"
+                if val < -0.5: return "⚠️ NEGATIVO", "#ff4444"
+                return "⚖️ NEUTRALE", "#ffff00"
+
+            net_g = df_final['Gamma'].sum()
+            net_v = df_final['Vanna'].sum()
+            
+            m1, m2, m3, m4 = st.columns(4)
+            
+            # Indicatori dinamici
+            g_status, g_color = get_regime(net_g / df_final['Gamma'].abs().sum())
+            m1.markdown(f"<div style='border:1px solid {g_color}; padding:10px; border-radius:10px; text-align:center;'><b>GAMMA REGIME</b><br><span style='color:{g_color}; font-size:20px;'>{g_status}</span></div>", unsafe_allow_html=True)
+            
+            v_status, v_color = get_regime(net_v / df_final['Vanna'].abs().sum())
+            m2.markdown(f"<div style='border:1px solid {v_color}; padding:10px; border-radius:10px; text-align:center;'><b>VANNA REGIME</b><br><span style='color:{v_color}; font-size:20px;'>{v_status}</span></div>", unsafe_allow_html=True)
+            
+            m3.metric("ZERO GAMMA", f"{z_gamma:.0f}")
+            m4.metric("NET EXPOSURE", f"${net_g/1e6:.1f}M")
+
+            # --- FILTRO ZOOM PERCENTUALE ---
+            lower_b = spot * (1 - zoom_range/100)
+            upper_b = spot * (1 + zoom_range/100)
+            df_plot = df_final[(df_final['strike'] >= lower_b) & (df_final['strike'] <= upper_b)].copy()
+            
+            # Binning per il grafico
+            df_plot['bin'] = np.floor(df_plot['strike'] / strike_step) * strike_step
+            df_plot = df_plot.groupby('bin', as_index=False).sum().rename(columns={'bin': 'strike'})
+
+            # --- GRAFICO GEXBOT ---
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=df_plot['strike'], x=df_plot[main_metric], orientation='h',
+                marker_color=['#00ff00' if x >= 0 else '#00aaff' for x in df_plot[main_metric]],
+                width=strike_step * 0.8
+            ))
+            
+            fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT")
+            fig.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="0-GAMMA")
+            
+            fig.update_layout(template="plotly_dark", height=800, 
+                              yaxis=dict(dtick=strike_step, title="STRIKE"),
+                              xaxis=dict(title=f"Net {main_metric} Exposure"))
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- TABELLA GRANULARE ---
+            st.markdown("### 📊 Market Maker Inventory")
+            st.dataframe(df_plot.sort_values('strike', ascending=False).style.format(precision=1).map(
+                lambda x: f"color: {'#00ff00' if x > 0 else '#ff4444' if x < 0 else 'white'}",
+                subset=['Gamma', 'Vanna', 'Charm']
+            ), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Errore tecnico: {e}")
