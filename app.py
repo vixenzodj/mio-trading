@@ -133,3 +133,13 @@ if t_str:
 
             # TABELLA (PULITA)
             st.markdown("### 📊 Livelli Chiave")
+            table_data = df_plot.iloc[(df_plot['strike'] - spot).abs().argsort()[:15]].sort_values('strike', ascending=False)
+            
+            # Usiamo .map invece di .applymap (Pandas 2.0+)
+            st.dataframe(table_data[['strike', 'Gamma', 'Vega', 'Theta', 'Vanna']].style.format(precision=1).map(
+                lambda x: f"color: {'#00ff00' if x > 0 else '#ff4444' if x < 0 else 'white'}",
+                subset=['Gamma', 'Vanna', 'Theta']
+            ), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Errore tecnico: {e}")
