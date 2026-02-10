@@ -124,3 +124,13 @@ if t_str:
             fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text=f"LIVE SPOT: {spot:.2f}")
 
             fig.update_layout(
+                template="plotly_dark", height=900,
+                yaxis=dict(title="STRIKE", gridcolor="#333", autorange=True, tickformat=".0f"),
+                xaxis=dict(title=f"Net {main_metric} Exposure (Dealer Hedge Requirement)", zerolinecolor="white"),
+                bargap=0
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Errore nel caricamento dei dati per la scadenza {sel_exp}: {e}")
