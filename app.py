@@ -8,131 +8,135 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V15", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V14", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
-TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR", "IBIT"]
+TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR", "PLTR", "IBIT"]
 
 def fix_ticker(symbol):
     if not symbol: return None
     s = symbol.upper().strip()
     return f"^{s}" if s in ["NDX", "SPX", "RUT"] else s
 
-# --- MOTORE BS-INSTITUTIONAL ---
-def calc_greeks_pro(row, spot, t_yrs, r=0.045):
+# --- MOTORE GRECHE PROFESSIONALE (Standard Istituzionale) ---
+def get_all_greeks(row, spot, t_yrs):
     try:
         s, k, v, oi = float(spot), float(row['strike']), float(row['impliedVolatility']), float(row['openInterest'])
         if v <= 0 or t_yrs <= 0 or oi <= 0: return pd.Series([0.0]*5)
         
+        r = 0.045 # Tasso Risk-Free stimato
         d1 = (np.log(s/k) + (r + 0.5 * v**2) * t_yrs) / (v * np.sqrt(t_yrs))
         d2 = d1 - v * np.sqrt(t_yrs)
         pdf = norm.pdf(d1)
         
-        # Dollar Gamma Exposure: 0.5 * Gamma * Spot^2 * 0.01
-        gamma = (pdf / (s * v * np.sqrt(t_yrs))) * (s**2) * 0.01 * oi * 100
-        # Vanna: dDelta / dVol
-        vanna = s * pdf * d1 / v * 0.01 * oi
-        # Charm: dDelta / dTime
-        charm = (pdf * (r / (v * np.sqrt(t_yrs)) - d1 / (2 * t_yrs))) * oi * 100
-        # Vega: dPrice / dVol
-        vega = s * pdf * np.sqrt(t_yrs) * oi * 100
-        # Theta: dPrice / dTime
-        theta = (-(s * pdf * v) / (2 * np.sqrt(t_yrs)) - r * k * np.exp(-r * t_yrs) * norm.cdf(d2 if row['type']=='call' else -d2)) * oi * 100
+        # Formule standard Black-Scholes pesate per Open Interest
+        # Calcoliamo la DOLLAR GAMMA: (Gamma * Spot^2 * 0.01) * OI * 100
+        gamma = (pdf / (s * v * np.sqrt(t_yrs))) * oi * 100 * (s**2) * 0.01
+        vanna = ((pdf * d1) / v) * oi * s * 0.01
+        charm = (pdf * ( (r/(v*np.sqrt(t_yrs))) - (d1/(2*t_yrs)) )) * oi * 100
+        vega = (s * pdf * np.sqrt(t_yrs)) * oi * 100
+        theta = ((-(s * pdf * v) / (2 * np.sqrt(t_yrs)) - r * k * np.exp(-r * t_yrs) * norm.cdf(d2))) * oi * 100
         
         return pd.Series([gamma, vanna, charm, vega, theta])
     except: return pd.Series([0.0]*5)
 
-def get_gamma_flip(df, spot_range):
-    # Trova il punto dove il Gamma Netto Totale attraversa lo zero
-    # Creiamo una simulazione di prezzi intorno allo spot attuale
-    test_prices = np.linspace(df['strike'].min(), df['strike'].max(), 200)
-    # Approssimazione professionale: usiamo il Gamma attuale ponderato per la distanza
-    # In un modello reale ricalcoleremmo BS per ogni prezzo, qui usiamo la curva di distribuzione
-    df_sorted = df.sort_values('strike')
-    cumulative_gamma = df_sorted['Gamma'].cumsum()
-    # Trova dove la massa del gamma passa da negativa a positiva
-    zero_idx = np.abs(cumulative_gamma).idxmin()
-    return float(df_sorted.loc[zero_idx, 'strike'])
+def find_localized_levels(df, spot):
+    # Filtriamo solo gli strike vicini al prezzo attuale (±10%) per evitare errori statistici
+    df_local = df[(df['strike'] >= spot * 0.90) & (df['strike'] <= spot * 1.10)].copy()
+    
+    if df_local.empty: return spot, spot, spot
+    
+    # Call Wall: Massimo Gamma Netto Positivo
+    call_wall = float(df_local.loc[df_local['Gamma'].idxmax(), 'strike'])
+    # Put Wall: Massimo Gamma Netto Negativo (Supporto)
+    put_wall = float(df_local.loc[df_local['Gamma'].idxmin(), 'strike'])
+    
+    # Zero Gamma Flip: Il punto dove il segno cambia vicino allo Spot
+    df_local['gamma_sign'] = np.sign(df_local['Gamma'])
+    # Cerchiamo il cambio di segno più vicino allo spot
+    df_local['sign_change'] = df_local['gamma_sign'].diff().fillna(0) != 0
+    changes = df_local[df_local['sign_change']]
+    
+    if not changes.empty:
+        z_gamma = float(changes.iloc[(changes['strike'] - spot).abs().argsort()[:1]]['strike'].values[0])
+    else:
+        z_gamma = float(df_local.iloc[(df_local['Gamma']).abs().argsort()[:1]]['strike'].values[0])
+        
+    return call_wall, put_wall, z_gamma
 
 # --- SIDEBAR ---
-st.sidebar.header("🕹️ GEX ENGINE PRO V15")
+st.sidebar.header("🕹️ GEX ENGINE PRO V14")
 active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
 t_str = fix_ticker(active_t)
 
 if t_str:
     t_obj = yf.Ticker(t_str)
     exps = t_obj.options
-    sel_exp = st.sidebar.selectbox("SCADENZA (DTE)", exps)
+    sel_exp = st.sidebar.selectbox("SCADENZA ATTIVA", exps)
     strike_step = st.sidebar.selectbox("STEP STRIKE", [1, 5, 10, 25, 50, 100, 250], index=4)
-    num_levels = st.sidebar.slider("VISUAL RANGE", 20, 200, 100)
+    num_levels = st.sidebar.slider("VISIBILITÀ RANGE", 10, 200, 80)
     main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
     try:
         hist = t_obj.history(period='1d')
         if not hist.empty:
             spot = float(hist['Close'].iloc[-1])
-            t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
-            chain = t_obj.option_chain(sel_exp)
+            t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.1) / 365
+            ch = t_obj.option_chain(sel_exp)
             
-            # Uniamo Call e Put per analisi aggregata
-            calls, puts = chain.calls.copy(), chain.puts.copy()
-            calls['type'], puts['type'] = 'call', 'put'
+            # --- CALCOLO CORE ---
+            c_v = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+            p_v = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
             
-            c_vals = calls.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
-            p_vals = puts.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
-            
-            # Creazione dataframe unico per strike
-            df_calls = pd.DataFrame({'strike': calls['strike'], 'Gamma': c_vals[0], 'Vanna': c_vals[1], 'Charm': c_vals[2], 'Vega': c_vals[3], 'Theta': c_vals[4]})
-            df_puts = pd.DataFrame({'strike': puts['strike'], 'Gamma': -p_vals[0], 'Vanna': -p_vals[1], 'Charm': -p_vals[2], 'Vega': p_vals[3], 'Theta': p_vals[4]})
-            
-            df_total = pd.concat([df_calls, df_puts]).groupby('strike').sum().reset_index()
+            df = pd.DataFrame({'strike': ch.calls['strike'].astype(float)})
+            metrics = ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']
+            for i, m in enumerate(metrics):
+                if m in ['Vega', 'Theta']:
+                    df[m] = c_v[i] + p_v[i] # Vega/Theta sono additivi (costo/rischio totale)
+                else:
+                    df[m] = c_v[i] - p_v[i] # Gamma/Vanna/Charm sono direzionali (Net)
 
-            # --- CALCOLO LIVELLI LIVE ---
-            # Zero Gamma Flip: Punto di inversione della liquidità
-            z_gamma = get_gamma_flip(df_total, spot)
-            
-            # Muri entro il 10% del prezzo attuale (come nelle piattaforme PRO)
-            df_local = df_total[(df_total['strike'] >= spot * 0.9) & (df_total['strike'] <= spot * 1.1)]
-            call_wall = float(df_local.loc[df_local['Gamma'].idxmax(), 'strike'])
-            put_wall = float(df_local.loc[df_local['Gamma'].idxmin(), 'strike'])
+            # --- LIVELLI REALI (LOCALIZZATI) ---
+            c_wall, p_wall, z_gamma = find_localized_levels(df, spot)
 
-            # --- DASHBOARD ---
-            st.markdown(f"## 📊 {active_t} GEX Profile | Spot: {spot:.2f}")
+            # --- BIAS DASHBOARD ---
+            st.markdown(f"## 🏛️ {active_t} Analysis | Expiry: {sel_exp}")
             
-            # Bias combinato istituzionale (Gamma + Vanna + Charm)
-            total_bias = df_total['Gamma'].sum() + df_total['Vanna'].sum()
-            b_txt, b_col = ("LONG GAMMA (Stable)", "#00ff00") if total_bias > 0 else ("SHORT GAMMA (Volatile)", "#ff4444")
-            
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f"<div style='border:2px solid {b_col};padding:10px;border-radius:10px;text-align:center;'>SENTIMENT<br><b style='color:{b_col};'>{b_txt}</b></div>", unsafe_allow_html=True)
-            c2.metric("CALL WALL", f"{call_wall:.0f}", f"{call_wall-spot:.1f}")
-            c3.metric("PUT WALL", f"{put_wall:.0f}", f"{put_wall-spot:.1f}")
-            c4.metric("ZERO FLIP", f"{z_gamma:.0f}", f"Target Vol", delta_color="off")
+            # Formula Bias: Somma pesata di tutte le greche (Gamma, Vanna, Charm, Theta)
+            bias_val = (df['Gamma'].sum() * 1.0) + (df['Vanna'].sum() * 0.4) + (df['Charm'].sum() * 0.4) + (df['Theta'].sum() * 0.2)
+            b_label, b_color = ("STRONG LONG", "#00ff00") if bias_val > 0 else ("STRONG SHORT", "#ff4444")
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.markdown(f"<div style='text-align:center;border:2px solid {b_color};padding:10px;border-radius:10px;'><h4>INSTITUTIONAL BIAS</h4><h2 style='color:{b_color};'>{b_label}</h2></div>", unsafe_allow_html=True)
+            m2.metric("CALL WALL", f"{c_wall:.0f}", f"{c_wall-spot:.1f} pts")
+            m3.metric("PUT WALL", f"{p_wall:.0f}", f"{p_wall-spot:.1f} pts")
+            m4.metric("ZERO GAMMA", f"{z_gamma:.0f}", f"FLIP POINT", delta_color="off")
 
             # --- GRAFICO ---
-            df_total['bin'] = (df_total['strike'] / strike_step).round() * strike_step
-            df_plot = df_total.groupby('bin').sum().reset_index().rename(columns={'bin': 'strike'})
-            df_plot = df_plot[(df_plot['strike'] >= spot - (strike_step * num_levels/2)) & (df_plot['strike'] <= spot + (strike_step * num_levels/2))]
+            df['bin'] = (df['strike'] / strike_step).round() * strike_step
+            df_p = df.groupby('bin')[metrics].sum().reset_index().rename(columns={'bin': 'strike'})
+            df_p = df_p[(df_p['strike'] >= spot - (strike_step * num_levels/2)) & (df_p['strike'] <= spot + (strike_step * num_levels/2))]
 
             fig = go.Figure()
-            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot[main_metric]]
+            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_p[main_metric]]
             
             fig.add_trace(go.Bar(
-                y=df_plot['strike'], x=df_plot[main_metric], orientation='h', 
-                marker_color=colors, width=strike_step*0.8
+                y=df_p['strike'], x=df_p[main_metric], orientation='h', 
+                marker_color=colors, width=strike_step*0.8,
+                text=[f"{v/1e6:.1f}M" if abs(v)>1e6 else "" for v in df_p[main_metric]], textposition='outside'
             ))
 
-            # Marcatori Professionali
-            fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
-            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
-            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text="ZERO GAMMA FLIP")
+            # Linee Chirurgiche
+            fig.add_hline(y=c_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
+            fig.add_hline(y=p_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
+            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text="ZERO GAMMA")
             fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text=f"SPOT: {spot:.2f}")
 
             fig.update_layout(
                 template="plotly_dark", height=850,
-                yaxis=dict(title="STRIKE", autorange=True, tickformat=".0f", gridcolor="#333"),
+                yaxis=dict(title="STRIKE", tickformat=".0f", gridcolor="#333"),
                 xaxis=dict(title=f"Dollar {main_metric} Exposure ($)", zerolinecolor="white"),
-                title=f"Analisi Quantitativa: {main_metric.upper()} Exposure"
+                title=f"Distribuzione Esposizione Reale - {main_metric.upper()}"
             )
             
             st.plotly_chart(fig, use_container_width=True)
