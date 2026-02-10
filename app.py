@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V27", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V28", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
 TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR", "PLTR", "IBIT"]
@@ -35,7 +35,7 @@ def calc_greeks_pro(row, spot, t_yrs, r=0.045):
     except: return pd.Series([0.0]*5)
 
 # --- SIDEBAR ---
-st.sidebar.header("🕹️ GEX ENGINE V27")
+st.sidebar.header("🕹️ GEX ENGINE V28")
 active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
 t_str = fix_ticker(active_t)
 
@@ -43,96 +43,100 @@ if t_str:
     t_obj = yf.Ticker(t_str)
     exps = t_obj.options
     sel_exp = st.sidebar.selectbox("SCADENZA ATTIVA", exps)
-    strike_step = st.sidebar.selectbox("STEP STRIKE (Granularità)", [1, 5, 10, 25, 50, 100, 250], index=4)
-    num_levels = st.sidebar.slider("ZOOM AREA PREZZO (Punti)", 100, 2500, 1000)
+    
+    # Adattamento automatico dello step strike in base al prezzo
+    default_step = 50 if "NDX" in t_str or "SPX" in t_str else 5
+    strike_step = st.sidebar.selectbox("STEP STRIKE", [1, 2, 5, 10, 25, 50, 100, 250], index=TICKER_LIST.index(active_t) if active_t in TICKER_LIST else 4)
+    
+    # Zoom dinamico basato su percentuale del prezzo per non rompere la visuale
+    zoom_pct = st.sidebar.slider("ZOOM AREA PREZZO (% dallo Spot)", 1, 20, 5)
     main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
     try:
         hist = t_obj.history(period='1d')
         if not hist.empty:
             spot = float(hist['Close'].iloc[-1])
+            num_levels = (spot * zoom_pct) / 100 # Calcolo dinamico dello zoom
+            
             t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
             chain = t_obj.option_chain(sel_exp)
             
             c, p = chain.calls.copy(), chain.puts.copy()
             c['type'], p['type'] = 'call', 'put'
             
-            c_res = c.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
-            p_res = p.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
-            
+            # Uniamo e calcoliamo greche
+            df_all = pd.concat([c, p])
+            res = df_all.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
             cols = ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']
-            df_c = pd.DataFrame(c_res.values, columns=cols); df_c['strike'] = c['strike'].values
-            df_p = pd.DataFrame(p_res.values, columns=cols); df_p['strike'] = p['strike'].values
+            df_res = pd.DataFrame(res.values, columns=cols)
+            df_res['strike'] = df_all['strike'].values
             
-            df_total = pd.concat([df_c, df_p]).groupby('strike', as_index=False).sum().sort_values('strike')
+            # Raggruppamento
+            df_total = df_res.groupby('strike', as_index=False).sum().sort_values('strike')
 
-            # --- NUOVA LOGICA ZERO GAMMA BILANCIATA ---
-            # Calcolo cumulativo per trovare il punto di equilibrio di struttura (meno nervoso)
+            # --- LOGICA ZERO GAMMA ---
             df_total['cum_gamma'] = df_total['Gamma'].cumsum()
             z_gamma = df_total.loc[df_total['cum_gamma'].abs().idxmin(), 'strike']
 
-            # --- AGGREGAZIONE PER VISUALIZZAZIONE ---
+            # --- SCREMATURA E ZOOM ---
             df_total['bin'] = np.floor(df_total['strike'] / strike_step) * strike_step
             df_plot = df_total.groupby('bin', as_index=False)[cols].sum().rename(columns={'bin': 'strike'})
-            df_plot_zoom = df_plot[(df_plot['strike'] >= spot - num_levels) & (df_plot['strike'] <= spot + num_levels)]
+            
+            # Filtro chirurgico: solo strike con valore reale e dentro lo zoom
+            df_plot_zoom = df_plot[(df_plot['strike'] >= spot - num_levels) & (df_plot['strike'] <= spot + num_levels)].copy()
             
             call_wall = df_plot.loc[df_plot['Gamma'].idxmax(), 'strike']
             put_wall = df_plot.loc[df_plot['Gamma'].idxmin(), 'strike']
 
-            # --- BIAS ENGINE ---
+            # --- BIAS ---
             gamma_net = df_total['Gamma'].sum()
-            vanna_net = df_total['Vanna'].sum()
-            if gamma_net > 0 and vanna_net > 0: bias, b_col = "ULTRA BULLISH", "#00ff00"
-            elif gamma_net < 0 and vanna_net < 0: bias, b_col = "ULTRA BEARISH", "#ff4444"
-            else: bias, b_col = "NEUTRAL / TRANSITION", "#ffff00"
+            bias = "BULLISH" if gamma_net > 0 else "BEARISH"
+            b_col = "#00ff00" if bias == "BULLISH" else "#ff4444"
 
             # --- DASHBOARD ---
             st.markdown(f"## 🏛️ {active_t} Terminal | Spot: {spot:.2f}")
             d1, d2, d3, d4 = st.columns(4)
-            d1.metric("SPOT PRICE", f"{spot:.2f}")
-            d2.metric("ZERO GAMMA", f"{z_gamma:.0f}", f"{z_gamma-spot:.0f} pts")
+            d1.metric("SPOT", f"{spot:.2f}")
+            d2.metric("VOL TRIGGER", f"{z_gamma:.0f}")
             d3.metric("CALL WALL", f"{call_wall:.0f}")
-            d4.markdown(f"<div style='border:2px solid {b_col}; padding:10px; border-radius:10px; text-align:center;'>BIAS ATTUALE<br><b style='color:{b_col}; font-size:22px;'>{bias}</b></div>", unsafe_allow_html=True)
+            d4.markdown(f"<div style='background:{b_col}22; border:1px solid {b_col}; padding:10px; border-radius:5px; text-align:center;'>BIAS: <b>{bias}</b></div>", unsafe_allow_html=True)
 
-            # --- GRAFICO DINAMICO ---
+            # --- GRAFICO PRO ---
             fig = go.Figure()
-            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot_zoom[main_metric]]
             
+            # Barre con colori dinamici
             fig.add_trace(go.Bar(
-                y=df_plot_zoom['strike'], x=df_plot_zoom[main_metric], orientation='h', 
-                marker_color=colors, width=strike_step * 0.8,
-                text=[f"{v/1e6:.1f}M" if abs(v)>1e5 else "" for v in df_plot_zoom[main_metric]], textposition='outside'
+                y=df_plot_zoom['strike'], x=df_plot_zoom[main_metric],
+                orientation='h', marker_color=['#00ff00' if x > 0 else '#00aaff' for x in df_plot_zoom[main_metric]],
+                width=strike_step * 0.8,
+                text=[f"{v/1e6:.1f}M" if abs(v)>1000 else "" for v in df_plot_zoom[main_metric]],
+                textposition='outside'
             ))
 
-            fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
-            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
-            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text=f"ZERO GAMMA")
-            fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text="SPOT")
+            # Linee di riferimento
+            fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT")
+            fig.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="ZERO GAMMA")
+            fig.add_hline(y=call_wall, line_color="red", annotation_text="CALL WALL")
+            fig.add_hline(y=put_wall, line_color="#00ff00", annotation_text="PUT WALL")
 
             fig.update_layout(
-                template="plotly_dark", height=850,
-                yaxis=dict(title="STRIKE", autorange=True, gridcolor="#333", nticks=40),
-                xaxis=dict(title=f"Net Dollar {main_metric} Exposure ($)", zerolinecolor="white"),
-                bargap=0.05
+                template="plotly_dark", height=900,
+                yaxis=dict(title="STRIKE", range=[spot - num_levels, spot + num_levels], gridcolor="#333", dtick=strike_step),
+                xaxis=dict(title=f"Net {main_metric} Exposure ($)", zerolinecolor="white"),
+                margin=dict(l=20, r=20, t=20, b=20)
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- TABELLA METRICHE SOTTO IL GRAFICO ---
-            st.markdown("### 📊 Analisi Dettagliata per Livello (Difesa Istituzionale)")
-            # Filtriamo i livelli principali più gli strike vicini allo spot (ATM)
-            main_levels = [call_wall, put_wall, z_gamma]
-            atm_levels = df_plot[(df_plot['strike'] >= spot - (strike_step*2)) & (df_plot['strike'] <= spot + (strike_step*2))]['strike'].tolist()
+            # --- TABELLA DETTAGLIATA (A COLPO D'OCCHIO) ---
+            st.markdown("### 🛡️ Livelli di Difesa & Greche Real-Time")
+            # Mostriamo i livelli chiave + un buffer intorno allo spot
+            key_strikes = [z_gamma, call_wall, put_wall]
+            table_data = df_plot[df_plot['strike'].apply(lambda x: any(abs(x - k) < strike_step for k in key_strikes) or abs(x - spot) < strike_step*2)]
+            table_data = table_data.sort_values('strike', ascending=False).drop_duplicates()
             
-            final_table = df_plot[df_plot['strike'].isin(main_levels + atm_levels)].copy()
-            final_table = final_table.sort_values('strike', ascending=False).drop_duplicates()
-            
-            # Formattazione per visualizzazione immediata
-            st.dataframe(
-                final_table[['strike', 'Gamma', 'Vega', 'Theta', 'Vanna']].style.format(precision=0).applymap(
-                    lambda x: 'color: #00ff00' if x > 0 else 'color: #ff4444' if x < 0 else 'color: white',
-                    subset=['Gamma', 'Vanna', 'Theta']
-                ), use_container_width=True
-            )
+            st.table(table_data[['strike', 'Gamma', 'Vanna', 'Vega', 'Theta']].style.format(precision=2).applymap(
+                lambda x: 'color: #00ff00' if x > 0 else 'color: #ff4444' if x < 0 else 'color: white'
+            ))
 
     except Exception as e:
-        st.error(f"Errore tecnico: {e}")
+        st.error(f"Errore: {e}")
