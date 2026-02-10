@@ -10,7 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE UI ---
-st.set_page_config(layout="wide", page_title="SENTINEL GEX V56 - QUANT", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="SENTINEL GEX V57 - MULTI-ASSET", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="sentinel_refresh")
 
 # --- CORE QUANT ENGINE ---
@@ -51,23 +51,54 @@ def fetch_data(ticker, dates):
         except: continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-# --- SIDEBAR ---
-st.sidebar.markdown("## ⚙️ QUANT ENGINE V56")
-asset = st.sidebar.selectbox("TICKER", ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA"])
+# --- SIDEBAR: GESTIONE TICKER ESTESA ---
+st.sidebar.markdown("## 🛰️ SENTINEL V57 HUB")
+
+# Caricamento manuale rapido
+custom_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, BITO)", "").upper()
+
+# Lista Predefinita 50+ Ticker
+default_tickers = [
+    "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",                      # Indici/ETF Core
+    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",      # Mag 7
+    "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",                 # AI/Semi
+    "COIN", "MARA", "RIOT", "MSTR", "BITO",                       # Crypto Proxy
+    "JPM", "GS", "BAC", "V", "MA",                                # Financial
+    "LLY", "PFE", "UNH", "ABBV",                                  # Health
+    "XOM", "CVX", "OXY", "SLB",                                   # Energy
+    "BA", "CAT", "GE", "LMT",                                     # Industrials
+    "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"             # Growth/Other
+]
+
+if custom_asset and custom_asset not in default_tickers:
+    default_tickers.insert(0, custom_asset)
+
+asset = st.sidebar.selectbox("SELEZIONA ASSET", default_tickers)
+
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
+# Fetch Spot
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
-if h.empty: st.stop()
+if h.empty: 
+    st.error(f"Errore: Ticker {asset} non trovato o dati non disponibili.")
+    st.stop()
 spot = h['Close'].iloc[-1]
 
+# Scadenze
 available_dates = ticker_obj.options
+if not available_dates:
+    st.warning(f"Nessuna opzione disponibile per {asset}")
+    st.stop()
+
 today = datetime.now()
-selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates], default=[f"{(datetime.strptime(available_dates[0], '%Y-%m-%d') - today).days + 1} DTE | {available_dates[0]}"])
+selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
+                                     [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates], 
+                                     default=[f"{(datetime.strptime(available_dates[0], '%Y-%m-%d') - today).days + 1} DTE | {available_dates[0]}"])
 
 metric = st.sidebar.radio("METRICA GRAFICO PRINCIPALE", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
-gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 50, 100], value=10 if "NDX" in asset else 5)
+gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 50, 100, 250], value=10 if "NDX" in asset else 5)
 zoom_val = st.sidebar.slider("ZOOM AREA %", 0.5, 15.0, 3.0)
 
 if selected_dte:
@@ -82,7 +113,6 @@ if selected_dte:
         df = get_greeks_pro(raw_data, spot)
         agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
         
-        # Muri Smart Focus
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
         c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
@@ -96,11 +126,10 @@ if selected_dte:
         m3.metric("PUT WALL", f"{p_wall:.0f}")
         m4.metric("SPOT", f"{spot:.2f}")
 
-        # --- NUOVA OVERVIEW MULTI-METRICA (VALORI E REGIME) ---
+        # --- OVERVIEW REGIME ---
         st.markdown("---")
         st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
         
-        # Calcolo Netto Totale per Regime
         net_gamma = agg['Gamma'].sum()
         net_vanna = agg['Vanna'].sum()
         net_charm = agg['Charm'].sum()
@@ -108,33 +137,21 @@ if selected_dte:
         net_theta = agg['Theta'].sum()
 
         r1, r2, r3, r4, r5 = st.columns(5)
-        metrics_list = [
-            ("GAMMA", net_gamma, r1), ("VANNA", net_vanna, r2), 
-            ("CHARM", net_charm, r3), ("VEGA", net_vega, r4), ("THETA", net_theta, r5)
-        ]
-
-        for name, val, col in metrics_list:
+        for name, val, col in [("GAMMA", net_gamma, r1), ("VANNA", net_vanna, r2), ("CHARM", net_charm, r3), ("VEGA", net_vega, r4), ("THETA", net_theta, r5)]:
             regime = "POSITIVO" if val > 0 else "NEGATIVO"
-            color = "green" if val > 0 else "red"
+            color = "#00FF41" if val > 0 else "#FF4136"
             col.markdown(f"**{name}**")
             col.markdown(f"<h3 style='color:{color}; margin:0;'>{regime}</h3>", unsafe_allow_html=True)
             col.caption(f"Net: ${val/1e6:.2f}M")
 
-        # --- INDICATORE DIREZIONALE ---
         st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
-        direction = "STABILE / CONSOLIDAMENTO"
-        bias_color = "white"
-        
-        # Logica di sintesi direzionale
+        direction = "STABILE / CONSOLIDAMENTO"; bias_color = "gray"
         if net_gamma < 0:
-            direction = "ACCELERAZIONE VOLATILITÀ (SHORT BIAS)"
-            bias_color = "#FF4136"
+            direction = "ACCELERAZIONE VOLATILITÀ (SHORT BIAS)"; bias_color = "#FF4136"
         elif net_gamma > 0 and net_charm < 0:
-            direction = "REVERSIONE VERSO LO SPOT (STABILIZZAZIONE)"
-            bias_color = "#2ECC40"
+            direction = "REVERSIONE VERSO LO SPOT (STABILIZZAZIONE)"; bias_color = "#2ECC40"
         elif spot < z_gamma:
-            direction = "PRESSIONE DI VENDITA (SOTTO ZERO GAMMA)"
-            bias_color = "#FF851B"
+            direction = "PRESSIONE DI VENDITA (SOTTO ZERO GAMMA)"; bias_color = "#FF851B"
         
         st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
@@ -145,11 +162,9 @@ if selected_dte:
         p_df = p_df.groupby('bin', as_index=False).sum()
 
         fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=p_df['bin'], x=p_df[metric], orientation='h',
-            marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
-            width=gran * 0.85
-        ))
+        fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
+                             marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
+                             width=gran * 0.85))
         
         fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
         fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
