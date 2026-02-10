@@ -8,127 +8,115 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="TERMINAL GEX PRO V10", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V24", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
-# DATABASE 50 TICKERS
-TICKER_LIST = [
-    "NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", 
-    "AMD", "NFLX", "COIN", "MARA", "IBIT", "BITO", "SMCI", "AVGO", "ARM", "MU", "INTC", "ASML",
-    "JPM", "GS", "BAC", "V", "MA", "DIS", "BA", "CAT", "XOM", "CVX", "TLT", "GLD", "SLV", "USO",
-    "PLTR", "UBER", "ABNB", "PYPL", "SQ", "BABA", "NIO", "MSTR", "HOOD", "SHOP", "ADBE", "CRM"
-]
+TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR", "PLTR", "IBIT"]
 
 def fix_ticker(symbol):
     if not symbol: return None
     s = symbol.upper().strip()
-    return f"^{s}" if s in ["NDX", "SPX", "RUT", "VIX", "DJI"] else s
+    return f"^{s}" if s in ["NDX", "SPX", "RUT"] else s
 
-def get_all_greeks(row, spot, t_yrs):
+# --- MOTORE DI CALCOLO ISTITUZIONALE ---
+def calc_greeks_pro(row, spot, t_yrs, r=0.045):
     try:
         s, k, v, oi = float(spot), float(row['strike']), float(row['impliedVolatility']), float(row['openInterest'])
         if v <= 0 or t_yrs <= 0 or oi <= 0: return pd.Series([0.0]*5)
-        r, d1 = 0.045, (np.log(s/k) + (0.045 + 0.5 * v**2) * t_yrs) / (v * np.sqrt(t_yrs))
-        d2, pdf = d1 - v * np.sqrt(t_yrs), norm.pdf(d1)
-        gamma = (pdf / (s * v * np.sqrt(t_yrs))) * oi * 100
-        vanna = ((pdf * d1) / v) * oi
-        charm = (pdf * ( (r/(v*np.sqrt(t_yrs))) - (d1/(2*t_yrs)) )) * oi
-        vega = (s * pdf * np.sqrt(t_yrs)) * oi
-        theta = (-(s * pdf * v) / (2 * np.sqrt(t_yrs)) - r * k * np.exp(-r * t_yrs) * norm.cdf(d2)) * oi
-        return pd.Series([float(gamma), float(vanna), float(charm), float(vega), float(theta)])
+        
+        d1 = (np.log(s/k) + (r + 0.5 * v**2) * t_yrs) / (v * np.sqrt(t_yrs))
+        d2 = d1 - v * np.sqrt(t_yrs)
+        pdf = norm.pdf(d1)
+        
+        # Formula Dollar Gamma: 0.5 * Gamma * Spot^2 * 0.01 * OI * 100
+        gamma = (pdf / (s * v * np.sqrt(t_yrs))) * (s**2) * 0.01 * oi * 100
+        vanna = s * pdf * d1 / v * 0.01 * oi
+        charm = (pdf * (r / (v * np.sqrt(t_yrs)) - d1 / (2 * t_yrs))) * oi * 100
+        vega = s * pdf * np.sqrt(t_yrs) * oi * 100
+        theta = (-(s * pdf * v) / (2 * np.sqrt(t_yrs)) - r * k * np.exp(-r * t_yrs) * norm.cdf(d2 if row['type']=='call' else -d2)) * oi * 100
+        
+        mult = 1 if row['type'] == 'call' else -1
+        return pd.Series([gamma * mult, vanna * mult, charm * mult, vega, theta])
     except: return pd.Series([0.0]*5)
 
-def analyze_tf(t_obj, spot, exp_idx):
-    try:
-        exps = t_obj.options
-        if not exps: return "N/D", "#555"
-        sel = exps[min(exp_idx, len(exps)-1)]
-        t_yrs = max((datetime.strptime(sel, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
-        ch = t_obj.option_chain(sel)
-        c = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-        p = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-        g_net = c[0].sum() - p[0].sum()
-        return ("LONG", "#00ff00") if g_net > 0 else ("SHORT", "#ff4444")
-    except: return "ERR", "#555"
-
 # --- SIDEBAR ---
-st.sidebar.header("🕹️ DASHBOARD CONTROL")
-sel_ticker = st.sidebar.selectbox("TICKER LIST (50+)", ["CERCA..."] + sorted(TICKER_LIST))
-manual_t = st.sidebar.text_input("TICKER MANUALE", "")
-active_t = manual_t if manual_t else (sel_ticker if sel_ticker != "CERCA..." else "NDX")
-
-trade_mode = st.sidebar.selectbox("MODALITÀ OPERATIVA", ["SCALPING (0DTE)", "INTRADAY (Weekly)", "SWING (Monthly)"])
-strike_step = st.sidebar.selectbox("GRANULARITÀ (Step)", [1, 5, 10, 25, 50, 100, 250], index=4)
-num_levels = st.sidebar.slider("ZOOM (Numero Strike)", 10, 100, 40)
-main_metric = st.sidebar.radio("METRICA VISIVA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
-
+st.sidebar.header("🕹️ GEX ENGINE V24")
+active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
 t_str = fix_ticker(active_t)
+
 if t_str:
+    t_obj = yf.Ticker(t_str)
+    exps = t_obj.options
+    sel_exp = st.sidebar.selectbox("SCADENZA ATTIVA", exps)
+    
+    strike_step = st.sidebar.selectbox("STEP STRIKE (Granularità)", [1, 5, 10, 25, 50, 100, 250], index=4)
+    num_levels = st.sidebar.slider("ZOOM AREA PREZZO (Punti)", 100, 2000, 800)
+    main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
+
     try:
-        t_obj = yf.Ticker(t_str)
         hist = t_obj.history(period='1d')
         if not hist.empty:
             spot = float(hist['Close'].iloc[-1])
-            
-            # 1. RADAR BIAS
-            st.subheader(f"📡 Radar Intelligence: {active_t.upper()}")
-            r1, r2, r3 = st.columns(3)
-            b1, c1 = analyze_tf(t_obj, spot, 0)
-            b2, c2 = analyze_tf(t_obj, spot, 2)
-            b3, c3 = analyze_tf(t_obj, spot, 5)
-            r1.markdown(f"<div style='text-align:center;border:2px solid {c1};padding:10px;border-radius:10px;'>SCALP: <b style='color:{c1};'>{b1}</b></div>", unsafe_allow_html=True)
-            r2.markdown(f"<div style='text-align:center;border:2px solid {c2};padding:10px;border-radius:10px;'>INTRA: <b style='color:{c2};'>{b2}</b></div>", unsafe_allow_html=True)
-            r3.markdown(f"<div style='text-align:center;border:2px solid {c3};padding:10px;border-radius:10px;'>SWING: <b style='color:{c3};'>{b3}</b></div>", unsafe_allow_html=True)
-
-            # 2. CALCOLO DATI
-            exps = t_obj.options
-            idx = 0 if "SCALPING" in trade_mode else (2 if "INTRADAY" in trade_mode else 5)
-            sel_exp = exps[min(idx, len(exps)-1)]
             t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
-            ch = t_obj.option_chain(sel_exp)
+            chain = t_obj.option_chain(sel_exp)
             
-            c_vals = ch.calls.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
-            p_vals = ch.puts.apply(lambda r: get_all_greeks(r, spot, t_yrs), axis=1)
+            c, p = chain.calls.copy(), chain.puts.copy()
+            c['type'], p['type'] = 'call', 'put'
             
-            df = pd.DataFrame({'strike': ch.calls['strike'].astype(float)})
-            for i, m in enumerate(['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']):
-                df[m] = c_vals[i] - p_vals[i] if i < 3 else c_vals[i] + p_vals[i]
+            # Calcolo Greche Professionale
+            c_res = c.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
+            p_res = p.apply(lambda r: calc_greeks_pro(r, spot, t_yrs), axis=1)
+            
+            cols = ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']
+            df_c = pd.DataFrame(c_res.values, columns=cols); df_c['strike'] = c['strike'].values
+            df_p = pd.DataFrame(p_res.values, columns=cols); df_p['strike'] = p['strike'].values
+            
+            df_total = pd.concat([df_c, df_p]).groupby('strike', as_index=False).sum().sort_values('strike')
 
-            # Muri (Calcolati su dati grezzi per precisione)
-            call_wall = float(df.loc[df['Gamma'].idxmax(), 'strike'])
-            put_wall = float(df.loc[df['Gamma'].idxmin(), 'strike'])
+            # --- IL VERO CALCOLO ZERO GAMMA (Gexbot Style) ---
+            # Filtriamo solo l'area operativa reale per evitare strike "morti"
+            df_logic = df_total[(df_total['strike'] >= spot * 0.9) & (df_total['strike'] <= spot * 1.1)].copy()
+            df_logic['cum_gamma'] = df_logic['Gamma'].cumsum()
+            # Lo Zero Flip è dove il Gamma Cumulato attraversa lo zero
+            z_gamma = df_logic.loc[df_logic['cum_gamma'].abs().idxmin(), 'strike']
 
-            # Raggruppamento per Granularità
-            df['bin'] = (df['strike'] / strike_step).round() * strike_step
-            df_g = df.groupby('bin')[['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']].sum().reset_index()
-            df_g.rename(columns={'bin': 'strike'}, inplace=True)
+            # --- AGGREGAZIONE PER VISUALIZZAZIONE ---
+            df_total['bin'] = np.floor(df_total['strike'] / strike_step) * strike_step
+            df_plot = df_total.groupby('bin', as_index=False)[cols].sum().rename(columns={'bin': 'strike'})
+            df_plot = df_plot[(df_plot['strike'] >= spot - num_levels) & (df_plot['strike'] <= spot + num_levels)]
             
-            # Filtro Visivo
-            df_g['dist'] = (df_g['strike'] - spot).abs()
-            df_p = df_g.sort_values('dist').head(num_levels).sort_values('strike')
-            
-            # 3. GRAFICO (ASSET NUMERICO - NO ERRORI)
+            call_wall = df_plot.loc[df_plot['Gamma'].idxmax(), 'strike']
+            put_wall = df_plot.loc[df_plot['Gamma'].idxmin(), 'strike']
+
+            # --- DASHBOARD ---
+            st.markdown(f"## 🏛️ {active_t} Terminal | Spot: {spot:.2f}")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("SPOT PRICE", f"{spot:.2f}")
+            d2.metric("CALL WALL", f"{call_wall:.0f}")
+            d3.metric("PUT WALL", f"{put_wall:.0f}")
+            d4.metric("ZERO GAMMA", f"{z_gamma:.0f}")
+
+            # --- GRAFICO DINAMICO ---
             fig = go.Figure()
-            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_p[main_metric]]
+            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot[main_metric]]
             
-            # Barre con larghezza dinamica per evitare schiacciamento
             fig.add_trace(go.Bar(
-                y=df_p['strike'], x=df_p[main_metric], orientation='h', 
-                marker_color=colors, name=main_metric,
-                width=strike_step * 0.8  # Occupa l'80% dello spazio dello step
+                y=df_plot['strike'], x=df_plot[main_metric], orientation='h', 
+                marker_color=colors, width=strike_step * 0.8,
+                text=[f"{v/1e6:.1f}M" if abs(v)>1e5 else "" for v in df_plot[main_metric]], textposition='outside'
             ))
 
-            # LINEE LIVELLI (SOLO NUMERICHE)
-            fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text=f"CALL WALL: {call_wall}")
-            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text=f"PUT WALL: {put_wall}")
-            fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dash", annotation_text=f"SPOT: {spot:.2f}")
+            # Linee Operative - ASSE CORRETTO (Prezzi Bassi -> Alti)
+            fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
+            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
+            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text="ZERO GAMMA")
+            fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text="SPOT")
 
             fig.update_layout(
-                template="plotly_dark", height=850,
-                title=f"PROFILO {main_metric.upper()} - {active_t} ({sel_exp})",
-                yaxis=dict(title="PREZZO STRIKE", autorange="reversed", tickformat=".0f"),
-                xaxis=dict(title="Esposizione Netta", zerolinecolor="white"),
-                bargap=0
+                template="plotly_dark", height=900,
+                yaxis=dict(title="STRIKE", autorange=True, gridcolor="#333", nticks=40),
+                xaxis=dict(title=f"Net Dollar {main_metric} Exposure ($)", zerolinecolor="white"),
+                bargap=0.05
             )
             
             st.plotly_chart(fig, use_container_width=True)
