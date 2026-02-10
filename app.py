@@ -54,45 +54,44 @@ def fetch_data(ticker, dates):
 # --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
-# 1. Input manuale
-custom_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
+# Inizializzazione Session State per i Ticker
+if 'ticker_list' not in st.session_state:
+    st.session_state.ticker_list = [
+        "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
+        "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
+        "COIN", "MARA", "RIOT", "MSTR", "BITO",
+        "JPM", "GS", "BAC", "V", "MA",
+        "LLY", "PFE", "UNH", "ABBV",
+        "XOM", "CVX", "OXY", "SLB",
+        "BA", "CAT", "GE", "LMT",
+        "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
+    ]
 
-# 2. Lista predefinita (50+ ticker)
-default_tickers = [
-    "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
-    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
-    "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
-    "COIN", "MARA", "RIOT", "MSTR", "BITO", "GLD", "SLV",
-    "JPM", "GS", "BAC", "V", "MA",
-    "LLY", "PFE", "UNH", "ABBV",
-    "XOM", "CVX", "OXY", "SLB",
-    "BA", "CAT", "GE", "LMT",
-    "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
-]
+# Campo inserimento Ticker
+new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
 
-# Unione liste: se c'è un custom ticker, mettilo in cima
-if custom_asset:
-    if custom_asset not in default_tickers:
-        all_options = [custom_asset] + default_tickers
-    else:
-        all_options = default_tickers
-else:
-    all_options = default_tickers
+# Aggiunta logica del nuovo asset
+if new_asset and new_asset not in st.session_state.ticker_list:
+    st.session_state.ticker_list.insert(0, new_asset)
+    # Ricarica per aggiornare la selectbox
+    st.rerun()
 
-asset = st.sidebar.selectbox("SELEZIONA ASSET", all_options)
+# Selezione Asset
+asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
 
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
-# Recupero dati Spot
+# Fetch Spot
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
-if h.empty:
-    st.error(f"Errore: Ticker {asset} non trovato su Yahoo Finance.")
+if h.empty: 
+    st.error(f"Errore: Ticker {asset} non trovato.")
     st.stop()
 spot = h['Close'].iloc[-1]
 
-# Recupero scadenze opzioni
+# Scadenze
 available_dates = ticker_obj.options
 if not available_dates:
     st.warning(f"Nessuna opzione disponibile per {asset}")
@@ -100,9 +99,11 @@ if not available_dates:
 
 today = datetime.now()
 date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
-selected_dte = st.sidebar.multiselect("SCADENZE ATTIVE", date_options, default=[date_options[0]])
+selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
+                                     date_options, 
+                                     default=[date_options[0]])
 
-# --- LOGICA AUTO-GRANULARITÀ ANTI-BLOCCO ---
+# --- LOGICA AUTO-GRANULARITÀ ---
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
 elif spot > 500: min_safe_gran = 5
@@ -127,17 +128,16 @@ if selected_dte:
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         
-        # Blocco di sicurezza per non saturare il browser
+        # Blocco sicurezza
         num_bins = (hi - lo) / gran
         if num_bins > 300:
             gran = (hi - lo) / 150
-            st.sidebar.warning(f"⚠️ Granularità regolata a {gran:.1f} per stabilità.")
+            st.sidebar.warning(f"⚠️ Granularità adattata a {gran:.1f}")
 
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
         c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
         p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmin(), 'strike']
 
-        # --- DASHBOARD UI ---
         st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("CALL WALL", f"{c_wall:.0f}")
@@ -166,7 +166,6 @@ if selected_dte:
         st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
-        # --- PLOT ---
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
