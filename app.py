@@ -54,36 +54,28 @@ def fetch_data(ticker, dates):
 # --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
-# Inizializzazione Session State per i Ticker
-if 'ticker_list' not in st.session_state:
-    st.session_state.ticker_list = [
-        "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
-        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
-        "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
-        "COIN", "MARA", "RIOT", "MSTR", "BITO",
-        "JPM", "GS", "BAC", "V", "MA",
-        "LLY", "PFE", "UNH", "ABBV",
-        "XOM", "CVX", "OXY", "SLB",
-        "BA", "CAT", "GE", "LMT",
-        "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
-    ]
+custom_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, BITO)", "").upper()
 
-# Campo inserimento Ticker
-new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
+default_tickers = [
+    "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
+    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
+    "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
+    "COIN", "MARA", "RIOT", "MSTR", "BITO",
+    "JPM", "GS", "BAC", "V", "MA",
+    "LLY", "PFE", "UNH", "ABBV",
+    "XOM", "CVX", "OXY", "SLB",
+    "BA", "CAT", "GE", "LMT",
+    "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
+]
 
-# Aggiunta logica del nuovo asset
-if new_asset and new_asset not in st.session_state.ticker_list:
-    st.session_state.ticker_list.insert(0, new_asset)
-    # Ricarica per aggiornare la selectbox
-    st.rerun()
+if custom_asset and custom_asset not in default_tickers:
+    default_tickers.insert(0, custom_asset)
 
-# Selezione Asset
-asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
+asset = st.sidebar.selectbox("SELEZIONA ASSET", default_tickers)
 
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
-# Fetch Spot
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
 if h.empty: 
@@ -91,19 +83,18 @@ if h.empty:
     st.stop()
 spot = h['Close'].iloc[-1]
 
-# Scadenze
 available_dates = ticker_obj.options
 if not available_dates:
     st.warning(f"Nessuna opzione disponibile per {asset}")
     st.stop()
 
 today = datetime.now()
-date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
 selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
-                                     date_options, 
-                                     default=[date_options[0]])
+                                     [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates], 
+                                     default=[f"{(datetime.strptime(available_dates[0], '%Y-%m-%d') - today).days + 1} DTE | {available_dates[0]}"])
 
-# --- LOGICA AUTO-GRANULARITÀ ---
+# --- LOGICA AUTO-GRANULARITÀ PER PREVENIRE BLOCCHI ---
+# Definiamo una granularità minima sicura in base allo spot price
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
 elif spot > 500: min_safe_gran = 5
@@ -128,11 +119,11 @@ if selected_dte:
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         
-        # Blocco sicurezza
+        # --- BLOCCO DI SICUREZZA PRE-RENDERING ---
         num_bins = (hi - lo) / gran
-        if num_bins > 300:
+        if num_bins > 300: # Se ci sono troppe barre, forziamo una granularità maggiore
             gran = (hi - lo) / 150
-            st.sidebar.warning(f"⚠️ Granularità adattata a {gran:.1f}")
+            st.sidebar.warning(f"⚠️ Granularità regolata a {gran:.1f} per proteggere le prestazioni.")
 
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
         c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
