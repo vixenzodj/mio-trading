@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V37", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V38", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
 TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR", "PLTR", "IBIT"]
@@ -44,8 +44,8 @@ def fast_engine(df, spot, t_yrs, r=0.045):
         'Charm': charm * mult, 'Vega': vega, 'Theta': theta
     })
 
-# --- SIDEBAR ---
-st.sidebar.header("🕹️ GEX ENGINE V37")
+# --- SIDEBAR & SELEZIONE ---
+st.sidebar.header("🕹️ GEX ENGINE V38")
 active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
 t_str = fix_ticker(active_t)
 
@@ -56,6 +56,9 @@ if t_str:
         sel_exp = st.sidebar.selectbox("SCADENZA", exps)
         strike_step = st.sidebar.selectbox("STEP STRIKE", [1, 5, 10, 25, 50, 100, 250], index=4)
         num_levels = st.sidebar.slider("ZOOM AREA", 100, 2500, 1000)
+        
+        # SELETTORE METRICA PER IL GRAFICO
+        main_metric = st.sidebar.radio("VISUALIZZA NEL GRAFICO:", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
         hist = t_obj.history(period='1d')
         if not hist.empty:
@@ -63,66 +66,80 @@ if t_str:
             t_yrs = max((datetime.strptime(sel_exp, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
             chain = t_obj.option_chain(sel_exp)
             
-            # Pulizia e Calcolo
-            df_raw = pd.concat([chain.calls.assign(type='call'), chain.puts.assign(type='put')], ignore_index=True)
-            df_clean = df_raw.groupby(['strike', 'type'], as_index=False).agg({'impliedVolatility': 'first', 'openInterest': 'sum'})
+            # --- SOLUZIONE DEFINITIVA AI DUPLICATI ---
+            c = chain.calls.copy().assign(type='call')
+            p = chain.puts.copy().assign(type='put')
+            df_raw = pd.concat([c, p], axis=0, ignore_index=True)
+            
+            # Fondiamo gli strike identici (stesso strike, stesso tipo) sommando l'Open Interest
+            df_clean = df_raw.groupby(['strike', 'type'], as_index=False).agg({
+                'impliedVolatility': 'mean',
+                'openInterest': 'sum'
+            }).reset_index(drop=True)
+            
+            # Calcolo Greche
             df_res = fast_engine(df_clean, spot, t_yrs)
             
-            # --- LOGICA DI REGIME (Normalizzazione 0-1) ---
-            def get_regime_score(series):
+            # Calcolo Regime Scores
+            def get_score(series):
                 net = series.sum()
-                total_abs = series.abs().sum()
-                return net / total_abs if total_abs != 0 else 0
+                total = series.abs().sum()
+                return net / total if total != 0 else 0
 
-            g_score = get_regime_score(df_res['Gamma'])
-            v_score = get_regime_score(df_res['Vanna'])
-            c_score = get_regime_score(df_res['Charm'])
+            g_score, v_score, c_score = get_score(df_res['Gamma']), get_score(df_res['Vanna']), get_score(df_res['Charm'])
 
-            # --- DASHBOARD NUMERICO ---
-            st.markdown(f"## 🏛️ {active_t} Professional Regime Monitor")
+            # --- HEADER INDICATORI (IL CAMPANELLO) ---
+            st.markdown(f"## 🏛️ {active_t} Professional Terminal | Spot: {spot:.2f}")
+            i1, i2, i3, i4 = st.columns(4)
             
-            # Funzione per interpretare il valore
-            def interpret(val):
-                abs_v = abs(val)
-                if abs_v < 0.3: return "DEBOLE", "#777"
-                if abs_v < 0.7: return "MODERATO", "#ffaa00"
-                return "ESTREMO", "#00ff00" if val > 0 else "#ff4444"
+            metrics_data = [
+                ("GAMMA", g_score, "🛡️ STABILE" if g_score > 0 else "⚠️ VOLATILE"),
+                ("VANNA", v_score, "🌊 FLUIDO" if v_score > 0 else "🌪️ SKEW"),
+                ("CHARM", c_score, "⏳ DECADIMENTO" if c_score > 0 else "⚡ MOMENTUM")
+            ]
 
-            c1, c2, c3, c4 = st.columns(4)
-            
-            for col, name, score in zip([c1, c2, c3], ["GAMMA", "VANNA", "CHARM"], [g_score, v_score, c_score]):
-                status, color = interpret(score)
+            for col, (name, score, status) in zip([i1, i2, i3], metrics_data):
+                color = "#00ff00" if score > 0 else "#ff4444"
                 col.markdown(f"""
-                <div style="background:#1e1e1e; padding:15px; border-radius:10px; border-left: 5px solid {color};">
-                    <p style="margin:0; color:#aaa; font-size:12px;">{name} REGIME SCORE</p>
-                    <h2 style="margin:0; color:{color};">{score:+.2f}</h2>
-                    <p style="margin:0; font-size:14px; font-weight:bold;">{status}</p>
+                <div style="background:#1e1e1e; padding:10px; border-radius:8px; border-bottom: 3px solid {color}; text-align:center;">
+                    <p style="margin:0; color:#aaa; font-size:12px;">{name} REGIME</p>
+                    <h3 style="margin:0; color:{color};">{score:+.2f}</h3>
+                    <p style="margin:0; font-size:12px;">{status}</p>
                 </div>
                 """, unsafe_allow_html=True)
+            
+            bias = "🟢 BULLISH" if g_score > 0 and v_score > 0 else "🔴 BEARISH" if g_score < 0 else "🟡 NEUTRAL"
+            i4.markdown(f"<div style='background:#1e1e1e; padding:18px; border-radius:8px; text-align:center; height:100%'><b>BIAS: {bias}</b></div>", unsafe_allow_html=True)
 
-            # --- CALCOLO LIVELLI ---
+            # --- ELABORAZIONE GRAFICO ---
             df_total = df_res.groupby('strike', as_index=False).sum().sort_values('strike').reset_index(drop=True)
             df_total['cum_gamma'] = df_total['Gamma'].cumsum()
             z_gamma = df_total.loc[df_total['cum_gamma'].abs().idxmin(), 'strike']
             
-            # Aggregazione per grafico
             df_total['bin'] = np.floor(df_total['strike'] / strike_step) * strike_step
             df_plot = df_total.groupby('bin', as_index=False).sum(numeric_only=True).rename(columns={'bin': 'strike'})
             df_view = df_plot[(df_plot['strike'] >= spot - num_levels) & (df_plot['strike'] <= spot + num_levels)].copy()
 
-            # --- GRAFICO ---
+            # --- GRAFICO DINAMICO ---
             fig = go.Figure()
-            fig.add_trace(go.Bar(y=df_view['strike'], x=df_view['Gamma'], orientation='h', 
-                                 marker_color=['#00ff00' if x>=0 else '#00aaff' for x in df_view['Gamma']], width=strike_step*0.8))
+            fig.add_trace(go.Bar(
+                y=df_view['strike'], x=df_view[main_metric], orientation='h', 
+                marker_color=['#00ff00' if x>=0 else '#00aaff' for x in df_view[main_metric]],
+                width=strike_step*0.8, name=main_metric
+            ))
             
             fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT")
             fig.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="ZERO GAMMA")
-            fig.update_layout(template="plotly_dark", height=700, margin=dict(l=0,r=0,t=30,b=0), yaxis=dict(dtick=strike_step))
+            
+            fig.update_layout(template="plotly_dark", height=700, margin=dict(l=0,r=0,t=20,b=0),
+                              xaxis=dict(title=f"Esposizione Netta {main_metric}"),
+                              yaxis=dict(dtick=strike_step, title="STRIKE"))
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- TABELLA PROFESSIONALE ---
-            st.markdown("### 📊 Market Maker Inventory (Detailed Levels)")
-            table_data = df_plot.iloc[(df_plot['strike'] - spot).abs().argsort()[:15]].sort_values('strike', ascending=False)
+            # --- METRICHE NUMERICHE SOTTO IL GRAFICO ---
+            st.markdown("### 📊 Market Inventory Data")
+            table_data = df_plot.iloc[(df_plot['strike'] - spot).abs().argsort()[:20]].sort_values('strike', ascending=False).reset_index(drop=True)
+            
             st.dataframe(table_data[['strike', 'Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']].style.format(precision=1).map(
                 lambda x: f"color: {'#00ff00' if x > 0 else '#ff4444' if x < 0 else 'white'}",
                 subset=['Gamma', 'Vanna', 'Charm', 'Theta']
