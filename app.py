@@ -54,13 +54,15 @@ def fetch_data(ticker, dates):
 # --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
-custom_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, BITO)", "").upper()
+# 1. Input manuale
+custom_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
 
+# 2. Lista predefinita (50+ ticker)
 default_tickers = [
     "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
     "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
     "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
-    "COIN", "MARA", "RIOT", "MSTR", "BITO",
+    "COIN", "MARA", "RIOT", "MSTR", "BITO", "GLD", "SLV",
     "JPM", "GS", "BAC", "V", "MA",
     "LLY", "PFE", "UNH", "ABBV",
     "XOM", "CVX", "OXY", "SLB",
@@ -68,33 +70,39 @@ default_tickers = [
     "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
 ]
 
-if custom_asset and custom_asset not in default_tickers:
-    default_tickers.insert(0, custom_asset)
+# Unione liste: se c'è un custom ticker, mettilo in cima
+if custom_asset:
+    if custom_asset not in default_tickers:
+        all_options = [custom_asset] + default_tickers
+    else:
+        all_options = default_tickers
+else:
+    all_options = default_tickers
 
-asset = st.sidebar.selectbox("SELEZIONA ASSET", default_tickers)
+asset = st.sidebar.selectbox("SELEZIONA ASSET", all_options)
 
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
+# Recupero dati Spot
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
-if h.empty: 
-    st.error(f"Errore: Ticker {asset} non trovato.")
+if h.empty:
+    st.error(f"Errore: Ticker {asset} non trovato su Yahoo Finance.")
     st.stop()
 spot = h['Close'].iloc[-1]
 
+# Recupero scadenze opzioni
 available_dates = ticker_obj.options
 if not available_dates:
     st.warning(f"Nessuna opzione disponibile per {asset}")
     st.stop()
 
 today = datetime.now()
-selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
-                                     [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates], 
-                                     default=[f"{(datetime.strptime(available_dates[0], '%Y-%m-%d') - today).days + 1} DTE | {available_dates[0]}"])
+date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
+selected_dte = st.sidebar.multiselect("SCADENZE ATTIVE", date_options, default=[date_options[0]])
 
-# --- LOGICA AUTO-GRANULARITÀ PER PREVENIRE BLOCCHI ---
-# Definiamo una granularità minima sicura in base allo spot price
+# --- LOGICA AUTO-GRANULARITÀ ANTI-BLOCCO ---
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
 elif spot > 500: min_safe_gran = 5
@@ -119,16 +127,17 @@ if selected_dte:
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         
-        # --- BLOCCO DI SICUREZZA PRE-RENDERING ---
+        # Blocco di sicurezza per non saturare il browser
         num_bins = (hi - lo) / gran
-        if num_bins > 300: # Se ci sono troppe barre, forziamo una granularità maggiore
+        if num_bins > 300:
             gran = (hi - lo) / 150
-            st.sidebar.warning(f"⚠️ Granularità regolata a {gran:.1f} per proteggere le prestazioni.")
+            st.sidebar.warning(f"⚠️ Granularità regolata a {gran:.1f} per stabilità.")
 
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
         c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
         p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmin(), 'strike']
 
+        # --- DASHBOARD UI ---
         st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("CALL WALL", f"{c_wall:.0f}")
@@ -157,6 +166,7 @@ if selected_dte:
         st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
+        # --- PLOT ---
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
