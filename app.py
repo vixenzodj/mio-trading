@@ -118,3 +118,24 @@ if t_str:
             fig.add_trace(go.Bar(
                 y=df_p['strike'], x=df_p[main_metric], orientation='h', 
                 marker_color=colors, name=main_metric,
+                width=strike_step * 0.8
+            ))
+
+            # Linee Livelli
+            fig.add_hline(y=call_wall, line_color="#ff4444", line_width=3, annotation_text=f"CALL WALL")
+            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text=f"PUT WALL")
+            fig.add_hline(y=z_gamma_val, line_color="yellow", line_width=2, line_dash="dash", annotation_text="ZERO GAMMA")
+            fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text=f"SPOT: {spot:.2f}")
+
+            fig.update_layout(
+                template="plotly_dark", height=900,
+                title=f"ESPOSIZIONE {main_metric.upper()} - {active_t} (Scadenza: {sel_exp})",
+                yaxis=dict(title="PREZZO STRIKE", autorange=True, tickformat=".0f", gridcolor="#333"),
+                xaxis=dict(title="Net Exposure", zerolinecolor="white"),
+                bargap=0
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Errore tecnico: {e}")
