@@ -8,52 +8,68 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE & CACHE ---
-st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V43", initial_sidebar_state="expanded")
-st_autorefresh(interval=300000, key="global_refresh") # Refresh ogni 5 minuti per non saturare la cache
+st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V44", initial_sidebar_state="expanded")
+st_autorefresh(interval=300000, key="global_refresh")
 
-# Funzione per scaricare i dati con cache (velocizza lo zoom)
+# Cache Dati (TTL 5 minuti)
 @st.cache_data(ttl=300)
 def fetch_option_data(ticker_str, target_dates):
     t_obj = yf.Ticker(ticker_str)
     payload = []
     for d in target_dates:
-        oc = t_obj.option_chain(d)
-        c_df = oc.calls[['strike', 'impliedVolatility', 'openInterest']].assign(type='call', exp_date=d)
-        p_df = oc.puts[['strike', 'impliedVolatility', 'openInterest']].assign(type='put', exp_date=d)
-        payload.append(pd.concat([c_df, p_df], ignore_index=True))
+        try:
+            oc = t_obj.option_chain(d)
+            # Controllo esistenza dati
+            if oc.calls.empty and oc.puts.empty: continue
+            
+            c_df = oc.calls[['strike', 'impliedVolatility', 'openInterest']].assign(type='call', exp_date=d)
+            p_df = oc.puts[['strike', 'impliedVolatility', 'openInterest']].assign(type='put', exp_date=d)
+            payload.append(pd.concat([c_df, p_df], ignore_index=True))
+        except:
+            continue
+            
     return pd.concat(payload, ignore_index=True) if payload else pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def get_spot_price(ticker_str):
-    t_obj = yf.Ticker(ticker_str)
-    return t_obj.history(period='1d')['Close'].iloc[-1]
+    try:
+        t_obj = yf.Ticker(ticker_str)
+        hist = t_obj.history(period='1d')
+        if hist.empty: return 0.0
+        return hist['Close'].iloc[-1]
+    except:
+        return 0.0
 
 # --- MOTORE DI CALCOLO ---
-def engine_v43(df_input, spot_price, r_rate=0.045):
-    if df_input.empty: return df_input
+def engine_v44(df_input, spot_price, r_rate=0.045):
+    if df_input.empty or spot_price <= 0: return df_input
     df = df_input.copy()
     s = float(spot_price)
+    
     k = df['strike'].to_numpy()
-    v = np.where(df['impliedVolatility'].to_numpy() <= 0, 1e-9, df['impliedVolatility'].to_numpy())
-    t = np.where(df['dte_years'].to_numpy() <= 0, 1e-9, df['dte_years'].to_numpy())
-    oi = df['openInterest'].to_numpy()
+    # Protezione da divisione per zero e valori nulli
+    v = np.maximum(df['impliedVolatility'].to_numpy(), 0.001)
+    t = np.maximum(df['dte_years'].to_numpy(), 0.001)
+    oi = df['openInterest'].fillna(0).to_numpy()
     
     d1 = (np.log(s/k) + (r_rate + 0.5 * v**2) * t) / (v * np.sqrt(t))
     pdf = norm.pdf(d1)
     
+    # Formule Standard GEX
     gamma_val = (pdf / (s * v * np.sqrt(t))) * (s**2) * 0.01 * oi * 100
     vanna_val = s * pdf * d1 / v * 0.01 * oi
     charm_val = (pdf * (r_rate / (v * np.sqrt(t)) - d1 / (2 * t))) * oi * 100
     
     direction = np.where(df['type'].values == 'call', 1, -1)
+    
     df['Gamma'] = gamma_val * direction
     df['Vanna'] = vanna_val * direction
     df['Charm'] = charm_val * direction
     return df
 
 # --- SIDEBAR ---
-st.sidebar.header("🕹️ GEXBOT V43 - FAST")
-active_t = st.sidebar.selectbox("ASSET", ["SPX", "NDX", "SPY", "QQQ", "TSLA", "NVDA", "AAPL", "MSFT", "IBIT"])
+st.sidebar.header("🕹️ GEX PRO V44")
+active_t = st.sidebar.selectbox("ASSET", ["SPX", "NDX", "SPY", "QQQ", "TSLA", "NVDA", "AAPL", "MSFT", "IBIT", "COIN", "MSTR"])
 
 def fix_ticker(symbol):
     s = symbol.upper().strip()
@@ -61,73 +77,122 @@ def fix_ticker(symbol):
 
 ticker_str = fix_ticker(active_t)
 t_obj_init = yf.Ticker(ticker_str)
-all_exps = t_obj_init.options
+
+try:
+    all_exps = t_obj_init.options
+    if not all_exps:
+        st.error("Nessuna scadenza trovata per questo asset.")
+        st.stop()
+except:
+    st.error("Errore connessione API. Riprova.")
+    st.stop()
 
 # Mappatura DTE
 today_dt = datetime.now()
 dte_options = [f"{(datetime.strptime(ex, '%Y-%m-%d') - today_dt).days + 1} DTE ({ex})" for ex in all_exps]
-selected_dte = st.sidebar.multiselect("SCADENZE", options=dte_options, default=dte_options[:1])
+selected_dte = st.sidebar.multiselect("SCADENZE ATTIVE", options=dte_options, default=dte_options[:2])
 
-# Parametri Visuali
-strike_granularity = st.sidebar.selectbox("GRANULARITÀ STRIKE", [1, 5, 10, 25, 50], index=2)
-zoom_pts = st.sidebar.slider("ZOOM (Range Punti dallo Spot)", 50, 1000, 250)
+# PARAMETRI VISUALI ADATTIVI
+# Step 1: Granularità Intelligente
+strike_granularity = st.sidebar.selectbox("RAGGRUPPAMENTO STRIKE (Binning)", [1, 5, 10, 25, 50, 100], index=1)
+
+# Step 2: Zoom Percentuale (Risolve il problema dei diversi prezzi)
+zoom_pct = st.sidebar.slider("ZOOM AREA (+/- %)", 2, 50, 10, help="2% per indici, 20% per azioni volatili")
 metric_choice = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm'])
 
 if ticker_str and selected_dte:
     try:
         spot = get_spot_price(ticker_str)
+        if spot == 0:
+            st.warning("Impossibile recuperare il prezzo Spot.")
+            st.stop()
+
         target_dates = [sel.split('(')[1].replace(')', '') for sel in selected_dte]
         
-        # Caricamento (da Cache o API)
+        # Caricamento
         full_df = fetch_option_data(ticker_str, target_dates)
-        full_df['dte_years'] = full_df['exp_date'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today_dt).days + 0.5) / 365
         
-        # Calcolo Greche
-        processed_df = engine_v43(full_df, spot)
-        final_summary = processed_df.groupby('strike', as_index=False)[['Gamma', 'Vanna', 'Charm']].sum()
-        
-        # Zero Gamma
-        final_summary['cum_sum_gamma'] = final_summary['Gamma'].cumsum()
-        zero_gamma_level = final_summary.loc[final_summary['cum_sum_gamma'].abs().idxmin(), 'strike']
+        if not full_df.empty:
+            full_df['dte_years'] = full_df['exp_date'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today_dt).days + 0.5) / 365
+            
+            # Calcolo
+            processed_df = engine_v44(full_df, spot)
+            
+            # Aggregazione Totale per trovare i Muri e lo Zero Gamma
+            total_summary = processed_df.groupby('strike', as_index=False)[['Gamma', 'Vanna', 'Charm']].sum()
+            
+            # Calcolo Walls (Su tutto il dataset, non solo quello visibile)
+            call_wall_strike = total_summary.loc[total_summary['Gamma'].idxmax(), 'strike']
+            put_wall_strike = total_summary.loc[total_summary['Gamma'].idxmin(), 'strike'] # Gamma negativo massimo
+            
+            # Calcolo Zero Gamma
+            total_summary['cum_sum_gamma'] = total_summary['Gamma'].cumsum()
+            zero_gamma_level = total_summary.loc[total_summary['cum_sum_gamma'].abs().idxmin(), 'strike']
+            
+            # --- FILTRO GRAFICO (ZOOM PERCENTUALE) ---
+            lower_bound = spot * (1 - zoom_pct/100)
+            upper_bound = spot * (1 + zoom_pct/100)
+            
+            # Filtriamo i dati per il grafico
+            plot_data = total_summary[(total_summary['strike'] >= lower_bound) & (total_summary['strike'] <= upper_bound)].copy()
+            
+            # Binning (Raggruppamento visuale)
+            if strike_granularity > 1:
+                plot_data['strike_bin'] = (np.round(plot_data['strike'] / strike_granularity) * strike_granularity)
+                plot_data = plot_data.groupby('strike_bin', as_index=False)[['Gamma', 'Vanna', 'Charm']].sum()
+            else:
+                plot_data['strike_bin'] = plot_data['strike']
 
-        # --- DASHBOARD ---
-        st.markdown(f"## 🏛️ {active_t} Terminal | Spot: {spot:.2f}")
-        m1, m2, m3, m4 = st.columns(4)
-        g_net = final_summary['Gamma'].sum()
-        v_net = final_summary['Vanna'].sum()
-        
-        m1.metric("NET GEX", f"${g_net/1e6:.1f}M")
-        m2.metric("NET VANNA", f"${v_net/1e6:.1f}M")
-        m3.metric("ZERO GAMMA", f"{zero_gamma_level:.0f}")
-        m4.metric("DTE ATTIVI", len(selected_dte))
+            # --- DASHBOARD ---
+            st.markdown(f"## 🏛️ {active_t} Analysis | Spot: {spot:.2f}")
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("CALL WALL", f"{call_wall_strike:.0f}")
+            c2.metric("PUT WALL", f"{put_wall_strike:.0f}")
+            c3.metric("ZERO GAMMA", f"{zero_gamma_level:.0f}")
+            c4.metric("NET GEX", f"${total_summary['Gamma'].sum()/1e6:.1f}M")
+            
+            # --- GRAFICO ---
+            fig = go.Figure()
+            
+            # Barre
+            fig.add_trace(go.Bar(
+                y=plot_data['strike_bin'], x=plot_data[metric_choice], orientation='h',
+                marker_color=['#00ff00' if x >= 0 else '#00aaff' for x in plot_data[metric_choice]],
+                # Larghezza dinamica per evitare sovrapposizioni
+                width=strike_granularity * 0.8,
+                name=metric_choice
+            ))
+            
+            # Linea SPOT
+            fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT", annotation_position="top right")
+            
+            # Linea ZERO GAMMA
+            fig.add_hline(y=zero_gamma_level, line_color="yellow", line_dash="dash", annotation_text="ZERO G")
+            
+            # Linee WALLS (Solo se rientrano nello zoom, altrimenti confondono)
+            if lower_bound <= call_wall_strike <= upper_bound:
+                fig.add_hline(y=call_wall_strike, line_color="red", annotation_text="CALL WALL")
+            
+            if lower_bound <= put_wall_strike <= upper_bound:
+                fig.add_hline(y=put_wall_strike, line_color="#00ff00", annotation_text="PUT WALL")
 
-        # --- FILTRO ZOOM FISSO ---
-        # Filtriamo prima del binning per non perdere precisione
-        plot_data = final_summary[(final_summary['strike'] >= spot - zoom_pts) & (final_summary['strike'] <= spot + zoom_pts)].copy()
-        plot_data['strike_bin'] = (np.round(plot_data['strike'] / strike_granularity) * strike_granularity)
-        plot_data = plot_data.groupby('strike_bin', as_index=False)[['Gamma', 'Vanna', 'Charm']].sum()
+            fig.update_layout(
+                template="plotly_dark", height=800,
+                yaxis=dict(
+                    title="STRIKE", 
+                    tickmode='linear', 
+                    dtick=strike_granularity, 
+                    range=[lower_bound, upper_bound] # Range forzato
+                ),
+                xaxis=dict(title=f"Net {metric_choice} Exposure ($)"),
+                margin=dict(l=20, r=20, t=30, b=20)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
 
-        # --- GRAFICO PRO ---
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=plot_data['strike_bin'], x=plot_data[metric_choice], orientation='h',
-            marker_color=['#00ff00' if x >= 0 else '#00aaff' for x in plot_data[metric_choice]],
-            width=strike_granularity * 0.7, # Spazio tra le barre per chiarezza
-            hovertemplate="Strike: %{y}<br>Value: %{x:,.0f}<extra></extra>"
-        ))
-        
-        # Linee Target
-        fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT")
-        fig.add_hline(y=zero_gamma_level, line_color="yellow", line_dash="dash", annotation_text="0-G")
-        
-        fig.update_layout(
-            template="plotly_dark", height=850,
-            margin=dict(l=10, r=10, t=30, b=10),
-            yaxis=dict(title="STRIKE", dtick=strike_granularity, gridcolor="#333", range=[spot-zoom_pts, spot+zoom_pts]),
-            xaxis=dict(title=f"Net {metric_choice} Exposure ($)", zerolinecolor="white")
-        )
-        
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+        else:
+            st.warning("Nessun dato opzioni trovato per le date selezionate.")
 
     except Exception as e:
-        st.error(f"Errore: {e}")
+        st.error(f"Errore di calcolo: {e}")
