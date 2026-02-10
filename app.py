@@ -138,3 +138,23 @@ if ticker_str:
             fig = go.Figure()
             fig.add_trace(go.Bar(
                 y=plot_data['strike_bin'], x=plot_data[metric_choice], orientation='h',
+                marker_color=['#00ff00' if x >= 0 else '#00aaff' for x in plot_data[metric_choice]],
+                width=strike_granularity * 0.8
+            ))
+            
+            # Annotazioni orizzontali
+            fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT")
+            fig.add_hline(y=zero_gamma_level, line_color="yellow", line_dash="dash", annotation_text="ZERO GAMMA")
+            
+            fig.update_layout(template="plotly_dark", height=800, 
+                              yaxis=dict(title="STRIKE", dtick=strike_granularity),
+                              xaxis=dict(title=f"Net {metric_choice} Exposure ($)"))
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Tabella Dati
+            st.markdown("### 📊 Market Inventory Summary")
+            st.dataframe(plot_data.sort_values('strike_bin', ascending=False).style.format(precision=1), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Errore tecnico critico: {e}")
