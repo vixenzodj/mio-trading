@@ -95,3 +95,44 @@ if t_str:
             d4.markdown(f"<div style='border:2px solid {b_col}; padding:10px; border-radius:10px; text-align:center;'>BIAS ATTUALE<br><b style='color:{b_col}; font-size:22px;'>{bias}</b></div>", unsafe_allow_html=True)
 
             # --- GRAFICO DINAMICO ---
+            fig = go.Figure()
+            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot_zoom[main_metric]]
+            
+            fig.add_trace(go.Bar(
+                y=df_plot_zoom['strike'], x=df_plot_zoom[main_metric], orientation='h', 
+                marker_color=colors, width=strike_step * 0.8,
+                text=[f"{v/1e6:.1f}M" if abs(v)>1e5 else "" for v in df_plot_zoom[main_metric]], textposition='outside'
+            ))
+
+            fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
+            fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
+            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text=f"ZERO GAMMA")
+            fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text="SPOT")
+
+            fig.update_layout(
+                template="plotly_dark", height=850,
+                yaxis=dict(title="STRIKE", autorange=True, gridcolor="#333", nticks=40),
+                xaxis=dict(title=f"Net Dollar {main_metric} Exposure ($)", zerolinecolor="white"),
+                bargap=0.05
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- TABELLA METRICHE SOTTO IL GRAFICO ---
+            st.markdown("### 📊 Analisi Dettagliata per Livello (Difesa Istituzionale)")
+            # Filtriamo i livelli principali più gli strike vicini allo spot (ATM)
+            main_levels = [call_wall, put_wall, z_gamma]
+            atm_levels = df_plot[(df_plot['strike'] >= spot - (strike_step*2)) & (df_plot['strike'] <= spot + (strike_step*2))]['strike'].tolist()
+            
+            final_table = df_plot[df_plot['strike'].isin(main_levels + atm_levels)].copy()
+            final_table = final_table.sort_values('strike', ascending=False).drop_duplicates()
+            
+            # Formattazione per visualizzazione immediata
+            st.dataframe(
+                final_table[['strike', 'Gamma', 'Vega', 'Theta', 'Vanna']].style.format(precision=0).applymap(
+                    lambda x: 'color: #00ff00' if x > 0 else 'color: #ff4444' if x < 0 else 'color: white',
+                    subset=['Gamma', 'Vanna', 'Theta']
+                ), use_container_width=True
+            )
+
+    except Exception as e:
+        st.error(f"Errore tecnico: {e}")
