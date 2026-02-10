@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V26", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="GEX PRO TERMINAL V25", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
 TICKER_LIST = ["NDX", "SPX", "SPY", "QQQ", "IWM", "TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "COIN", "MSTR", "PLTR", "IBIT"]
@@ -35,7 +35,7 @@ def calc_greeks_pro(row, spot, t_yrs, r=0.045):
     except: return pd.Series([0.0]*5)
 
 # --- SIDEBAR ---
-st.sidebar.header("🕹️ GEX ENGINE V26")
+st.sidebar.header("🕹️ GEX ENGINE V25")
 active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
 t_str = fix_ticker(active_t)
 
@@ -43,9 +43,9 @@ if t_str:
     t_obj = yf.Ticker(t_str)
     exps = t_obj.options
     sel_exp = st.sidebar.selectbox("SCADENZA ATTIVA", exps)
-    strike_step = st.sidebar.selectbox("STEP STRIKE", [1, 5, 10, 25, 50, 100, 250], index=4)
-    num_levels = st.sidebar.slider("ZOOM AREA PREZZO", 100, 2500, 1000)
-    main_metric = st.sidebar.radio("METRICA GRAFICO", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
+    strike_step = st.sidebar.selectbox("STEP STRIKE (Granularità)", [1, 5, 10, 25, 50, 100, 250], index=4)
+    num_levels = st.sidebar.slider("ZOOM AREA PREZZO (Punti)", 100, 2000, 800)
+    main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
     try:
         hist = t_obj.history(period='1d')
@@ -66,69 +66,60 @@ if t_str:
             
             df_total = pd.concat([df_c, df_p]).groupby('strike', as_index=False).sum().sort_values('strike')
 
-            # --- NUOVA LOGICA ZERO GAMMA (Smoothing) ---
-            # Calcoliamo il gamma cumulato su un range più ampio per trovare il punto di equilibrio reale
-            df_total['cum_gamma_net'] = df_total['Gamma'].cumsum()
-            # Cerchiamo lo strike dove il cumulato passa per lo zero (il vero pivot di mercato)
-            z_gamma = df_total.loc[(df_total['cum_gamma_net']).abs().idxmin(), 'strike']
+            # --- LOGICA GEXBOT PER ZERO GAMMA ---
+            # 1. Prendiamo un range stretto intorno allo spot (+/- 5%)
+            df_zero = df_total[(df_total['strike'] >= spot * 0.95) & (df_total['strike'] <= spot * 1.05)].copy()
+            
+            # 2. Troviamo il punto dove il Gamma Netto cambia segno (Zero Crossing)
+            # Invece del cumulato globale, cerchiamo l'inversione di polarità locale
+            df_zero['sign'] = np.sign(df_zero['Gamma'])
+            df_zero['flip'] = df_zero['sign'].diff().fillna(0)
+            
+            # Se troviamo un flip di segno, quello è il nostro Vol Trigger
+            flips = df_zero[df_zero['flip'] != 0]
+            if not flips.empty:
+                # Prendiamo il flip più vicino allo spot
+                z_gamma = flips.iloc[(flips['strike'] - spot).abs().argsort()[:1]]['strike'].values[0]
+            else:
+                # Fallback: il valore più vicino allo zero gamma assoluto nel range
+                z_gamma = df_zero.loc[df_zero['Gamma'].abs().idxmin(), 'strike']
 
-            # --- AGGREGAZIONE ---
+            # --- AGGREGAZIONE PER VISUALIZZAZIONE ---
             df_total['bin'] = np.floor(df_total['strike'] / strike_step) * strike_step
             df_plot = df_total.groupby('bin', as_index=False)[cols].sum().rename(columns={'bin': 'strike'})
-            df_plot_view = df_plot[(df_plot['strike'] >= spot - num_levels) & (df_plot['strike'] <= spot + num_levels)]
+            df_plot = df_plot[(df_plot['strike'] >= spot - num_levels) & (df_plot['strike'] <= spot + num_levels)]
             
             call_wall = df_plot.loc[df_plot['Gamma'].idxmax(), 'strike']
             put_wall = df_plot.loc[df_plot['Gamma'].idxmin(), 'strike']
 
-            # --- ENGINE BIAS ISTITUZIONALE ---
-            total_gamma = df_total['Gamma'].sum()
-            total_vanna = df_total['Vanna'].sum()
-            total_theta = df_total['Theta'].sum()
-            
-            # Calcolo Bias Combinato
-            bias_score = (total_gamma / abs(total_gamma) if total_gamma != 0 else 0) + (total_vanna / abs(total_vanna) if total_vanna != 0 else 0)
-            if bias_score > 0:
-                bias_label, bias_col = "ULTRA BULLISH", "#00ff00"
-            elif bias_score < 0:
-                bias_label, bias_col = "ULTRA BEARISH", "#ff4444"
-            else:
-                bias_label, bias_col = "NEUTRAL / TRANSITION", "#ffff00"
-
-            # --- DASHBOARD SUPERIORE ---
+            # --- DASHBOARD ---
             st.markdown(f"## 🏛️ {active_t} Terminal | Spot: {spot:.2f}")
-            
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("VOL TRIGGER (Zero G)", f"{z_gamma:.0f}", f"{z_gamma-spot:.1f} pts")
-            m2.metric("CALL WALL (Resistenza)", f"{call_wall:.0f}")
-            m3.metric("PUT WALL (Supporto)", f"{put_wall:.0f}")
-            m4.markdown(f"<div style='border:2px solid {bias_col}; padding:5px; border-radius:10px; text-align:center;'>BIAS ATTUALE<br><b style='color:{bias_col}; font-size:20px;'>{bias_label}</b></div>", unsafe_allow_html=True)
-
-            # --- METRICHE DI DIFESA (A colpo d'occhio) ---
-            st.markdown("### 🛡️ Metriche di Difesa per Livello Chiave")
-            defense_df = df_plot[df_plot['strike'].isin([call_wall, put_wall, z_gamma])].copy()
-            defense_df['Stato'] = defense_df['strike'].apply(lambda x: "RESISTENZA" if x==call_wall else ("SUPPORTO" if x==put_wall else "PIVOT"))
-            st.table(defense_df[['Stato', 'strike', 'Gamma', 'Theta', 'Vanna']].style.format(precision=0))
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("SPOT PRICE", f"{spot:.2f}")
+            d2.metric("CALL WALL", f"{call_wall:.0f}")
+            d3.metric("PUT WALL", f"{put_wall:.0f}")
+            d4.metric("VOL TRIGGER (Zero)", f"{z_gamma:.0f}")
 
             # --- GRAFICO DINAMICO ---
             fig = go.Figure()
-            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot_view[main_metric]]
+            colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot[main_metric]]
             
             fig.add_trace(go.Bar(
-                y=df_plot_view['strike'], x=df_plot_view[main_metric], orientation='h', 
+                y=df_plot['strike'], x=df_plot[main_metric], orientation='h', 
                 marker_color=colors, width=strike_step * 0.8,
-                text=[f"{v/1e6:.1f}M" if abs(v)>1e5 else "" for v in df_plot_view[main_metric]], textposition='outside'
+                text=[f"{v/1e6:.1f}M" if abs(v)>1e5 else "" for v in df_plot[main_metric]], textposition='outside'
             ))
 
-            # Linee Operative
+            # Linee Operative (Prezzi dal basso verso l'alto)
             fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
             fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
-            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text=f"ZERO GAMMA (Smooth)")
+            fig.add_hline(y=z_gamma, line_color="yellow", line_width=2, line_dash="dash", annotation_text=f"ZERO GAMMA: {z_gamma:.0f}")
             fig.add_hline(y=spot, line_color="cyan", line_width=2, line_dash="dot", annotation_text="SPOT")
 
             fig.update_layout(
-                template="plotly_dark", height=800,
-                yaxis=dict(title="STRIKE", autorange=True, gridcolor="#333"),
-                xaxis=dict(title=f"Net {main_metric} ($)", zerolinecolor="white"),
+                template="plotly_dark", height=900,
+                yaxis=dict(title="STRIKE", autorange=True, gridcolor="#333", nticks=40),
+                xaxis=dict(title=f"Net Dollar {main_metric} Exposure ($)", zerolinecolor="white"),
                 bargap=0.05
             )
             st.plotly_chart(fig, use_container_width=True)
