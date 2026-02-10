@@ -127,4 +127,20 @@ if t_str:
                                      ['SPOT', '0G', 'CWALL', 'PWALL']):
                 fig.add_hline(y=val, line_color=col, line_dash="dash" if col=='yellow' else "solid", annotation_text=txt)
 
-            fig.update_layout(
+            fig.update_layout(template="plotly_dark", height=800, 
+                              yaxis=dict(range=[spot-limit, spot+limit], dtick=strike_step))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- TABELLA ---
+            st.markdown("### 📊 Struttura ATM")
+            # Prendiamo i 15 livelli più vicini allo spot
+            table_df = df_plot.iloc[(df_plot['strike'] - spot).abs().argsort()[:15]].sort_values('strike', ascending=False).copy()
+            
+            # Applichiamo lo stile senza riutilizzare indici vecchi
+            st.dataframe(table_df.reset_index(drop=True).style.format(precision=1).map(
+                lambda x: f"color: {'#00ff00' if x > 0 else '#ff4444' if x < 0 else 'white'}",
+                subset=['Gamma', 'Vanna', 'Theta']
+            ), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Errore: {e}")
