@@ -9,7 +9,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE UI ---
-st.set_page_config(layout="wide", page_title="SENTINEL GEX V52 - PIVOT", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="SENTINEL GEX V53 - SCALPER PRO", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="sentinel_refresh")
 
 # --- ENGINE MATEMATICO PROFESSIONALE ---
@@ -28,11 +28,12 @@ def get_greeks_pro(df, S, r=0.045):
     pdf = norm.pdf(d1)
     side = np.where(df['type'] == 'call', 1, -1)
     
-    # Dollar Gamma (Esposizione monetaria istituzionale)
-    # Formula: 0.5 * Gamma * S^2 * 0.01
+    # Dollar Exposure Formulas (Institutional Standard)
     df['Gamma'] = (pdf / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi * 100 * side
     df['Vanna'] = S * pdf * (d1 / iv) * 0.01 * oi * side
     df['Charm'] = (pdf * (r / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi * 100 * side
+    df['Vega']  = S * pdf * np.sqrt(T) * 0.01 * oi * 100
+    df['Theta'] = ((-(S * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side))) * (1/365) * oi * 100
     return df
 
 # --- DATA FETCHING ---
@@ -48,7 +49,7 @@ def fetch_data(ticker, dates):
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 # --- SIDEBAR ---
-st.sidebar.markdown("## 🛰️ SENTINEL V52 PIVOT")
+st.sidebar.markdown("## 🛰️ SENTINEL V53 PIVOT")
 asset = st.sidebar.selectbox("TICKER", ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA"])
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
@@ -63,9 +64,10 @@ today = datetime.now()
 dte_labels = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
 selected_dte = st.sidebar.multiselect("SCADENZE", dte_labels, default=dte_labels[:1])
 
-metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm"])
+# Reinserite metriche fondamentali
+metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
 gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 50, 100], value=10 if "NDX" in asset else 5)
-zoom_val = st.sidebar.slider("ZOOM %", 0.5, 10.0, 2.0)
+zoom_val = st.sidebar.slider("ZOOM %", 0.5, 15.0, 2.0)
 
 if selected_dte:
     target_dates = [d.split('| ')[1] for d in selected_dte]
@@ -76,22 +78,20 @@ if selected_dte:
         df = get_greeks_pro(raw_data, spot)
         
         # Aggregazione per Strike
-        agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm"]].sum()
+        agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
         
-        # --- CALCOLO ZERO GAMMA PROFESSIONALE (FLIP POINT) ---
-        # Filtriamo un range stretto intorno allo spot per trovare il "Flip" reale
-        near_spot = agg[(agg['strike'] > spot * 0.95) & (agg['strike'] < spot * 1.05)].sort_values('strike')
+        # --- CALCOLO ZERO GAMMA OTTIMIZZATO PER SCALPING ---
+        # Filtriamo un range ultra-stretto (2%) intorno allo spot per trovare il "Flip" reale ed evitare errori su NDX
+        near_spot = agg[(agg['strike'] > spot * 0.98) & (agg['strike'] < spot * 1.02)].sort_values('strike')
         
         try:
-            # Troviamo il punto dove il segno cambia (Zero Crossing)
-            # Creiamo una funzione di interpolazione basata sul Gamma Netto
-            f_flip = interp1d(near_spot['Gamma'], near_spot['strike'], bounds_error=False, fill_value="extrapolate")
-            z_gamma = float(f_flip(0))
-            
-            # Coerenza: Se lo zero gamma calcolato è fuori dal range locale, 
-            # prendiamo lo strike con il valore Gamma più vicino allo zero (il "gap")
-            if z_gamma < near_spot['strike'].min() or z_gamma > near_spot['strike'].max():
-                z_gamma = near_spot.loc[near_spot['Gamma'].abs().idxmin(), 'strike']
+            if not near_spot.empty and (near_spot['Gamma'].min() < 0 < near_spot['Gamma'].max()):
+                # Troviamo il punto dove il segno cambia (Zero Crossing)
+                f_flip = interp1d(near_spot['Gamma'], near_spot['strike'], bounds_error=False, fill_value="extrapolate")
+                z_gamma = float(f_flip(0))
+            else:
+                # Se non c'è cross-over nel range 2%, prendiamo il livello con meno pressione Gamma vicino allo spot
+                z_gamma = near_spot.loc[near_spot['Gamma'].abs().idxmin(), 'strike'] if not near_spot.empty else spot
         except:
             z_gamma = spot
 
@@ -100,10 +100,11 @@ if selected_dte:
 
         # UI DASHBOARD
         st.subheader(f"🏟️ {asset} Scalping Terminal | Spot: {spot:.2f}")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("CALL WALL", f"{c_wall:.0f}")
         c2.metric("ZERO GAMMA (PIVOT)", f"{z_gamma:.2f}")
         c3.metric("PUT WALL", f"{p_wall:.0f}")
+        c4.metric(f"NET {metric.upper()}", f"${agg[metric].sum()/1e6:.1f}M")
 
         # --- GRAFICO IDENTICO A GEXBOT ---
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
@@ -128,7 +129,7 @@ if selected_dte:
         if lo <= p_wall <= hi: fig.add_hline(y=p_wall, line_color="#2ECC40", annotation_text="PUT WALL")
 
         fig.update_layout(
-            template="plotly_dark", height=800, margin=dict(l=0,r=0,t=30,b=0),
+            template="plotly_dark", height=850, margin=dict(l=0,r=0,t=30,b=0),
             yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#222"),
             xaxis=dict(title=f"Net {metric} Exposure", gridcolor="#222")
         )
