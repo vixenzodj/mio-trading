@@ -8,16 +8,14 @@ from scipy.interpolate import interp1d
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="GEX PRO V49 - DEEP ENGINE", initial_sidebar_state="expanded")
-st_autorefresh(interval=300000, key="global_refresh")
+# --- CONFIGURAZIONE UI ---
+st.set_page_config(layout="wide", page_title="SENTINEL GEX V50", initial_sidebar_state="expanded")
+st_autorefresh(interval=60000, key="sentinel_refresh") # Refresh 1 min per scalping
 
-# --- MOTORE DI CALCOLO GRECHE ---
-def calculate_greeks_pro(df, S, r=0.045):
+# --- ENGINE MATEMATICO ---
+def get_greeks_notional(df, S, r=0.045):
     if df.empty: return df
-    K = df['strike'].values
-    iv = np.maximum(df['impliedVolatility'].values, 0.001)
-    T = np.maximum(df['dte_years'].values, 0.0001)
+    K, iv, T = df['strike'].values, np.maximum(df['impliedVolatility'].values, 0.001), np.maximum(df['dte_years'].values, 0.0001)
     oi = df['openInterest'].fillna(0).values
     
     d1 = (np.log(S/K) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
@@ -25,7 +23,7 @@ def calculate_greeks_pro(df, S, r=0.045):
     pdf = norm.pdf(d1)
     side = np.where(df['type'] == 'call', 1, -1)
     
-    # Dollar Exposure Formulas (Institutional Standard)
+    # Calcolo Notional (Esposizione monetaria reale)
     df['Gamma'] = (pdf / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi * 100 * side
     df['Vanna'] = S * pdf * (d1 / iv) * 0.01 * oi * side
     df['Charm'] = (pdf * (r / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi * 100 * side
@@ -33,111 +31,105 @@ def calculate_greeks_pro(df, S, r=0.045):
     df['Theta'] = ((-(S * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side))) * (1/365) * oi * 100
     return df
 
-# --- RECUPERO DATI OTTIMIZZATO ---
-@st.cache_data(ttl=300, show_spinner=False)
-def get_full_chain(ticker_str, target_dates):
-    t_obj = yf.Ticker(ticker_str)
-    all_data = []
-    for d in target_dates:
+# --- DATA FETCHING ---
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_deep_chain(ticker, dates):
+    t = yf.Ticker(ticker)
+    frames = []
+    for d in dates:
         try:
-            oc = t_obj.option_chain(d)
-            c = oc.calls[['strike', 'impliedVolatility', 'openInterest']].assign(type='call', exp_date=d)
-            p = oc.puts[['strike', 'impliedVolatility', 'openInterest']].assign(type='put', exp_date=d)
-            all_data.append(pd.concat([c, p]))
+            oc = t.option_chain(d)
+            frames.append(pd.concat([oc.calls.assign(type='call', exp=d), oc.puts.assign(type='put', exp=d)]))
         except: continue
-    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-# --- SIDEBAR ---
-st.sidebar.title("🧬 GEX V49 DEEP")
-asset = st.sidebar.selectbox("ASSET", ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA", "MSTR"])
-ticker_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
-ticker_str = ticker_map.get(asset, asset)
+# --- INTERFACCIA ---
+st.sidebar.markdown("## 🛰️ SENTINEL V50")
+asset = st.sidebar.selectbox("TICKER", ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA"])
+t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
+current_ticker = t_map.get(asset, asset)
 
-# Prezzo Spot
-t_obj = yf.Ticker(ticker_str)
-h = t_obj.history(period='1d')
-if h.empty:
-    st.error("Errore dati Spot. Riprova più tardi.")
-    st.stop()
-spot = h['Close'].iloc[-1]
+# Prezzo Spot Realtime
+ticker_obj = yf.Ticker(current_ticker)
+spot = ticker_obj.history(period='1d')['Close'].iloc[-1]
 
-# Scadenze
-all_exps = t_obj.options
+# Gestione Scadenze
+available_dates = ticker_obj.options
 today = datetime.now()
-dte_opts = [f"{(datetime.strptime(ex, '%Y-%m-%d') - today).days + 1} DTE ({ex})" for ex in all_exps]
-selected_exps = st.sidebar.multiselect("SCADENZE ATTIVE", dte_opts, default=dte_opts[:2])
+dte_labels = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
+selected_dte = st.sidebar.multiselect("SCADENZE ATTIVE", dte_labels, default=dte_labels[:1])
 
 # Parametri Grafici
-metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"], horizontal=True)
-granularity = st.sidebar.selectbox("GRANULARITÀ STRIKE", [1, 5, 10, 25, 50, 100], index=2)
-zoom = st.sidebar.slider("ZOOM AREA %", 1, 40, 10)
+metric = st.sidebar.radio("ANALISI FLUSSI", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
+gran = st.sidebar.select_slider("GRANULARITÀ STRIKE", options=[1, 2, 5, 10, 20, 50, 100], value=10 if "NDX" in asset else 5)
+zoom_val = st.sidebar.slider("ZOOM AREA %", 0.5, 15.0, 3.0)
 
-if selected_exps:
-    clean_dates = [x.split('(')[1].replace(')', '') for x in selected_exps]
-    raw_df = get_full_chain(ticker_str, clean_dates)
+if selected_dte:
+    target_dates = [d.split('| ')[1] for d in selected_dte]
+    data = fetch_deep_chain(current_ticker, target_dates)
     
-    if not raw_df.empty:
-        raw_df['dte_years'] = raw_df['exp_date'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
-        df_calc = calculate_greeks_pro(raw_df, spot)
+    if not data.empty:
+        data['dte_years'] = data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
+        processed = get_greeks_notional(data, spot)
         
-        # Aggregazione Totale
-        total = df_calc.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
+        # Consolidamento per Strike
+        final_df = processed.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
         
-        # Calcolo Livelli Chiave (Muri Globali)
-        call_wall = total.loc[total['Gamma'].idxmax(), 'strike']
-        put_wall = total.loc[total['Gamma'].idxmin(), 'strike']
+        # Calcolo Livelli Chiave
+        c_wall = final_df.loc[final_df['Gamma'].idxmax(), 'strike']
+        p_wall = final_df.loc[final_df['Gamma'].idxmin(), 'strike']
         
-        # Zero Gamma Interpolato
-        try:
-            sort_g = total.sort_values('strike')
-            f_interp = interp1d(sort_g['Gamma'].cumsum(), sort_g['strike'], fill_value="extrapolate")
-            zero_gamma = float(f_interp(0))
-        except: zero_gamma = spot
+        # Zero Gamma Preciso (Cross-over)
+        sort_df = final_df.sort_values('strike')
+        f_z = interp1d(sort_df['Gamma'].cumsum(), sort_df['strike'], fill_value="extrapolate")
+        z_gamma = float(f_z(0))
 
-        # --- DASHBOARD ---
-        st.markdown(f"## 🏟️ {asset} Structure | Spot: {spot:.2f}")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("CALL WALL", f"{call_wall:.0f}")
-        c2.metric("PUT WALL", f"{put_wall:.0f}")
-        c3.metric("ZERO GAMMA", f"{zero_gamma:.1f}")
-        c4.metric(f"NET {metric.upper()}", f"${total[metric].sum()/1e6:.1f}M")
+        # DASHBOARD
+        st.subheader(f"🏟️ {asset} Terminal | Spot: {spot:.2f}")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("CALL WALL (Res)", f"{c_wall:.0f}")
+        k2.metric("PUT WALL (Sup)", f"{p_wall:.0f}")
+        k3.metric("ZERO GAMMA (Pivot)", f"{z_gamma:.2f}")
+        k4.metric(f"NET {metric.upper()}", f"${final_df[metric].sum()/1e6:.1f}M")
 
-        # --- PLOT ---
-        lb, ub = spot * (1 - zoom/100), spot * (1 + zoom/100)
-        # Filtriamo prima di binnare per mantenere la precisione dei muri
-        plot_df = total[(total['strike'] >= lb) & (total['strike'] <= ub)].copy()
-        plot_df['bin'] = (np.round(plot_df['strike'] / granularity) * granularity)
-        plot_df = plot_df.groupby('bin', as_index=False).sum()
+        # --- GRAFICO GEXBOT STYLE ---
+        limit_lo, limit_hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
+        p_df = final_df[(final_df['strike'] >= limit_lo) & (final_df['strike'] <= limit_hi)].copy()
+        p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
+        p_df = p_df.groupby('bin', as_index=False).sum()
 
         fig = go.Figure()
         
-        # Colori GexBot Style
-        bar_colors = ['#00FF00' if x >= 0 else '#00BFFF' for x in plot_df[metric]]
-        
+        # Barre con colori neon
         fig.add_trace(go.Bar(
-            y=plot_df['bin'], x=plot_df[metric], orientation='h',
-            marker_color=bar_colors, width=granularity * 0.85
+            y=p_df['bin'], x=p_df[metric], orientation='h',
+            marker=dict(color=['#00FF00' if x >= 0 else '#00BFFF' for x in p_df[metric]],
+                        line=dict(width=0)),
+            width=gran * 0.9, name=metric
         ))
 
-        # Annotazioni
-        fig.add_hline(y=spot, line_color="cyan", line_dash="dot", annotation_text="SPOT")
-        fig.add_hline(y=zero_gamma, line_color="yellow", line_dash="dash", annotation_text="ZERO-G")
+        # Linee di trading (identiche a GexBot)
+        fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
+        fig.add_hline(y=z_gamma, line_color="#FFFF00", line_dash="dash", annotation_text="ZERO G")
         
-        # Disegniamo i muri solo se nello zoom
-        if lb <= call_wall <= ub:
-            fig.add_hline(y=call_wall, line_color="red", line_width=1, annotation_text="CALL WALL")
-        if lb <= put_wall <= ub:
-            fig.add_hline(y=put_wall, line_color="lime", line_width=1, annotation_text="PUT WALL")
+        if limit_lo <= c_wall <= limit_hi:
+            fig.add_hline(y=c_wall, line_color="#FF0000", line_width=2, annotation_text="CALL WALL")
+        if limit_lo <= p_wall <= limit_hi:
+            fig.add_hline(y=p_wall, line_color="#00FF00", line_width=2, annotation_text="PUT WALL")
 
         fig.update_layout(
-            template="plotly_dark", height=800,
-            yaxis=dict(title="STRIKE", range=[lb, ub], dtick=granularity),
-            xaxis=dict(title=f"Net {metric} Dollar Exposure", gridcolor="#333"),
-            margin=dict(l=0, r=0, t=30, b=0)
+            template="plotly_dark", height=900,
+            yaxis=dict(title="STRIKE", range=[limit_lo, limit_hi], dtick=gran, gridcolor="#222"),
+            xaxis=dict(title=f"Net {metric} Exposure ($)", gridcolor="#222", zerolinecolor="#666"),
+            margin=dict(l=10, r=10, t=30, b=10),
+            showlegend=False
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-        # Tabella con dati grezzi per debug
-        with st.expander("Analisi Strike Singoli"):
-            st.write(df_calc.sort_values('openInterest', ascending=False).head(20))
+        # LISTA MURO PER TRADINGVIEW
+        with st.expander("📝 Livelli per TradingView (Copia/Incolla)"):
+            st.code(f"Spot: {spot:.2f}\nZero Gamma: {z_gamma:.2f}\nCall Wall: {c_wall:.2f}\nPut Wall: {p_wall:.2f}")
+
+else:
+    st.info("Seleziona almeno una scadenza nella barra laterale per iniziare l'analisi.")
