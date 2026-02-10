@@ -10,10 +10,10 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE UI ---
-st.set_page_config(layout="wide", page_title="SENTINEL GEX V55 - ULTIMATE", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="SENTINEL GEX V56 - QUANT", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="sentinel_refresh")
 
-# --- CORE QUANT ENGINE (BLACK-SCHOLES) ---
+# --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
@@ -40,7 +40,6 @@ def get_greeks_pro(df, S, r=0.045):
     df['Theta'] = ((-(S * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side))) * (1/365) * oi_vol_weighted * 100
     return df
 
-# --- DATA FETCHING ---
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker, dates):
     t = yf.Ticker(ticker)
@@ -53,7 +52,7 @@ def fetch_data(ticker, dates):
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 # --- SIDEBAR ---
-st.sidebar.markdown("## ⚙️ QUANT ENGINE V55")
+st.sidebar.markdown("## ⚙️ QUANT ENGINE V56")
 asset = st.sidebar.selectbox("TICKER", ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA"])
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
@@ -77,46 +76,70 @@ if selected_dte:
     
     if not raw_data.empty:
         raw_data['dte_years'] = raw_data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
-        
-        # 1. Zero Gamma
         try: z_gamma = brentq(calculate_gex_at_price, spot * 0.90, spot * 1.10, args=(raw_data,))
         except: z_gamma = spot 
 
-        # 2. Greche
         df = get_greeks_pro(raw_data, spot)
         agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
         
-        # 3. Muri intelligenti (Solo nel range visibile per lo scalping)
+        # Muri Smart Focus
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
-        
-        if not visible_agg.empty:
-            c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike']
-            p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike']
-        else:
-            c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
-            p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
+        c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
+        p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmin(), 'strike']
 
         # --- DASHBOARD ---
         st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("CALL WALL (Res)", f"{c_wall:.0f}")
-        m2.metric("ZERO GAMMA (Pivot)", f"{z_gamma:.2f}")
-        m3.metric("PUT WALL (Sup)", f"{p_wall:.0f}")
-        m4.metric("NET GEX", f"${agg['Gamma'].sum()/1e6:.1f}M")
+        m1.metric("CALL WALL", f"{c_wall:.0f}")
+        m2.metric("ZERO GAMMA", f"{z_gamma:.2f}")
+        m3.metric("PUT WALL", f"{p_wall:.0f}")
+        m4.metric("SPOT", f"{spot:.2f}")
 
-        # --- FUNZIONE 1: OVERVIEW MULTI-METRICA ---
+        # --- NUOVA OVERVIEW MULTI-METRICA (VALORI E REGIME) ---
         st.markdown("---")
-        st.markdown("### 📊 Real-Time Multi-Metric Overview")
-        ov1, ov2, ov3, ov4 = st.columns(4)
-        for col, m_name, color in zip([ov1, ov2, ov3, ov4], ["Vanna", "Charm", "Vega", "Theta"], ["#00BFFF", "#FF00FF", "#FFFF00", "#FFA500"]):
-            mini_fig = go.Figure()
-            mini_fig.add_trace(go.Scatter(x=agg['strike'], y=agg[m_name], fill='tozeroy', line_color=color))
-            mini_fig.update_layout(title=m_name, height=150, margin=dict(l=0,r=0,t=30,b=0), template="plotly_dark", xaxis_visible=False, yaxis_visible=False)
-            col.plotly_chart(mini_fig, use_container_width=True, config={'displayModeBar': False})
+        st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
+        
+        # Calcolo Netto Totale per Regime
+        net_gamma = agg['Gamma'].sum()
+        net_vanna = agg['Vanna'].sum()
+        net_charm = agg['Charm'].sum()
+        net_vega = agg['Vega'].sum()
+        net_theta = agg['Theta'].sum()
+
+        r1, r2, r3, r4, r5 = st.columns(5)
+        metrics_list = [
+            ("GAMMA", net_gamma, r1), ("VANNA", net_vanna, r2), 
+            ("CHARM", net_charm, r3), ("VEGA", net_vega, r4), ("THETA", net_theta, r5)
+        ]
+
+        for name, val, col in metrics_list:
+            regime = "POSITIVO" if val > 0 else "NEGATIVO"
+            color = "green" if val > 0 else "red"
+            col.markdown(f"**{name}**")
+            col.markdown(f"<h3 style='color:{color}; margin:0;'>{regime}</h3>", unsafe_allow_html=True)
+            col.caption(f"Net: ${val/1e6:.2f}M")
+
+        # --- INDICATORE DIREZIONALE ---
+        st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
+        direction = "STABILE / CONSOLIDAMENTO"
+        bias_color = "white"
+        
+        # Logica di sintesi direzionale
+        if net_gamma < 0:
+            direction = "ACCELERAZIONE VOLATILITÀ (SHORT BIAS)"
+            bias_color = "#FF4136"
+        elif net_gamma > 0 and net_charm < 0:
+            direction = "REVERSIONE VERSO LO SPOT (STABILIZZAZIONE)"
+            bias_color = "#2ECC40"
+        elif spot < z_gamma:
+            direction = "PRESSIONE DI VENDITA (SOTTO ZERO GAMMA)"
+            bias_color = "#FF851B"
+        
+        st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
-        # --- FUNZIONE 2: GRAFICO PRINCIPALE CON MURI CHIARI ---
+        # --- GRAFICO PRINCIPALE ---
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
@@ -125,22 +148,16 @@ if selected_dte:
         fig.add_trace(go.Bar(
             y=p_df['bin'], x=p_df[metric], orientation='h',
             marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
-            width=gran * 0.85, name=metric
+            width=gran * 0.85
         ))
-
-        # Linee Livelli con stile Istituzionale
-        fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT PRICE", annotation_position="top right")
-        fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="ZERO GAMMA FLIP")
         
-        # Muri ricalcolati per essere sempre visibili se nel range
-        fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CALL WALL @{c_wall:.0f}", annotation_bgcolor="#FF4136")
-        fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PUT WALL @{p_wall:.0f}", annotation_bgcolor="#2ECC40")
+        fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
+        fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
+        fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
+        fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        fig.update_layout(
-            template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
-            yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333", title="STRIKE"),
-            xaxis=dict(title=f"Net {metric} Exposure", gridcolor="#333", zerolinecolor="#FFF")
-        )
+        fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
+                          yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
+                          xaxis=dict(title=f"Net {metric} Exposure"))
         st.plotly_chart(fig, use_container_width=True)
-
         st.code(f"Pivots: 0G@{z_gamma:.2f} | CW@{c_wall:.0f} | PW@{p_wall:.0f}")
