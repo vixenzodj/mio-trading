@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(layout="wide", page_title="GEX Intelligence Terminal V8", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="GEX Intelligence Terminal V9", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="global_refresh")
 
 TICKER_LIST = ["NDX", "SPX", "QQQ", "SPY", "NVDA", "TSLA", "AAPL", "IBIT", "MSTR"]
@@ -52,7 +52,7 @@ st.sidebar.header("🕹️ TERMINAL CONTROL")
 active_t = st.sidebar.selectbox("ASSET", TICKER_LIST)
 trade_mode = st.sidebar.selectbox("TIMEFRAME", ["SCALPING (0DTE)", "INTRADAY (Weekly)", "SWING (Monthly)"])
 strike_step = st.sidebar.selectbox("STEP STRIKE", [5, 10, 25, 50, 100, 200, 500], index=3)
-num_levels = st.sidebar.slider("LIVELLI VISIBILI", 10, 100, 40)
+num_levels = st.sidebar.slider("LIVELLI VISIBILI", 10, 120, 50)
 main_metric = st.sidebar.radio("METRICA", ['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta'])
 
 t_str = fix_ticker(active_t)
@@ -77,7 +77,7 @@ if t_str:
             df['Vega'], df['Theta'] = c_vals[3]+p_vals[3], c_vals[4]+p_vals[4]
 
             # --- BIAS RADAR ---
-            st.subheader(f"📡 Trend Analysis: {active_t} @ {spot:.2f}")
+            st.subheader(f"📡 Trend Context: {active_t} @ {spot:.2f}")
             r1, r2, r3 = st.columns(3)
             b1, c1 = analyze_tf(t_obj, spot, 0)
             b2, c2 = analyze_tf(t_obj, spot, 2)
@@ -90,25 +90,24 @@ if t_str:
             df['strike_bin'] = (df['strike'] / strike_step).round() * strike_step
             df_grouped = df.groupby('strike_bin')[['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']].sum().reset_index()
             df_grouped.rename(columns={'strike_bin': 'strike'}, inplace=True)
-
             df_grouped['abs_dist'] = (df_grouped['strike'] - spot).abs()
             df_plot = df_grouped.sort_values('abs_dist').head(num_levels).sort_values('strike').copy()
             
-            # Convertiamo gli strike in stringhe per l'asse Y categorico
-            df_plot['strike_str'] = df_plot['strike'].astype(float).astype(str)
+            # Convertiamo strike in intero e poi stringa per l'asse Y categorico (pulisce decimali inutili)
+            df_plot['strike_label'] = df_plot['strike'].astype(int).astype(str)
 
-            # Trova strike più vicini per i muri
-            call_wall = str(float(df.loc[df['Gamma'].idxmax(), 'strike']))
-            put_wall = str(float(df.loc[df['Gamma'].idxmin(), 'strike']))
-            z_flip = str(float(df_plot.loc[df_plot[main_metric].abs().idxmin(), 'strike']))
-            spot_label = str(float((spot // strike_step) * strike_step)) # Approssima allo strike visibile più vicino
+            # --- IDENTIFICAZIONE MURI (WALLS) ---
+            # Cerchiamo lo strike esatto o quello più vicino nel dataframe raggruppato
+            call_wall_val = df_grouped.loc[df_grouped['Gamma'].idxmax(), 'strike']
+            put_wall_val = df_grouped.loc[df_grouped['Gamma'].idxmin(), 'strike']
+            spot_val = (spot // strike_step) * strike_step
 
             # --- GRAFICO MIRROR ---
             fig = go.Figure()
             colors = ['#00ff00' if x >= 0 else '#00aaff' for x in df_plot[main_metric]]
             
             fig.add_trace(go.Bar(
-                y=df_plot['strike_str'], 
+                y=df_plot['strike_label'], 
                 x=df_plot[main_metric], 
                 orientation='h', 
                 marker_color=colors,
@@ -116,19 +115,21 @@ if t_str:
                 textposition='auto'
             ))
 
-            # LINEE DI LIVELLO (Usando le stringhe per l'asse categorico)
-            if call_wall in df_plot['strike_str'].values:
-                fig.add_hline(y=call_wall, line_color="red", line_width=3, annotation_text="CALL WALL")
-            if put_wall in df_plot['strike_str'].values:
-                fig.add_hline(y=put_wall, line_color="#00ff00", line_width=3, annotation_text="PUT WALL")
-            
-            # Linea Spot dinamica (trova la stringa strike più vicina allo spot attuale)
-            fig.add_hline(y=spot_label, line_color="cyan", line_width=2, line_dash="dot", annotation_text=f"LIVE SPOT: {spot:.2f}")
+            # FUNZIONE SICURA PER AGGIUNGERE LINEE (Evita errore int + str)
+            def add_wall_line(fig, price, label, color, style="solid"):
+                price_str = str(int(price))
+                if price_str in df_plot['strike_label'].values:
+                    fig.add_hline(y=price_str, line_color=color, line_width=3, line_dash=style, 
+                                  annotation_text=label, annotation_position="top right")
+
+            add_wall_line(fig, call_wall_val, "CALL WALL", "red")
+            add_wall_line(fig, put_wall_val, "PUT WALL", "#00ff00")
+            add_wall_line(fig, spot_val, f"SPOT: {spot:.0f}", "cyan", "dot")
 
             fig.update_layout(
                 template="plotly_dark", height=900,
                 title=f"PROFILO {main_metric.upper()} - {active_t} ({sel_exp})",
-                xaxis=dict(title="Exposure Value", zerolinecolor="white"),
+                xaxis=dict(title="Net Exposure Value", zerolinecolor="white"),
                 yaxis=dict(title="STRIKE PRICE", type='category', autorange="reversed"),
                 bargap=0.1
             )
