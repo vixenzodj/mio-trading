@@ -54,6 +54,7 @@ def fetch_data(ticker, dates):
 # --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
+# Inizializzazione Session State per i Ticker
 if 'ticker_list' not in st.session_state:
     st.session_state.ticker_list = [
         "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
@@ -67,17 +68,21 @@ if 'ticker_list' not in st.session_state:
         "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
     ]
 
+# Campo inserimento Ticker
 new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
 
+# Aggiunta logica del nuovo asset
 if new_asset and new_asset not in st.session_state.ticker_list:
     st.session_state.ticker_list.insert(0, new_asset)
     st.rerun()
 
+# Selezione Asset
 asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
 
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
+# Fetch Spot
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
 if h.empty: 
@@ -85,6 +90,7 @@ if h.empty:
     st.stop()
 spot = h['Close'].iloc[-1]
 
+# Scadenze
 available_dates = ticker_obj.options
 if not available_dates:
     st.warning(f"Nessuna opzione disponibile per {asset}")
@@ -96,6 +102,7 @@ selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE",
                                      date_options, 
                                      default=[date_options[0]])
 
+# --- LOGICA AUTO-GRANULARITÀ ---
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
 elif spot > 500: min_safe_gran = 5
@@ -120,6 +127,7 @@ if selected_dte:
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         
+        # Blocco sicurezza
         num_bins = (hi - lo) / gran
         if num_bins > 300:
             gran = (hi - lo) / 150
@@ -151,18 +159,30 @@ if selected_dte:
 
         st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
         
+        # --- NUOVA LOGICA MULTI-GRECA ---
         direction = "NEUTRALE / ATTESA"; bias_color = "gray"
         
+        # 1. PERICOLO CRASH: Gamma Negativo + Vanna Negativa (Volatilità esplosiva)
         if net_gamma < 0 and net_vanna < 0:
             direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
+        
+        # 2. SHORT GAMMA PURO: Accelerazione standard
         elif net_gamma < 0:
             direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
+        
+        # 3. BEARISH PRESSURE: Sotto lo Zero Gamma Flip
         elif spot < z_gamma:
             direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
+        
+        # 4. REVERSIONE: Gamma Positivo ma Charm Negativo (Supporto dal tempo)
         elif net_gamma > 0 and net_charm < 0:
             direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
+            
+        # 5. THETA BURN: Gamma Positivo e Theta domina su Vega (Mercato laterale)
         elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
             direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
+            
+        # 6. DEFAULT POSITIVO
         else:
             direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
 
@@ -172,9 +192,6 @@ if selected_dte:
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
-
-        # --- FILTRO SURGICALE: Se il valore è polvere (meno di 1 centesimo), diventa 0 ---
-        p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 0.01 else 0)
 
         fig = go.Figure()
         fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
@@ -186,13 +203,8 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        # --- FORMATTAZIONE ASSE X IN DOLLARI CHIARI ($1.2M, $500k, etc) ---
         fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
-                          yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333", tickformat=",.0f"),
-                          xaxis=dict(
-                              title=f"Net {metric} Exposure ($)", 
-                              tickformat="$.2s", # Formato SI compatto con Dollaro
-                              hoverformat="$,.2f" # Dettaglio al centesimo nel passaggio mouse
-                          ))
+                          yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
+                          xaxis=dict(title=f"Net {metric} Exposure"))
         st.plotly_chart(fig, use_container_width=True)
         st.code(f"Pivots: 0G@{z_gamma:.2f} | CW@{c_wall:.0f} | PW@{p_wall:.0f}")
