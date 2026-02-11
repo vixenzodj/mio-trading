@@ -203,8 +203,26 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
-                          yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
-                          xaxis=dict(title=f"Net {metric} Exposure"))
+        # --- MODIFICA QUI PER FORMATTAZIONE ASSI LEGGIBILE ---
+        fig.update_layout(
+            template="plotly_dark", 
+            height=800, 
+            margin=dict(l=0, r=0, t=0, b=0),
+            
+            # Formattazione Asse Y (Prezzi/Strike): Aggiunge la virgola alle migliaia (es: 65,000)
+            yaxis=dict(
+                range=[lo, hi], 
+                dtick=gran, 
+                gridcolor="#333",
+                tickformat=",.0f"  # Toglie i decimali e mette la virgola alle migliaia
+            ),
+            
+            # Formattazione Asse X (Esposizione): Usa k, M, B (es: 1.5M invece di 1500000 o scientifica)
+            xaxis=dict(
+                title=f"Net {metric} Exposure",
+                tickformat="s"     # "s" sta per SI units (k=mila, M=milioni, G=miliardi)
+            )
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
         st.code(f"Pivots: 0G@{z_gamma:.2f} | CW@{c_wall:.0f} | PW@{p_wall:.0f}")
