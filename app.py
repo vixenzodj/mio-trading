@@ -51,7 +51,7 @@ def fetch_data(ticker, dates):
         except: continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-# --- SIDEBAR ---
+# --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
 if 'ticker_list' not in st.session_state:
@@ -131,7 +131,7 @@ if selected_dte:
         m4.metric("SPOT", f"{spot:.2f}")
 
         st.markdown("---")
-        st.markdown("### 🛰️ Real-Time Metric Regime")
+        st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
         
         net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
         net_vega, net_theta = agg['Vega'].sum(), agg['Theta'].sum()
@@ -143,13 +143,30 @@ if selected_dte:
             col.markdown(f"<h3 style='color:{'#00FF41' if val > 0 else '#FF4136'}; margin:0;'>{reg}</h3>", unsafe_allow_html=True)
             col.caption(f"Net: ${val/1e6:.2f}M")
 
+        st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
+        
+        direction = "NEUTRALE / ATTESA"; bias_color = "gray"
+        if net_gamma < 0 and net_vanna < 0:
+            direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
+        elif net_gamma < 0:
+            direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
+        elif spot < z_gamma:
+            direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
+        elif net_gamma > 0 and net_charm < 0:
+            direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
+        elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
+            direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
+        else:
+            direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
+
+        st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
 
-        # --- MODIFICA PER SCALPING: Pulisce solo il rumore invisibile ---
+        # Pulizia rumore decimale infinitesimo (anti-sfalsamento)
         p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 1e-8 else 0)
 
         fig = go.Figure()
@@ -162,13 +179,12 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        # --- FORMATTAZIONE VISIVA ASSE (SOLO DOLLARI LEGGIBILI) ---
         fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
                           yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
                           xaxis=dict(
-                              title=f"Net {metric} Exposure ($)",
-                              tickformat="$.3s",  # Mostra $1.2k, $1.5M, ecc.
-                              hoverformat="$,.2f" # Al passaggio del mouse vedi il centesimo preciso
+                              title=f"Net {metric} Exposure ($)", 
+                              tickformat="$.3s", 
+                              hoverformat="$,.2f"
                           ))
         
         st.plotly_chart(fig, use_container_width=True)
