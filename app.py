@@ -174,55 +174,166 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             st.plotly_chart(fig, use_container_width=True)
 
 # =================================================================
-# PAGINA 2: SCANNER (FUNZIONANTE E INTEGRATA)
+# PAGINA 2: SCANNER 50 TICKER CON LOGICA PROFESSIONALE 0G & 1SD
 # =================================================================
 elif menu == "🔥 SCANNER HOT TICKERS":
-    st.title("🔥 Market Scanner - Real Time Greeks Scan")
+    st.title("🔥 Professional Market Scanner (50 Tickers)")
+    st.markdown("Analisi incrociata: **Zero Gamma Flip (0G)** e **Standard Deviation (1SD)**.")
     
-    tickers_to_scan = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "MSTR", "COIN", "SMCI"]
+    # 1. CONTROLLI DI AGGIORNAMENTO E SCADENZE
+    c1, c2 = st.columns([1, 4])
+    with c1:
+        if st.button("🔄 AGGIORNA SCANNER", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+    with c2:
+        expiry_mode = st.selectbox("📅 SELEZIONE SCADENZE:", ["0-1 DTE (Scalping/Intraday)", "Prossima Scadenza Mensile (Swing)"])
+    
+    # LISTA COMPLETA 50 TICKERS
+    # Indici, Mag7, Semis, Crypto, High Beta, Defensive
+    tickers_50 = [
+        "^NDX", "^SPX", "^RUT", "QQQ", "SPY", "IWM",  # INDICI
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NFLX", # MAG7 + TECH
+        "AMD", "AVGO", "MU", "INTC", "QCOM", "ARM", "TSM", "SMCI", # SEMIS
+        "MSTR", "COIN", "MARA", "RIOT", "CLSK", "BITO", # CRYPTO
+        "PLTR", "SNOW", "U", "DKNG", "HOOD", "SHOP", "SQ", "PYPL", "ROKU", # GROWTH
+        "JPM", "GS", "BAC", "V", "MA", # FINANZA
+        "LLY", "UNH", "PFE", "XOM", "CVX", "DIS", "BA" # TRADITIONAL
+    ]
     
     scan_results = []
     progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    with st.spinner("Scansione quantitativa in corso..."):
-        for i, t_name in enumerate(tickers_to_scan):
+    with st.spinner("Calcolo metriche volumetriche e deviazioni in corso..."):
+        for i, t_name in enumerate(tickers_50):
+            status_text.text(f"Scansione: {t_name} ({i+1}/{len(tickers_50)})")
             try:
+                # 1. DATI SPOT
                 t_obj = yf.Ticker(t_name)
-                px = t_obj.history(period='1d')['Close'].iloc[-1]
+                # Usiamo '1mo' per avere dati sufficienti per calcoli storici se servissero
+                hist = t_obj.history(period='5d')
+                if hist.empty: continue
+                px = hist['Close'].iloc[-1]
                 
-                # Fetching data for the nearest expiry
-                first_expiry = t_obj.options[0]
-                oc = t_obj.option_chain(first_expiry)
+                # 2. GESTIONE SCADENZE
+                opts = t_obj.options
+                if not opts: continue
+                
+                if "0-1 DTE" in expiry_mode:
+                    # Prendi la prima scadenza disponibile
+                    target_opt = opts[0]
+                else:
+                    # Cerca la terza scadenza (approx mensile) o fallback sulla prima
+                    target_opt = opts[2] if len(opts) > 2 else opts[0]
+
+                oc = t_obj.option_chain(target_opt)
                 df_scan = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
-                df_scan['dte_years'] = 0.5 / 365
                 
-                # Greeks calculation
+                # Calcolo DTE approssimato
+                try:
+                    exp_date = datetime.strptime(target_opt, '%Y-%m-%d')
+                    dte_days = (exp_date - datetime.now()).days + 1
+                    dte_years = max(dte_days, 0.5) / 365
+                except:
+                    dte_years = 0.5/365
+                
+                df_scan['dte_years'] = dte_years
+                
+                # 3. CALCOLO METRICHE (0G e Greche)
+                # Filtro opzioni troppo OTM per velocità
+                df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
+                
                 greeks_df = get_greeks_pro(df_scan, px)
-                net_g = greeks_df['Gamma'].sum()
-                net_v = greeks_df['Vanna'].sum()
-                net_t = greeks_df['Theta'].sum()
                 
-                try: zg_val = brentq(calculate_gex_at_price, px*0.8, px*1.2, args=(df_scan,))
+                # Zero Gamma
+                try: zg_val = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan,))
                 except: zg_val = px
                 
-                dist_zg = ((px - zg_val) / px) * 100
+                # 4. CALCOLO DEVIAZIONI STANDARD (1SD)
+                # IV media pesata dal volume sarebbe meglio, ma media semplice è ok per scan rapido
+                avg_iv = df_scan['impliedVolatility'].mean()
+                sd_move = px * avg_iv * np.sqrt(dte_years)
+                sd1_up = px + sd_move
+                sd1_down = px - sd_move
                 
-                scan_results.append({
-                    "Ticker": t_name,
-                    "Prezzo": round(px, 2),
-                    "Gamma ($M)": round(net_g/1e6, 2),
-                    "Vanna ($M)": round(net_v/1e6, 2),
-                    "Theta ($M)": round(net_t/1e6, 2),
-                    "Dist. 0G %": round(dist_zg, 2),
-                    "Status": "🔥 HOT" if abs(dist_zg) < 0.6 else "Stable"
-                })
-            except: continue
-            progress_bar.progress((i + 1) / len(tickers_to_scan))
+                # 5. LOGICA DI TRACCIAMENTO PROFESSIONALE (THE LOGIC)
+                dist_zg_pct = ((px - zg_val) / px) * 100
+                dist_sd_up_pct = ((px - sd1_up) / px) * 100
+                dist_sd_down_pct = ((px - sd1_down) / px) * 100
+                
+                # Determinazione STATUS
+                status_label = ""
+                
+                # Check Posizione rispetto a Zero Gamma
+                is_above_0g = px > zg_val
+                
+                # Check Vicinanza SD (soglia 0.5%)
+                near_sd_up = abs(px - sd1_up) / px < 0.005
+                near_sd_down = abs(px - sd1_down) / px < 0.005
+                
+                if not is_above_0g: # SOTTO ZERO GAMMA (BEARISH/VOLATILE)
+                    if near_sd_down:
+                        status_label = "🔴 < 0G | TEST -1SD (Bounce o Crash)"
+                    elif px < sd1_down:
+                        status_label = "⚫ < 0G | SOTTO -1SD (Estensione Short)"
+                    elif near_sd_up: # Raro se sei sotto 0G ma possibile se IV altissima
+                        status_label = "🟠 < 0G | TEST RESISTENZA"
+                    else:
+                        status_label = "🔻 SOTTO 0G (Pressione Short)"
+                else: # SOPRA ZERO GAMMA (BULLISH/STABILE)
+                    if near_sd_up:
+                        status_label = "🟡 > 0G | TEST +1SD (Rottura?)"
+                    elif px > sd1_up:
+                        status_label = "🟢 > 0G | SOPRA +1SD (Estensione Long)"
+                    elif near_sd_down:
+                        status_label = "🟢 > 0G | DIP BUY (Test -1SD)"
+                    else:
+                        status_label = "✅ SOPRA 0G (Zona Stabile)"
+                        
+                # Aggiunta alert se vicinissimo al FLIP 0G
+                if abs(dist_zg_pct) < 0.3:
+                    status_label = "🔥 FLIP IMMINENTE (0G)"
 
+                scan_results.append({
+                    "Ticker": t_name.replace("^", ""),
+                    "Prezzo": round(px, 2),
+                    "0-Gamma": round(zg_val, 2),
+                    "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}",
+                    "Dist. 0G %": round(dist_zg_pct, 2),
+                    "Analisi": status_label,
+                    "_sort_key": abs(dist_zg_pct) # Chiave nascosta per ordinamento
+                })
+            except Exception as e:
+                continue
+            progress_bar.progress((i + 1) / len(tickers_50))
+
+    status_text.empty()
+    
     if scan_results:
-        final_df = pd.DataFrame(scan_results).sort_values(by="Dist. 0G %")
-        st.dataframe(final_df.style.applymap(
-            lambda x: 'background-color: #8B0000; color: white' if x == "🔥 HOT" else '', subset=['Status']
-        ), use_container_width=True, height=600)
+        # Ordina per i più "caldi" (vicini allo 0G)
+        final_df = pd.DataFrame(scan_results).sort_values(by="_sort_key")
+        final_df = final_df.drop(columns=["_sort_key"])
+        
+        # Funzione colore condizionale
+        def color_logic(val):
+            if "🔥" in val: return 'background-color: #8B0000; color: white; font-weight: bold' # Rosso scuro
+            if "🔴" in val: return 'color: #FF4136; font-weight: bold' # Rosso acceso
+            if "⚫" in val: return 'background-color: black; color: #FF4136' # Nero/Rosso (Crash)
+            if "🟢" in val: return 'color: #2ECC40; font-weight: bold' # Verde
+            if "🟡" in val: return 'color: #FFDC00; font-weight: bold' # Giallo
+            if "✅" in val: return 'color: #0074D9' # Blu
+            if "🔻" in val: return 'color: #FF851B' # Arancione
+            return ''
+
+        st.dataframe(
+            final_df.style.applymap(color_logic, subset=['Analisi']),
+            use_container_width=True, 
+            height=800,
+            column_config={
+                "Dist. 0G %": st.column_config.NumberColumn(format="%.2f %%"),
+                "Prezzo": st.column_config.NumberColumn(format="$ %.2f"),
+            }
+        )
     else:
-        st.error("Errore durante la scansione dei dati. Riprova tra un minuto.")
+        st.error("Nessun dato recuperato. Verifica la connessione o riprova tra poco.")
