@@ -54,7 +54,7 @@ def fetch_data(ticker, dates):
 # --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
-# Inizializzazione Session State per i Ticker
+# Inizializzazione Session State per i Ticker per evitare blocchi in ricerca
 if 'ticker_list' not in st.session_state:
     st.session_state.ticker_list = [
         "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
@@ -68,21 +68,21 @@ if 'ticker_list' not in st.session_state:
         "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
     ]
 
-# Campo inserimento Ticker
-new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
+# Campo inserimento Ticker personalizzato
+new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: BTC-USD, MSTR)", "").upper().strip()
 
-# Aggiunta logica del nuovo asset
+# Aggiunta logica del nuovo asset alla lista persistente
 if new_asset and new_asset not in st.session_state.ticker_list:
     st.session_state.ticker_list.insert(0, new_asset)
     st.rerun()
 
-# Selezione Asset
+# Selezione Asset dalla lista aggiornata
 asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
 
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
-# Fetch Spot
+# Fetch Spot Price
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
 if h.empty: 
@@ -90,7 +90,7 @@ if h.empty:
     st.stop()
 spot = h['Close'].iloc[-1]
 
-# Scadenze
+# Gestione Scadenze Opzioni
 available_dates = ticker_obj.options
 if not available_dates:
     st.warning(f"Nessuna opzione disponibile per {asset}")
@@ -98,18 +98,18 @@ if not available_dates:
 
 today = datetime.now()
 date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
-selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
+selected_dte = st.sidebar.multiselect("SCADENZE OPZIONI", 
                                      date_options, 
                                      default=[date_options[0]])
 
-# --- LOGICA AUTO-GRANULARITÀ ---
+# --- LOGICA AUTO-GRANULARITÀ UI ---
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
 elif spot > 500: min_safe_gran = 5
 else: min_safe_gran = 1
 
 metric = st.sidebar.radio("METRICA GRAFICO PRINCIPALE", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
-gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], 
+gran = st.sidebar.select_slider("GRANULARITÀ PREZZO", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], 
                                value=max(min_safe_gran, 10 if spot > 5000 else 5))
 zoom_val = st.sidebar.slider("ZOOM AREA %", 0.5, 15.0, 3.0)
 
@@ -127,7 +127,7 @@ if selected_dte:
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         
-        # Blocco sicurezza
+        # Blocco sicurezza performance rendering
         num_bins = (hi - lo) / gran
         if num_bins > 300:
             gran = (hi - lo) / 150
@@ -137,6 +137,7 @@ if selected_dte:
         c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
         p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmin(), 'strike']
 
+        # --- HEADER METRICS ---
         st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("CALL WALL", f"{c_wall:.0f}")
@@ -159,36 +160,26 @@ if selected_dte:
 
         st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
         
-        # --- NUOVA LOGICA MULTI-GRECA ---
+        # --- LOGICA BIAS AVANZATA (GAMMA, VANNA, CHARM, THETA) ---
         direction = "NEUTRALE / ATTESA"; bias_color = "gray"
         
-        # 1. PERICOLO CRASH: Gamma Negativo + Vanna Negativa (Volatilità esplosiva)
         if net_gamma < 0 and net_vanna < 0:
             direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
-        
-        # 2. SHORT GAMMA PURO: Accelerazione standard
         elif net_gamma < 0:
             direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
-        
-        # 3. BEARISH PRESSURE: Sotto lo Zero Gamma Flip
         elif spot < z_gamma:
             direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
-        
-        # 4. REVERSIONE: Gamma Positivo ma Charm Negativo (Supporto dal tempo)
         elif net_gamma > 0 and net_charm < 0:
             direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
-            
-        # 5. THETA BURN: Gamma Positivo e Theta domina su Vega (Mercato laterale)
         elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
             direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
-            
-        # 6. DEFAULT POSITIVO
         else:
             direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
 
         st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
+        # --- GRAFICO PRINCIPALE ---
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
@@ -203,24 +194,20 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        # --- MODIFICA QUI PER FORMATTAZIONE ASSI LEGGIBILE ---
+        # Formattazione leggibile degli assi (No notazione scientifica)
         fig.update_layout(
             template="plotly_dark", 
             height=800, 
             margin=dict(l=0, r=0, t=0, b=0),
-            
-            # Formattazione Asse Y (Prezzi/Strike): Aggiunge la virgola alle migliaia (es: 65,000)
             yaxis=dict(
                 range=[lo, hi], 
                 dtick=gran, 
                 gridcolor="#333",
-                tickformat=",.0f"  # Toglie i decimali e mette la virgola alle migliaia
+                tickformat=",.0f"  # Formato migliaia per prezzi (es: 24,000)
             ),
-            
-            # Formattazione Asse X (Esposizione): Usa k, M, B (es: 1.5M invece di 1500000 o scientifica)
             xaxis=dict(
                 title=f"Net {metric} Exposure",
-                tickformat="s"     # "s" sta per SI units (k=mila, M=milioni, G=miliardi)
+                tickformat="s"     # Unità SI (k, M, G) per l'esposizione
             )
         )
         
