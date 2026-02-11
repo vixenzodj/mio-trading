@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm
+from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
@@ -12,7 +13,11 @@ from datetime import datetime
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V58 - PRO", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="sentinel_refresh")
 
-# --- CORE QUANT ENGINE (Logica Comune) ---
+# --- NAVIGAZIONE (L'unica aggiunta esterna al tuo codice) ---
+st.sidebar.markdown("## 🧭 NAVIGAZIONE")
+menu = st.sidebar.radio("Scegli Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER 50 TICKER"])
+
+# --- CORE QUANT ENGINE (Funzioni necessarie per entrambe le pagine) ---
 def calculate_gex_at_price(price, df, r=0.045):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
@@ -50,46 +55,48 @@ def fetch_data(ticker, dates):
         except: continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-# --- SIDEBAR NAVIGAZIONE ---
-st.sidebar.title("🛰️ SENTINEL V58")
-menu = st.sidebar.radio("SISTEMA", ["📊 TERMINALE GEX", "🔥 SCANNER HOT TICKERS"])
+# =================================================================
+# PAGINA 1: DASHBOARD ORIGINALE (IL TUO CODICE COPIATO ESATTAMENTE)
+# =================================================================
+if menu == "🏟️ DASHBOARD SINGOLA":
+    st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
+    if 'ticker_list' not in st.session_state:
+        st.session_state.ticker_list = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
 
-# Lista estesa dei 50 Ticker (puoi aggiungerne altri qui)
-TICKER_50 = [
-    "SPX", "NDX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", 
-    "META", "GOOGL", "AMD", "MSTR", "COIN", "MARA", "RIOT", "BITO", "SMCI", "AVGO",
-    "LLY", "JPM", "GS", "NFLX", "DIS", "BABA", "TSM", "PLTR", "SNOW", "U", "ARM"
-]
+    new_asset = st.sidebar.text_input("➕ CARICA TICKER", "").upper().strip()
+    if new_asset and new_asset not in st.session_state.ticker_list:
+        st.session_state.ticker_list.insert(0, new_asset)
+        st.rerun()
 
-# --- PAGINA 1: TERMINALE GEX (Il tuo codice originale intatto) ---
-if menu == "📊 TERMINALE GEX":
-    asset = st.sidebar.selectbox("SELEZIONA ASSET", TICKER_50)
+    asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
     t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
     current_ticker = t_map.get(asset, asset)
-    
+
     ticker_obj = yf.Ticker(current_ticker)
     h = ticker_obj.history(period='1d')
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
-    
+
     available_dates = ticker_obj.options
     today = datetime.now()
     date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
     selected_dte = st.sidebar.multiselect("SCADENZE", date_options, default=[date_options[0]])
-    
+
     metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
-    gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100], value=5)
+    gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], value=5)
     zoom_val = st.sidebar.slider("ZOOM %", 0.5, 15.0, 3.0)
 
     if selected_dte:
         target_dates = [d.split('| ')[1] for d in selected_dte]
         raw_data = fetch_data(current_ticker, target_dates)
+        
         if not raw_data.empty:
             raw_data['dte_years'] = raw_data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
             
-            # Deviazioni Standard
+            # --- CALCOLO DEVIAZIONI STANDARD (STATISTICAL EXPECTED MOVE) ---
             mean_iv = raw_data['impliedVolatility'].mean()
-            sd_move = spot * mean_iv * np.sqrt(0.5/365)
+            dte_min = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
+            sd_move = spot * mean_iv * np.sqrt(max(dte_min, 1)/365)
             sd1_up, sd1_down = spot + sd_move, spot - sd_move
             sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
 
@@ -104,85 +111,109 @@ if menu == "📊 TERMINALE GEX":
             c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else spot
             p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else spot
 
-            st.subheader(f"🏟️ {asset} | Spot: {spot:.2f}")
+            st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA", f"{z_gamma:.2f}")
             m3.metric("PUT WALL", f"{p_wall:.0f}")
             m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
-            # Market Direction Indicator
-            net_gamma, net_vanna = agg['Gamma'].sum(), agg['Vanna'].sum()
-            direction = "NEUTRALE"; bias_col = "gray"
-            if net_gamma < 0: direction = "🔴 SHORT GAMMA (Accelerazione)"; bias_col = "#FF4136"
-            elif spot < z_gamma: direction = "🟠 SOTTO ZERO GAMMA"; bias_col = "#FF851B"
-            else: direction = "🔵 LONG GAMMA (Stabilità)"; bias_col = "#0074D9"
-            st.markdown(f"<div style='background-color:{bias_col}; padding:10px; border-radius:5px; text-align:center;'><b>{direction}</b></div>", unsafe_allow_html=True)
+            # --- MARKET INDICATOR (LOGICA ORIGINALE) ---
+            st.markdown("---")
+            net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
+            net_vega, net_theta = agg['Vega'].sum(), agg['Theta'].sum()
+            
+            direction = "NEUTRALE / ATTESA"; bias_color = "gray"
+            if net_gamma < 0 and net_vanna < 0: direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + VANNA"; bias_color = "#8B0000"
+            elif net_gamma < 0: direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma)"; bias_color = "#FF4136"
+            elif spot < z_gamma: direction = "🟠 PRESSIONE DI VENDITA (Sotto 0G)"; bias_color = "#FF851B"
+            elif net_gamma > 0 and net_charm < 0: direction = "🟢 REVERSIONE (Charm Support)"; bias_color = "#2ECC40"
+            else: direction = "🔵 LONG GAMMA / STABILITÀ"; bias_color = "#0074D9"
+            
+            st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
+            st.markdown("---")
 
-            # Grafico
             p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
             p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
             p_df = p_df.groupby('bin', as_index=False).sum()
             p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 1e-8 else 0)
 
             fig = go.Figure()
-            fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h', marker_color='#00FF41'))
+            fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
+                                 marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
+                                 width=gran * 0.85))
+            
+            # --- LINEE DI LIVELLO ---
             fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
-            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, annotation_text="0-G")
-            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="1SD")
-            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash")
-            fig.update_layout(template="plotly_dark", height=700, xaxis=dict(tickformat="$.3s"))
+            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
+            
+            # DEVIAZIONI STANDARD
+            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="longdash", annotation_text="1SD UP")
+            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="longdash", annotation_text="1SD DOWN")
+            fig.add_hline(y=sd2_up, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
+            fig.add_hline(y=sd2_down, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
+
+            fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
+                              yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
+                              xaxis=dict(title=f"Net {metric}", tickformat="$.3s"))
+            
             st.plotly_chart(fig, use_container_width=True)
+            st.code(f"Pivots: 0G@{z_gamma:.2f} | 1SD range: {sd1_down:.0f}-{sd1_up:.0f}")
 
-# --- PAGINA 2: SCANNER HOT TICKERS (Tabella dei 50) ---
-elif menu == "🔥 SCANNER HOT TICKERS":
-    st.title("🔥 Market Scanner - Analisi Quantitativa 50 Asset")
-    st.markdown("Monitoraggio istantaneo della distanza dallo Zero Gamma e Greche Nette.")
+# =================================================================
+# PAGINA 2: SCANNER (NUOVA AGGIUNTA IN SECONDO PIANO)
+# =================================================================
+elif menu == "🔥 SCANNER 50 TICKER":
+    st.title("🔥 Market Scanner - Top 50 Tickers")
+    st.markdown("Analisi rapida dei livelli critici su ampia scala.")
     
-    scan_results = []
-    progress_bar = st.progress(0)
+    # Lista dei 50 ticker principali
+    tickers_50 = [
+        "SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL",
+        "AMD", "MSTR", "COIN", "MARA", "RIOT", "SMCI", "AVGO", "INTC", "ASML", "ARM",
+        "JPM", "GS", "BAC", "V", "MA", "LLY", "PFE", "UNH", "DIS", "NFLX",
+        "TSM", "BABA", "PLTR", "SNOW", "U", "XOM", "CVX", "BA", "CAT", "GE",
+        "RIVN", "LCID", "PYPL", "SQ", "SHOP", "ADBE", "CRM", "UBER", "ABNB", "COIN"
+    ]
     
-    for i, t_code in enumerate(TICKER_50):
-        try:
-            t_obj = yf.Ticker(t_code)
-            hist = t_obj.history(period='1d')
-            if hist.empty: continue
-            px = hist['Close'].iloc[-1]
-            
-            # Prendi dati opzioni (prima scadenza)
-            opt_date = t_obj.options[0]
-            oc = t_obj.option_chain(opt_date)
-            df_opt = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
-            df_opt['dte_years'] = 0.5 / 365
-            
-            # Calcolo 0G e Greche
-            g, v, th = 0, 0, 0
+    scan_data = []
+    bar = st.progress(0)
+    
+    with st.spinner("Scansione in corso..."):
+        for i, t in enumerate(tickers_50):
             try:
-                g_df = get_greeks_pro(df_opt, px)
-                g, v, th = g_df['Gamma'].sum(), g_df['Vanna'].sum(), g_df['Theta'].sum()
-                zg = brentq(calculate_gex_at_price, px*0.8, px*1.2, args=(df_opt,))
-            except: zg = px
-            
-            dist_zg = ((px - zg) / px) * 100
-            
-            scan_results.append({
-                "Ticker": t_code,
-                "Prezzo": round(px, 2),
-                "Gamma ($M)": round(g/1e6, 2),
-                "Vanna ($M)": round(v/1e6, 2),
-                "Theta ($M)": round(th/1e6, 2),
-                "Dist. 0G %": round(dist_zg, 2),
-                "Alert": "🔥 HOT" if abs(dist_zg) < 0.6 else "OK"
-            })
-        except: continue
-        progress_bar.progress((i + 1) / len(TICKER_50))
+                t_obj = yf.Ticker(t)
+                px = t_obj.history(period='1d')['Close'].iloc[-1]
+                opts = t_obj.options[0]
+                chain = t_obj.option_chain(opts)
+                df_scan = pd.concat([chain.calls.assign(type='call'), chain.puts.assign(type='put')])
+                df_scan['dte_years'] = 0.5 / 365
+                
+                # Calcoli rapidi
+                g_scan_df = get_greeks_pro(df_scan, px)
+                g_sum = g_scan_df['Gamma'].sum()
+                v_sum = g_scan_df['Vanna'].sum()
+                th_sum = g_scan_df['Theta'].sum()
+                
+                try: zg_scan = brentq(calculate_gex_at_price, px*0.8, px*1.2, args=(df_scan,))
+                except: zg_scan = px
+                
+                dist_0g = ((px - zg_scan) / px) * 100
+                
+                scan_data.append({
+                    "Ticker": t,
+                    "Prezzo": round(px, 2),
+                    "Net Gamma ($M)": round(g_sum/1e6, 2),
+                    "Net Vanna ($M)": round(v_sum/1e6, 2),
+                    "Net Theta ($M)": round(th_sum/1e6, 2),
+                    "Dist. 0G %": round(dist_0g, 2),
+                    "Heat": "🔥 HOT" if abs(dist_0g) < 0.5 else "Stable"
+                })
+            except: continue
+            bar.progress((i + 1) / len(tickers_50))
 
-    final_df = pd.DataFrame(scan_results).sort_values(by="Dist. 0G %")
+    df_final = pd.DataFrame(scan_data).sort_values(by="Dist. 0G %")
     
-    # Styling Tabella
-    def color_status(val):
-        color = '#FF4136' if abs(val) < 0.6 else 'white'
-        return f'color: {color}; font-weight: bold' if abs(val) < 0.6 else ''
-
-    st.dataframe(final_df.style.applymap(color_status, subset=['Dist. 0G %']), use_container_width=True, height=800)
-    st.success("Scansione completata. I ticker in rosso sono vicini al punto di rottura (Zero Gamma).")
+    st.dataframe(df_final.style.applymap(
+        lambda x: 'color: #FF4136; font-weight: bold' if x == "🔥 HOT" else '', subset=['Heat']
+    ), use_container_width=True, height=800)
