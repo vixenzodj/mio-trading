@@ -173,6 +173,9 @@ if selected_dte:
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
 
+        # --- FILTRO SURGICALE: Se il valore è polvere (meno di 1 centesimo), diventa 0 ---
+        p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 0.01 else 0)
+
         fig = go.Figure()
         fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
                              marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
@@ -183,22 +186,13 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        # --- MODIFICA SOLO FORMATTAZIONE ASSI ---
-        fig.update_layout(
-            template="plotly_dark", 
-            height=800, 
-            margin=dict(l=0,r=0,t=0,b=0),
-            yaxis=dict(
-                range=[lo, hi], 
-                dtick=gran, 
-                gridcolor="#333",
-                tickformat=",.0f"  # Aggiunge separatore migliaia ai prezzi (es: 65,000)
-            ),
-            xaxis=dict(
-                title=f"Net {metric} Exposure ($)",
-                tickformat="$.2s"  # Formato Dollari abbreviato (es: $1.2M, $500k)
-            )
-        )
-        
+        # --- FORMATTAZIONE ASSE X IN DOLLARI CHIARI ($1.2M, $500k, etc) ---
+        fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
+                          yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333", tickformat=",.0f"),
+                          xaxis=dict(
+                              title=f"Net {metric} Exposure ($)", 
+                              tickformat="$.2s", # Formato SI compatto con Dollaro
+                              hoverformat="$,.2f" # Dettaglio al centesimo nel passaggio mouse
+                          ))
         st.plotly_chart(fig, use_container_width=True)
         st.code(f"Pivots: 0G@{z_gamma:.2f} | CW@{c_wall:.0f} | PW@{p_wall:.0f}")
