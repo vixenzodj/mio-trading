@@ -51,21 +51,10 @@ def fetch_data(ticker, dates):
         except: continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-# --- SIDEBAR: GESTIONE TICKER ESTESA ---
+# --- SIDEBAR ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
-
 if 'ticker_list' not in st.session_state:
-    st.session_state.ticker_list = [
-        "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
-        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
-        "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
-        "COIN", "MARA", "RIOT", "MSTR", "BITO",
-        "JPM", "GS", "BAC", "V", "MA",
-        "LLY", "PFE", "UNH", "ABBV",
-        "XOM", "CVX", "OXY", "SLB",
-        "BA", "CAT", "GE", "LMT",
-        "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
-    ]
+    st.session_state.ticker_list = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
 
 new_asset = st.sidebar.text_input("➕ CARICA TICKER", "").upper().strip()
 if new_asset and new_asset not in st.session_state.ticker_list:
@@ -78,28 +67,17 @@ current_ticker = t_map.get(asset, asset)
 
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
-if h.empty: 
-    st.error(f"Errore: Ticker {asset} non trovato.")
-    st.stop()
+if h.empty: st.stop()
 spot = h['Close'].iloc[-1]
 
 available_dates = ticker_obj.options
-if not available_dates:
-    st.warning(f"Nessuna opzione disponibile per {asset}")
-    st.stop()
-
 today = datetime.now()
 date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
-selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", date_options, default=[date_options[0]])
+selected_dte = st.sidebar.multiselect("SCADENZE", date_options, default=[date_options[0]])
 
-if spot > 10000: min_safe_gran = 50
-elif spot > 2000: min_safe_gran = 10
-elif spot > 500: min_safe_gran = 5
-else: min_safe_gran = 1
-
-metric = st.sidebar.radio("METRICA GRAFICO PRINCIPALE", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
-gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], value=max(min_safe_gran, 10 if spot > 5000 else 5))
-zoom_val = st.sidebar.slider("ZOOM AREA %", 0.5, 15.0, 3.0)
+metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
+gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], value=5)
+zoom_val = st.sidebar.slider("ZOOM %", 0.5, 15.0, 3.0)
 
 if selected_dte:
     target_dates = [d.split('| ')[1] for d in selected_dte]
@@ -107,66 +85,50 @@ if selected_dte:
     
     if not raw_data.empty:
         raw_data['dte_years'] = raw_data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
-        try: z_gamma = brentq(calculate_gex_at_price, spot * 0.90, spot * 1.10, args=(raw_data,))
+        
+        # --- CALCOLO DEVIAZIONI STANDARD (STATISTICAL EXPECTED MOVE) ---
+        mean_iv = raw_data['impliedVolatility'].mean()
+        dte_min = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
+        sd_move = spot * mean_iv * np.sqrt(max(dte_min, 1)/365)
+        sd1_up, sd1_down = spot + sd_move, spot - sd_move
+        sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
+
+        try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
         except: z_gamma = spot 
 
         df = get_greeks_pro(raw_data, spot)
         agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
-        num_bins = (hi - lo) / gran
-        if num_bins > 300:
-            gran = (hi - lo) / 150
-            st.sidebar.warning(f"⚠️ Granularità adattata a {gran:.1f}")
-
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
-        c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
-        p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmin(), 'strike']
+        c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else spot
+        p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else spot
 
         st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("CALL WALL", f"{c_wall:.0f}")
         m2.metric("ZERO GAMMA", f"{z_gamma:.2f}")
         m3.metric("PUT WALL", f"{p_wall:.0f}")
-        m4.metric("SPOT", f"{spot:.2f}")
+        m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
+        # --- MARKET INDICATOR (LOGICA ORIGINALE) ---
         st.markdown("---")
-        st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
-        
         net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
         net_vega, net_theta = agg['Vega'].sum(), agg['Theta'].sum()
-
-        r1, r2, r3, r4, r5 = st.columns(5)
-        for name, val, col in [("GAMMA", net_gamma, r1), ("VANNA", net_vanna, r2), ("CHARM", net_charm, r3), ("VEGA", net_vega, r4), ("THETA", net_theta, r5)]:
-            reg = "POSITIVO" if val > 0 else "NEGATIVO"
-            col.markdown(f"**{name}**")
-            col.markdown(f"<h3 style='color:{'#00FF41' if val > 0 else '#FF4136'}; margin:0;'>{reg}</h3>", unsafe_allow_html=True)
-            col.caption(f"Net: ${val/1e6:.2f}M")
-
-        st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
         
         direction = "NEUTRALE / ATTESA"; bias_color = "gray"
-        if net_gamma < 0 and net_vanna < 0:
-            direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
-        elif net_gamma < 0:
-            direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
-        elif spot < z_gamma:
-            direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
-        elif net_gamma > 0 and net_charm < 0:
-            direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
-        elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
-            direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
-        else:
-            direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
-
+        if net_gamma < 0 and net_vanna < 0: direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + VANNA"; bias_color = "#8B0000"
+        elif net_gamma < 0: direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma)"; bias_color = "#FF4136"
+        elif spot < z_gamma: direction = "🟠 PRESSIONE DI VENDITA (Sotto 0G)"; bias_color = "#FF851B"
+        elif net_gamma > 0 and net_charm < 0: direction = "🟢 REVERSIONE (Charm Support)"; bias_color = "#2ECC40"
+        else: direction = "🔵 LONG GAMMA / STABILITÀ"; bias_color = "#0074D9"
+        
         st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
-
-        # Pulizia rumore decimale infinitesimo (anti-sfalsamento)
         p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 1e-8 else 0)
 
         fig = go.Figure()
@@ -174,18 +136,19 @@ if selected_dte:
                              marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
                              width=gran * 0.85))
         
+        # --- LINEE DI LIVELLO ---
         fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
         fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
-        fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
-        fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
+        
+        # DEVIAZIONI STANDARD (Colori diversi per non confonderle)
+        fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="longdash", annotation_text="1SD UP")
+        fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="longdash", annotation_text="1SD DOWN")
+        fig.add_hline(y=sd2_up, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
+        fig.add_hline(y=sd2_down, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
 
         fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
                           yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
-                          xaxis=dict(
-                              title=f"Net {metric} Exposure ($)", 
-                              tickformat="$.3s", 
-                              hoverformat="$,.2f"
-                          ))
+                          xaxis=dict(title=f"Net {metric}", tickformat="$.3s"))
         
         st.plotly_chart(fig, use_container_width=True)
-        st.code(f"Pivots: 0G@{z_gamma:.2f} | CW@{c_wall:.0f} | PW@{p_wall:.0f}")
+        st.code(f"Pivots: 0G@{z_gamma:.2f} | 1SD range: {sd1_down:.0f}-{sd1_up:.0f}")
