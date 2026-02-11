@@ -94,7 +94,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         if not raw_data.empty:
             raw_data['dte_years'] = raw_data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
             
-            # --- CALCOLO DEVIAZIONI STANDARD ---
             mean_iv = raw_data['impliedVolatility'].mean()
             dte_min = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
             sd_move = spot * mean_iv * np.sqrt(max(dte_min, 1)/365)
@@ -119,7 +118,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             m3.metric("PUT WALL", f"{p_wall:.0f}")
             m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
-            # --- REINSERIMENTO: Real-Time Metric Regime & Market Direction ---
             st.markdown("---")
             st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
             
@@ -133,7 +131,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 col.markdown(f"<h3 style='color:{'#00FF41' if val > 0 else '#FF4136'}; margin:0;'>{reg}</h3>", unsafe_allow_html=True)
                 col.caption(f"Net: ${val/1e6:.2f}M")
 
-            # --- REINSERIMENTO: MARKET DIRECTION INDICATOR ---
             st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
             
             direction = "NEUTRALE / ATTESA"; bias_color = "gray"
@@ -141,47 +138,3 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
             elif net_gamma < 0:
                 direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
-            elif spot < z_gamma:
-                direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
-            elif net_gamma > 0 and net_charm < 0:
-                direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
-            elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
-                direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
-            else:
-                direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
-
-            st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
-            st.markdown("---")
-
-            p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
-            p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
-            p_df = p_df.groupby('bin', as_index=False).sum()
-            p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 1e-8 else 0)
-
-            fig = go.Figure()
-            fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
-                                 marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
-                                 width=gran * 0.85))
-            
-            fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
-            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
-            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="longdash", annotation_text="1SD UP")
-            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="longdash", annotation_text="1SD DOWN")
-            fig.add_hline(y=sd2_up, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
-            fig.add_hline(y=sd2_down, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
-
-            fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
-                              yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
-                              xaxis=dict(title=f"Net {metric}", tickformat="$.3s"))
-            
-            st.plotly_chart(fig, use_container_width=True)
-            st.code(f"Pivots: 0G@{z_gamma:.2f} | 1SD range: {sd1_down:.0f}-{sd1_up:.0f}")
-
-# =================================================================
-# PAGINA 2: SCANNER (COMPLETAMENTE SEPARATA)
-# =================================================================
-elif menu == "🔥 SCANNER HOT TICKERS":
-    st.title("🔥 Real-Time Market Scanner")
-    st.info("Scansione quantitativa dei 50 asset principali per rilevare zone di flip e iper-estensione.")
-    # ... (Codice scanner semplificato per performance)
-    st.warning("Questa pagina visualizza i dati tabellari dei 50 ticker caricati.")
