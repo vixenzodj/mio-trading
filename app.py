@@ -138,3 +138,91 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
             elif net_gamma < 0:
                 direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
+            elif spot < z_gamma:
+                direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
+            elif net_gamma > 0 and net_charm < 0:
+                direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
+            elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
+                direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
+            else:
+                direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
+
+            st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
+            st.markdown("---")
+
+            p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
+            p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
+            p_df = p_df.groupby('bin', as_index=False).sum()
+            p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 1e-8 else 0)
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
+                                 marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
+                                 width=gran * 0.85))
+            
+            fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
+            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
+            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="longdash", annotation_text="1SD UP")
+            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="longdash", annotation_text="1SD DOWN")
+            fig.add_hline(y=sd2_up, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
+            fig.add_hline(y=sd2_down, line_color="#E066FF", line_dash="dashdot", annotation_text="2SD EXTREME")
+
+            fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
+                              yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
+                              xaxis=dict(title=f"Net {metric}", tickformat="$.3s"))
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+# =================================================================
+# PAGINA 2: SCANNER (FUNZIONANTE E INTEGRATA)
+# =================================================================
+elif menu == "🔥 SCANNER HOT TICKERS":
+    st.title("🔥 Market Scanner - Real Time Greeks Scan")
+    
+    tickers_to_scan = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "MSTR", "COIN", "SMCI"]
+    
+    scan_results = []
+    progress_bar = st.progress(0)
+    
+    with st.spinner("Scansione quantitativa in corso..."):
+        for i, t_name in enumerate(tickers_to_scan):
+            try:
+                t_obj = yf.Ticker(t_name)
+                px = t_obj.history(period='1d')['Close'].iloc[-1]
+                
+                # Fetching data for the nearest expiry
+                first_expiry = t_obj.options[0]
+                oc = t_obj.option_chain(first_expiry)
+                df_scan = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
+                df_scan['dte_years'] = 0.5 / 365
+                
+                # Greeks calculation
+                greeks_df = get_greeks_pro(df_scan, px)
+                net_g = greeks_df['Gamma'].sum()
+                net_v = greeks_df['Vanna'].sum()
+                net_t = greeks_df['Theta'].sum()
+                
+                try: zg_val = brentq(calculate_gex_at_price, px*0.8, px*1.2, args=(df_scan,))
+                except: zg_val = px
+                
+                dist_zg = ((px - zg_val) / px) * 100
+                
+                scan_results.append({
+                    "Ticker": t_name,
+                    "Prezzo": round(px, 2),
+                    "Gamma ($M)": round(net_g/1e6, 2),
+                    "Vanna ($M)": round(net_v/1e6, 2),
+                    "Theta ($M)": round(net_t/1e6, 2),
+                    "Dist. 0G %": round(dist_zg, 2),
+                    "Status": "🔥 HOT" if abs(dist_zg) < 0.6 else "Stable"
+                })
+            except: continue
+            progress_bar.progress((i + 1) / len(tickers_to_scan))
+
+    if scan_results:
+        final_df = pd.DataFrame(scan_results).sort_values(by="Dist. 0G %")
+        st.dataframe(final_df.style.applymap(
+            lambda x: 'background-color: #8B0000; color: white' if x == "🔥 HOT" else '', subset=['Status']
+        ), use_container_width=True, height=600)
+    else:
+        st.error("Errore durante la scansione dei dati. Riprova tra un minuto.")
