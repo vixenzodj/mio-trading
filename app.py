@@ -54,28 +54,35 @@ def fetch_data(ticker, dates):
 # --- SIDEBAR: GESTIONE TICKER ESTESA ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
-custom_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, BITO)", "").upper()
+# Inizializzazione Session State per i Ticker
+if 'ticker_list' not in st.session_state:
+    st.session_state.ticker_list = [
+        "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
+        "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
+        "COIN", "MARA", "RIOT", "MSTR", "BITO",
+        "JPM", "GS", "BAC", "V", "MA",
+        "LLY", "PFE", "UNH", "ABBV",
+        "XOM", "CVX", "OXY", "SLB",
+        "BA", "CAT", "GE", "LMT",
+        "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
+    ]
 
-default_tickers = [
-    "NDX", "SPX", "QQQ", "SPY", "IWM", "DIA",
-    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META",
-    "AMD", "SMCI", "AVGO", "INTC", "ASML", "ARM",
-    "COIN", "MARA", "RIOT", "MSTR", "BITO",
-    "JPM", "GS", "BAC", "V", "MA",
-    "LLY", "PFE", "UNH", "ABBV",
-    "XOM", "CVX", "OXY", "SLB",
-    "BA", "CAT", "GE", "LMT",
-    "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
-]
+# Campo inserimento Ticker
+new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
 
-if custom_asset and custom_asset not in default_tickers:
-    default_tickers.insert(0, custom_asset)
+# Aggiunta logica del nuovo asset
+if new_asset and new_asset not in st.session_state.ticker_list:
+    st.session_state.ticker_list.insert(0, new_asset)
+    st.rerun()
 
-asset = st.sidebar.selectbox("SELEZIONA ASSET", default_tickers)
+# Selezione Asset
+asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
 
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
+# Fetch Spot
 ticker_obj = yf.Ticker(current_ticker)
 h = ticker_obj.history(period='1d')
 if h.empty: 
@@ -83,18 +90,19 @@ if h.empty:
     st.stop()
 spot = h['Close'].iloc[-1]
 
+# Scadenze
 available_dates = ticker_obj.options
 if not available_dates:
     st.warning(f"Nessuna opzione disponibile per {asset}")
     st.stop()
 
 today = datetime.now()
+date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
 selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
-                                     [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates], 
-                                     default=[f"{(datetime.strptime(available_dates[0], '%Y-%m-%d') - today).days + 1} DTE | {available_dates[0]}"])
+                                     date_options, 
+                                     default=[date_options[0]])
 
-# --- LOGICA AUTO-GRANULARITÀ PER PREVENIRE BLOCCHI ---
-# Definiamo una granularità minima sicura in base allo spot price
+# --- LOGICA AUTO-GRANULARITÀ ---
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
 elif spot > 500: min_safe_gran = 5
@@ -119,11 +127,11 @@ if selected_dte:
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
         
-        # --- BLOCCO DI SICUREZZA PRE-RENDERING ---
+        # Blocco sicurezza
         num_bins = (hi - lo) / gran
-        if num_bins > 300: # Se ci sono troppe barre, forziamo una granularità maggiore
+        if num_bins > 300:
             gran = (hi - lo) / 150
-            st.sidebar.warning(f"⚠️ Granularità regolata a {gran:.1f} per proteggere le prestazioni.")
+            st.sidebar.warning(f"⚠️ Granularità adattata a {gran:.1f}")
 
         visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
         c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else agg.loc[agg['Gamma'].idxmax(), 'strike']
@@ -150,10 +158,34 @@ if selected_dte:
             col.caption(f"Net: ${val/1e6:.2f}M")
 
         st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
-        direction = "STABILE / CONSOLIDAMENTO"; bias_color = "gray"
-        if net_gamma < 0: direction = "ACCELERAZIONE VOLATILITÀ (SHORT BIAS)"; bias_color = "#FF4136"
-        elif net_gamma > 0 and net_charm < 0: direction = "REVERSIONE VERSO LO SPOT (STABILIZZAZIONE)"; bias_color = "#2ECC40"
-        elif spot < z_gamma: direction = "PRESSIONE DI VENDITA (SOTTO ZERO GAMMA)"; bias_color = "#FF851B"
+        
+        # --- NUOVA LOGICA MULTI-GRECA ---
+        direction = "NEUTRALE / ATTESA"; bias_color = "gray"
+        
+        # 1. PERICOLO CRASH: Gamma Negativo + Vanna Negativa (Volatilità esplosiva)
+        if net_gamma < 0 and net_vanna < 0:
+            direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
+        
+        # 2. SHORT GAMMA PURO: Accelerazione standard
+        elif net_gamma < 0:
+            direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
+        
+        # 3. BEARISH PRESSURE: Sotto lo Zero Gamma Flip
+        elif spot < z_gamma:
+            direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
+        
+        # 4. REVERSIONE: Gamma Positivo ma Charm Negativo (Supporto dal tempo)
+        elif net_gamma > 0 and net_charm < 0:
+            direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
+            
+        # 5. THETA BURN: Gamma Positivo e Theta domina su Vega (Mercato laterale)
+        elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
+            direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
+            
+        # 6. DEFAULT POSITIVO
+        else:
+            direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
+
         st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
