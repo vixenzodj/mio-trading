@@ -173,6 +173,10 @@ if selected_dte:
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
 
+        # --- FIX CHIRURGICO ANTI-RUMORE ---
+        # Arrotondiamo a 2 decimali per eliminare numeri tipo 1e-77 che sfalsano l'asse X
+        p_df[metric] = p_df[metric].round(2)
+
         fig = go.Figure()
         fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
                              marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in p_df[metric]], line_width=0),
@@ -183,13 +187,14 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        # --- MODIFICA CHIRURGICA: SOLO FORMATTAZIONE VISIVA ---
+        # --- LAYOUT CON FORMATTAZIONE ASSE X PULITA ---
         fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
                           yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
                           xaxis=dict(
                               title=f"Net {metric} Exposure ($)", 
-                              tickformat="$.3s", # Mostra $1.2M, $500k, $0 (senza yocto o scientifica)
-                              hoverformat="$,.0f" # Valore esatto in dollari quando passi il mouse
+                              tickformat="$.2s", # Formato compatto: $1.2M, $500k, $0
+                              zeroline=True,
+                              zerolinecolor="#444"
                           ))
         
         st.plotly_chart(fig, use_container_width=True)
