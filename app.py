@@ -56,7 +56,7 @@ st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS"])
 
 # =================================================================
-# PAGINA 1: DASHBOARD SINGOLA (CON CALL/PUT WALL SUL GRAFICO)
+# PAGINA 1: DASHBOARD SINGOLA (GRAFICA POTENZIATA MULTI-LIVELLO)
 # =================================================================
 if menu == "🏟️ DASHBOARD SINGOLA":
     st.sidebar.markdown("---")
@@ -108,8 +108,21 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             
             lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
             visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
-            c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else spot
-            p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else spot
+            
+            # --- IDENTIFICAZIONE MURI PRINCIPALI ---
+            if not visible_agg.empty:
+                max_gamma = visible_agg['Gamma'].max()
+                min_gamma = visible_agg['Gamma'].min()
+                c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike']
+                p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike']
+                
+                # --- IDENTIFICAZIONE MURI SECONDARI (Livelli Rilevanti) ---
+                # Trova strike con almeno il 60% della forza del muro principale
+                secondary_calls = visible_agg[(visible_agg['Gamma'] > max_gamma * 0.6) & (visible_agg['strike'] != c_wall)]
+                secondary_puts = visible_agg[(visible_agg['Gamma'] < min_gamma * 0.6) & (visible_agg['strike'] != p_wall)]
+            else:
+                c_wall, p_wall = spot, spot
+                secondary_calls, secondary_puts = pd.DataFrame(), pd.DataFrame()
 
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
             m1, m2, m3, m4 = st.columns(4)
@@ -164,9 +177,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
             fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
             
-            # CALL WALL & PUT WALL (AGGIUNTI COME RICHIESTO)
-            fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CALL WALL", annotation_position="top right")
-            fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PUT WALL", annotation_position="bottom right")
+            # --- DISEGNO MURI PRINCIPALI (Solid Lines) ---
+            fig.add_hline(y=c_wall, line_color="#32CD32", line_width=3, annotation_text="MAJOR CALL WALL", annotation_position="top right")
+            fig.add_hline(y=p_wall, line_color="#FF4500", line_width=3, annotation_text="MAJOR PUT WALL", annotation_position="bottom right")
+
+            # --- DISEGNO MURI SECONDARI (Dashed Lines - Multi Level View) ---
+            # Questa parte aggiunge le linee per le concentrazioni "minori" ma rilevanti
+            if not secondary_calls.empty:
+                for s_strike in secondary_calls['strike']:
+                     fig.add_hline(y=s_strike, line_color="rgba(50, 205, 50, 0.6)", line_width=1, line_dash="dot", annotation_text="Call Res")
+            
+            if not secondary_puts.empty:
+                for s_strike in secondary_puts['strike']:
+                     fig.add_hline(y=s_strike, line_color="rgba(255, 69, 0, 0.6)", line_width=1, line_dash="dot", annotation_text="Put Supp")
 
             # DEVIAZIONI STANDARD
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="longdash", annotation_text="1SD UP")
@@ -181,7 +204,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             st.plotly_chart(fig, use_container_width=True)
 
 # =================================================================
-# PAGINA 2: SCANNER 50 TICKER CON LOGICA PROFESSIONALE 0G & 1SD
+# PAGINA 2: SCANNER 50 TICKER (INVARIATA)
 # =================================================================
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
