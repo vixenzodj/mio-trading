@@ -51,7 +51,7 @@ def fetch_data(ticker, dates):
         except: continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-# --- SIDEBAR: GESTIONE TICKER ESTESA ---
+# --- SIDEBAR ---
 st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
 
 if 'ticker_list' not in st.session_state:
@@ -67,14 +67,12 @@ if 'ticker_list' not in st.session_state:
         "DIS", "NFLX", "TSM", "BABA", "PLTR", "SNOW", "U"
     ]
 
-new_asset = st.sidebar.text_input("➕ CARICA TICKER (es: MSTR, GLD)", "").upper().strip()
-
+new_asset = st.sidebar.text_input("➕ CARICA TICKER", "").upper().strip()
 if new_asset and new_asset not in st.session_state.ticker_list:
     st.session_state.ticker_list.insert(0, new_asset)
     st.rerun()
 
 asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
-
 t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
 current_ticker = t_map.get(asset, asset)
 
@@ -92,9 +90,7 @@ if not available_dates:
 
 today = datetime.now()
 date_options = [f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}" for d in available_dates]
-selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", 
-                                     date_options, 
-                                     default=[date_options[0]])
+selected_dte = st.sidebar.multiselect("SCADENZE 0DTE/1DTE", date_options, default=[date_options[0]])
 
 if spot > 10000: min_safe_gran = 50
 elif spot > 2000: min_safe_gran = 10
@@ -102,8 +98,7 @@ elif spot > 500: min_safe_gran = 5
 else: min_safe_gran = 1
 
 metric = st.sidebar.radio("METRICA GRAFICO PRINCIPALE", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
-gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], 
-                               value=max(min_safe_gran, 10 if spot > 5000 else 5))
+gran = st.sidebar.select_slider("GRANULARITÀ", options=[1, 2, 5, 10, 20, 25, 50, 100, 250], value=max(min_safe_gran, 10 if spot > 5000 else 5))
 zoom_val = st.sidebar.slider("ZOOM AREA %", 0.5, 15.0, 3.0)
 
 if selected_dte:
@@ -119,7 +114,6 @@ if selected_dte:
         agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
         
         lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
-        
         num_bins = (hi - lo) / gran
         if num_bins > 300:
             gran = (hi - lo) / 150
@@ -137,7 +131,7 @@ if selected_dte:
         m4.metric("SPOT", f"{spot:.2f}")
 
         st.markdown("---")
-        st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
+        st.markdown("### 🛰️ Real-Time Metric Regime")
         
         net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
         net_vega, net_theta = agg['Vega'].sum(), agg['Theta'].sum()
@@ -149,33 +143,14 @@ if selected_dte:
             col.markdown(f"<h3 style='color:{'#00FF41' if val > 0 else '#FF4136'}; margin:0;'>{reg}</h3>", unsafe_allow_html=True)
             col.caption(f"Net: ${val/1e6:.2f}M")
 
-        st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
-        
-        direction = "NEUTRALE / ATTESA"; bias_color = "gray"
-        
-        if net_gamma < 0 and net_vanna < 0:
-            direction = "🔴 PERICOLO ESTREMO: SHORT GAMMA + NEGATIVE VANNA (Crash Risk)"; bias_color = "#8B0000"
-        elif net_gamma < 0:
-            direction = "🔴 ACCELERAZIONE VOLATILITÀ (Short Gamma Bias)"; bias_color = "#FF4136"
-        elif spot < z_gamma:
-            direction = "🟠 PRESSIONE DI VENDITA (Sotto Zero Gamma)"; bias_color = "#FF851B"
-        elif net_gamma > 0 and net_charm < 0:
-            direction = "🟢 REVERSIONE VERSO LO SPOT (Charm Support)"; bias_color = "#2ECC40"
-        elif net_gamma > 0 and abs(net_theta) > abs(net_vega):
-            direction = "⚪ CONSOLIDAMENTO / THETA DECAY (Range Bound)"; bias_color = "#AAAAAA"
-        else:
-            direction = "🔵 LONG GAMMA / STABILITÀ (Bassa Volatilità)"; bias_color = "#0074D9"
-
-        st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
         st.markdown("---")
 
         p_df = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)].copy()
         p_df['bin'] = (np.round(p_df['strike'] / gran) * gran)
         p_df = p_df.groupby('bin', as_index=False).sum()
 
-        # --- FIX CHIRURGICO ANTI-RUMORE ---
-        # Arrotondiamo a 2 decimali per eliminare numeri tipo 1e-77 che sfalsano l'asse X
-        p_df[metric] = p_df[metric].round(2)
+        # --- MODIFICA PER SCALPING: Pulisce solo il rumore invisibile ---
+        p_df[metric] = p_df[metric].apply(lambda x: x if abs(x) > 1e-8 else 0)
 
         fig = go.Figure()
         fig.add_trace(go.Bar(y=p_df['bin'], x=p_df[metric], orientation='h',
@@ -187,14 +162,13 @@ if selected_dte:
         fig.add_hline(y=c_wall, line_color="#FF4136", line_width=3, annotation_text=f"CW @{c_wall:.0f}")
         fig.add_hline(y=p_wall, line_color="#2ECC40", line_width=3, annotation_text=f"PW @{p_wall:.0f}")
 
-        # --- LAYOUT CON FORMATTAZIONE ASSE X PULITA ---
+        # --- FORMATTAZIONE VISIVA ASSE (SOLO DOLLARI LEGGIBILI) ---
         fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0),
                           yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333"),
                           xaxis=dict(
-                              title=f"Net {metric} Exposure ($)", 
-                              tickformat="$.2s", # Formato compatto: $1.2M, $500k, $0
-                              zeroline=True,
-                              zerolinecolor="#444"
+                              title=f"Net {metric} Exposure ($)",
+                              tickformat="$.3s",  # Mostra $1.2k, $1.5M, ecc.
+                              hoverformat="$,.2f" # Al passaggio del mouse vedi il centesimo preciso
                           ))
         
         st.plotly_chart(fig, use_container_width=True)
