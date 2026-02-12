@@ -9,7 +9,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # --- CONFIGURAZIONE UI ---
-st.set_page_config(layout="wide", page_title="SENTINEL GEX V58 - FULL PRO", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="SENTINEL GEX V62 - FULL PRO", initial_sidebar_state="expanded")
 st_autorefresh(interval=60000, key="sentinel_refresh")
 
 # --- CORE QUANT ENGINE ---
@@ -56,7 +56,7 @@ menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 
 today = datetime.now()
 
 # =================================================================
-# PAGINA 1: DASHBOARD SINGOLA
+# PAGINA 1: DASHBOARD SINGOLA (CON TUTTE LE LOGICHE RICHIESTE)
 # =================================================================
 if menu == "🏟️ DASHBOARD SINGOLA":
     if 'ticker_list' not in st.session_state:
@@ -71,8 +71,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
     current_ticker = t_map.get(asset, asset)
 
+    # Granularità automatica per indici pesanti
     default_gran = 1.0
-    if "NDX" in asset or "SPX" in asset: default_gran = 25.0
+    if "NDX" in asset: default_gran = 25.0
+    elif "SPX" in asset: default_gran = 10.0
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
     ticker_obj = yf.Ticker(current_ticker)
@@ -80,39 +82,52 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
+    # Caricamento Date (include 0DTE)
     available_dates = ticker_obj.options
-    all_dates_info = [ {"label": f"{(datetime.strptime(d, '%Y-%m-%d') - today).days + 1} DTE | {d}", "date": d} for d in available_dates if 0 <= (datetime.strptime(d, '%Y-%m-%d') - today).days <= 60]
+    all_dates_info = []
+    for d in available_dates:
+        try:
+            dt_obj = datetime.strptime(d, '%Y-%m-%d')
+            dte = (dt_obj - today).days + 1
+            if dte >= 0:
+                all_dates_info.append({"label": f"{dte} DTE | {d}", "date": d, "dte": dte})
+        except: continue
+    
     date_labels = [x['label'] for x in all_dates_info]
-    selected_dte_labels = st.sidebar.multiselect("SCADENZE", date_labels, default=date_labels[:2])
+    selected_dte_labels = st.sidebar.multiselect("SCADENZE", date_labels, default=date_labels[:1])
     metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
     gran = st.sidebar.select_slider("GRANULARITÀ", options=[0.5, 1, 2.5, 5, 10, 25, 50, 100], value=default_gran)
-    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 15.0, 4.0)
+    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 20.0, 5.0)
 
     if selected_dte_labels:
         target_dates = [label.split('| ')[1] for label in selected_dte_labels]
         raw_data = fetch_data(current_ticker, target_dates)
+        
         if not raw_data.empty:
-            raw_data['dte_years'] = raw_data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
+            raw_data['dte_years'] = raw_data['exp'].apply(lambda x: max((datetime.strptime(x, '%Y-%m-%d') - today).days, 0.5)) / 365
             mean_iv = raw_data['impliedVolatility'].mean()
             dte_ref = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
-            sd_move = spot * mean_iv * np.sqrt(max(dte_ref, 1)/365)
+            
+            # Calcolo SD (Deviazioni Standard)
+            sd_move = spot * mean_iv * np.sqrt(max(dte_ref, 0.5)/365)
+            sd1_up, sd1_down = spot + sd_move, spot - sd_move
+            sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
+
             try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
             except: z_gamma = spot 
 
             df = get_greeks_pro(raw_data, spot)
             df['strike_bin'] = (np.round(df['strike'] / gran) * gran)
             agg = df.groupby('strike_bin', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum().rename(columns={'strike_bin': 'strike'})
+            
             lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
             visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
             
-            c_wall = visible_agg.loc[visible_agg['Gamma'].idxmax(), 'strike'] if not visible_agg.empty else spot
-            p_wall = visible_agg.loc[visible_agg['Gamma'].idxmin(), 'strike'] if not visible_agg.empty else spot
+            # Identificazione Muri (Walls)
+            c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
+            p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
 
-            st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
-            
-            # MARKET DIRECTION INDICATOR
+            # --- MARKET DIRECTION INDICATOR ---
             net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
             direction = "NEUTRALE"; bias_color = "gray"
             if net_gamma < 0 and net_vanna < 0: direction = "🔴 PERICOLO ESTREMO (Crash Risk)"; bias_color = "#8B0000"
@@ -120,17 +135,43 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             elif spot < z_gamma: direction = "🟠 PRESSIONE SOTTO ZERO GAMMA"; bias_color = "#FF851B"
             elif net_gamma > 0 and net_charm < 0: direction = "🟢 REVERSIONE (Charm Support)"; bias_color = "#2ECC40"
             else: direction = "🔵 LONG GAMMA / STABILITÀ"; bias_color = "#0074D9"
-            st.markdown(f"<div style='background-color:{bias_color}; padding:10px; border-radius:5px; text-align:center; margin-bottom: 20px;'> <b style='color:black; font-size:20px;'>{direction}</b> </div>", unsafe_allow_html=True)
+            
+            st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
+            
+            st.markdown(f"<div style='background-color:{bias_color}; padding:10px; border-radius:5px; text-align:center; margin-bottom: 20px;'> <b style='color:white; font-size:20px;'>DIREZIONE: {direction}</b> </div>", unsafe_allow_html=True)
 
+            # --- GRAFICO UNICO ---
             fig = go.Figure()
-            fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg[metric], orientation='h', marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in visible_agg[metric]], line_width=0), width=gran * 0.85))
-            fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
+            
+            # Barre esposizione
+            fig.add_trace(go.Bar(
+                y=visible_agg['strike'], x=visible_agg[metric], 
+                orientation='h', 
+                marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]], line_width=0),
+                width=gran * 0.8
+            ))
+            
+            # Linee Strike Bianche (Richieste)
+            for strike in visible_agg['strike']:
+                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
+
+            # Livelli Prezzo e SD
+            fig.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
             fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G")
-            fig.update_layout(template="plotly_dark", height=700, margin=dict(l=0,r=0,t=0,b=0), yaxis=dict(range=[lo, hi], dtick=gran), xaxis=dict(title=f"Net {metric}", tickformat="$.2s"))
+            fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
+            fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
+            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
+            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
+            fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
+            fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="dot", annotation_text="-2SD")
+
+            fig.update_layout(template="plotly_dark", height=800, margin=dict(l=0,r=0,t=0,b=0), yaxis=dict(range=[lo, hi], dtick=gran), xaxis=dict(title=f"Net {metric}", tickformat="$.2s"))
             st.plotly_chart(fig, use_container_width=True)
 
 # =================================================================
-# PAGINA 2: SCANNER HOT TICKERS (RIPRISTINATO CON LOGICA COMPLETA)
+# PAGINA 2: SCANNER HOT TICKERS (LOGICA ORIGINALE RIPRISTINATA)
 # =================================================================
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
