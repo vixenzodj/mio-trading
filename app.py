@@ -55,9 +55,6 @@ def fetch_data(ticker, dates):
 st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS"])
 
-# =================================================================
-# PAGINA 1: DASHBOARD SINGOLA (CON CALL/PUT WALL SUL GRAFICO)
-# =================================================================
 if menu == "🏟️ DASHBOARD SINGOLA":
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🛰️ SENTINEL V58 HUB")
@@ -78,49 +75,53 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
-    # --- LOGICA DATE CORRETTA (0-50 DTE TUTTI INCLUSI) ---
+    # --- LOGICA RECUPERO TOTALE SCADENZE (CAPILLARE) ---
     available_dates = ticker_obj.options
     today = datetime.now()
     
-    # Filtro e preparo la lista 0-50 DTE
-    short_term_dates = []
+    all_dates_info = []
     for d in available_dates:
-        dte = (datetime.strptime(d, '%Y-%m-%d') - today).days + 1
-        if 0 <= dte <= 55: # Buffer a 55 per sicurezza sui 50
-            short_term_dates.append(f"{dte} DTE | {d}")
-            
-    # Multiselect pre-popolato con TUTTE le date < 50 DTE
-    selected_dte = st.sidebar.multiselect("SCADENZE (0-50 DTE)", short_term_dates, default=short_term_dates)
+        dt_obj = datetime.strptime(d, '%Y-%m-%d')
+        dte = (dt_obj - today).days + 1
+        # Includiamo tutto ciò che è disponibile fino a 90 giorni per non saltare nulla (2dte, 3dte, etc)
+        if 0 <= dte <= 90:
+            all_dates_info.append({"label": f"{dte} DTE | {d}", "date": d, "dte": dte})
+    
+    # Ordine cronologico esatto
+    all_dates_info = sorted(all_dates_info, key=lambda x: x['dte'])
+    date_labels = [x['label'] for x in all_dates_info]
+
+    selected_dte_labels = st.sidebar.multiselect("SCADENZE DISPONIBILI (TUTTE)", date_labels, default=date_labels[:3])
 
     metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
     
-    # Nota: Slider mantenuto per UI ma disattivato nel calcolo per garantire visualizzazione capillare
-    gran = st.sidebar.select_slider("GRANULARITÀ (Disattivata per Max Dettaglio)", options=[1, 2, 5, 10, 20, 25, 50], value=1) 
-    zoom_val = st.sidebar.slider("ZOOM %", 0.5, 15.0, 3.0)
+    # RIPRISTINO E POTENZIAMENTO GRANULARITÀ
+    gran = st.sidebar.select_slider("GRANULARITÀ STRIKE", options=[0.5, 1, 2, 5, 10, 20, 25, 50, 100], value=1.0)
+    zoom_val = st.sidebar.slider("ZOOM %", 0.5, 20.0, 5.0)
 
-    if selected_dte:
-        target_dates = [d.split('| ')[1] for d in selected_dte]
+    if selected_dte_labels:
+        target_dates = [label.split('| ')[1] for label in selected_dte_labels]
         raw_data = fetch_data(current_ticker, target_dates)
         
         if not raw_data.empty:
             raw_data['dte_years'] = raw_data['exp'].apply(lambda x: (datetime.strptime(x, '%Y-%m-%d') - today).days + 0.5) / 365
             
             mean_iv = raw_data['impliedVolatility'].mean()
-            dte_min = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
-            sd_move = spot * mean_iv * np.sqrt(max(dte_min, 1)/365)
+            dte_ref = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
+            sd_move = spot * mean_iv * np.sqrt(max(dte_ref, 1)/365)
             sd1_up, sd1_down = spot + sd_move, spot - sd_move
             sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
 
-            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
+            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.80, spot * 1.20, args=(raw_data,))
             except: z_gamma = spot 
 
             df = get_greeks_pro(raw_data, spot)
             
-            # AGGREGAZIONE PER STRIKE (MA SENZA BINNING ARROTONDATO)
-            # Somma i valori delle DTE diverse MA mantiene ogni strike distinto
-            agg = df.groupby('strike', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
+            # LOGICA DI AGGREGAZIONE CON GRANULARITÀ RIPRISTINATA
+            df['strike_bin'] = (np.round(df['strike'] / gran) * gran)
+            agg = df.groupby('strike_bin', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum()
+            agg = agg.rename(columns={'strike_bin': 'strike'})
             
-            # Filtro Zoom
             lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
             visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
             
@@ -129,23 +130,54 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("CALL WALL", f"{c_wall:.0f}")
+            m1.metric("CALL WALL", f"{c_wall:.2f}")
             m2.metric("ZERO GAMMA", f"{z_gamma:.2f}")
-            m3.metric("PUT WALL", f"{p_wall:.0f}")
+            m3.metric("PUT WALL", f"{p_wall:.2f}")
             m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
             st.markdown("---")
-            st.markdown("### 🛰️ Real-Time Metric Regime & Market Direction")
             
-            net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
-            net_vega, net_theta = agg['Vega'].sum(), agg['Theta'].sum()
+            net_gamma = agg['Gamma'].sum()
+            net_vanna = agg['Vanna'].sum()
+            net_charm = agg['Charm'].sum()
 
             r1, r2, r3, r4, r5 = st.columns(5)
-            for name, val, col in [("GAMMA", net_gamma, r1), ("VANNA", net_vanna, r2), ("CHARM", net_charm, r3), ("VEGA", net_vega, r4), ("THETA", net_theta, r5)]:
-                reg = "POSITIVO" if val > 0 else "NEGATIVO"
+            metrics_list = [("GAMMA", net_gamma, r1), ("VANNA", net_vanna, r2), ("CHARM", net_charm, r3), ("VEGA", agg['Vega'].sum(), r4), ("THETA", agg['Theta'].sum(), r5)]
+            for name, val, col in metrics_list:
                 col.markdown(f"**{name}**")
-                col.markdown(f"<h3 style='color:{'#00FF41' if val > 0 else '#FF4136'}; margin:0;'>{reg}</h3>", unsafe_allow_html=True)
-                col.caption(f"Net: ${val/1e6:.2f}M")
+                color = '#00FF41' if val > 0 else '#FF4136'
+                col.markdown(f"<h3 style='color:{color}; margin:0;'>{'POS' if val > 0 else 'NEG'}</h3>", unsafe_allow_html=True)
+                col.caption(f"Net: {val/1e6:.2f}M")
+
+            st.markdown("---")
+
+            fig = go.Figure()
+            # Barre di segnale capillari basate sulla granularità scelta
+            fig.add_trace(go.Bar(
+                y=visible_agg['strike'], 
+                x=visible_agg[metric], 
+                orientation='h',
+                marker=dict(color=['#00FF41' if x >= 0 else '#0074D9' for x in visible_agg[metric]], line_width=0),
+                width=gran * 0.8
+            ))
+            
+            # Overlay livelli tecnici
+            fig.add_hline(y=spot, line_color="#00FFFF", line_dash="dot", annotation_text="SPOT")
+            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G FLIP")
+            fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CALL WALL")
+            fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PUT WALL")
+            
+            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="longdash", annotation_text="+1SD")
+            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="longdash", annotation_text="-1SD")
+
+            fig.update_layout(
+                template="plotly_dark", height=900, 
+                margin=dict(l=0,r=0,t=0,b=0),
+                yaxis=dict(range=[lo, hi], dtick=gran, gridcolor="#333", title="STRIKE"),
+                xaxis=dict(title=f"ESPOSIZIONE NETTA {metric.upper()}", tickformat="$.3s")
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
 
             st.markdown("#### 🧭 MARKET DIRECTION INDICATOR")
             
