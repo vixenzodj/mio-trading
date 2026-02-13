@@ -169,7 +169,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             with col_vol:
                 st.metric("📈 VOLATILITÀ CHAIN IV (Dinamica)", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
 
-            # --- SEZIONE GRAFICO AGGIORNATA ---
             fig = go.Figure()
 
             if view_mode == "📊 Vista Standard (Metrica Singola)":
@@ -182,8 +181,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 ))
                 xaxis_title = f"Net {metric} Exposure"
             else:
-                # --- VANNA VIEW CON DOPPIO ASSE (OVERLAY RICALIBRATO) ---
-                # 1. GAMMA (Asse X inferiore)
+                # --- VANNA VIEW CON DOPPIO ASSE ---
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg['Gamma'], 
@@ -193,7 +191,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     xaxis="x1"
                 ))
                 
-                # 2. VANNA (Asse X superiore per visibilità massima)
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg['Vanna'], 
@@ -214,7 +211,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 )
                 xaxis_title = "Vanna vs Gamma Overlay (Dual Axis)"
 
-            # --- LINEE DI LIVELLO (ORIGINALI) ---
             for strike in visible_agg['strike']:
                 fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
 
@@ -265,7 +261,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             except: zg_val = px
             avg_iv = df_scan['impliedVolatility'].mean()
             sd_move = px * avg_iv * np.sqrt(dte_years)
-            sd1_up, sd1_down = px + sd_move, px - sd1_move = px - sd_move
+            sd1_up, sd1_down = px + sd_move, px - sd_move
             dist_zg_pct = ((px - zg_val) / px) * 100
             is_above_0g = px > zg_val
             near_sd_up = abs(px - sd1_up) / px < 0.005
