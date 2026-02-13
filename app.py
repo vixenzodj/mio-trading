@@ -82,7 +82,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     try:
         available_dates = ticker_obj.options
     except Exception as e:
-        st.error("⚠️ Limite di richieste Yahoo Finance raggiunto (Rate Limit). Attendi qualche minuto o riduci la frequenza di aggiornamento.")
+        st.error("⚠️ Blocco temporaneo di Yahoo Finance (Rate Limit). Attendi un minuto prima del prossimo aggiornamento.")
         st.stop()
 
     all_dates_info = []
@@ -109,6 +109,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             mean_iv = raw_data['impliedVolatility'].mean()
             dte_ref = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
             
+            # --- SALVATAGGIO VOLATILITA' PER CALCOLO DELTA ---
+            if 'prev_iv' not in st.session_state:
+                st.session_state.prev_iv = mean_iv
+            iv_change = mean_iv - st.session_state.prev_iv
+            st.session_state.prev_iv = mean_iv
+
             sd_move = spot * mean_iv * np.sqrt(max(dte_ref, 0.5)/365)
             sd1_up, sd1_down = spot + sd_move, spot - sd_move
             sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
@@ -163,11 +169,26 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
-            # --- GRAFICO (CON INTEGRAZIONE VANNA VIEW) ---
+            # --- CONTROLLO TATTICO E INDICATORE VOLATILITA' ---
+            st.markdown("---")
+            col_view, col_vol = st.columns([2, 1])
+            with col_view:
+                view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
+            with col_vol:
+                # Contatore Volatilità IV Media: Il delta inverse significa che se IV sale diventa rosso (negativo per lo scalper)
+                st.metric("📈 VOLATILITÀ CHAIN IV (Dinamica)", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
+
+            # --- GRAFICO ---
             fig = go.Figure()
 
-            # Selettore Colori e Box Informativo speciale SOLO se siamo in Vanna View
-            if metric == "Vanna":
+            if view_mode == "📊 Vista Standard (Metrica Singola)":
+                # COMPORTAMENTO ORIGINALE INVARIATO AL 100%
+                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg[metric], orientation='h', 
+                                     marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]], line_width=0), width=gran * 0.8))
+                xaxis_title = f"Net {metric}"
+            else:
+                # OVERLAY GAMMA/VANNA (Barra nella Barra)
+                # Calcolo Vanna Max Negativa (Innesco Volatilità)
                 try:
                     max_neg_vanna_idx = visible_agg['Vanna'].idxmin()
                     vanna_trigger_strike = visible_agg.loc[max_neg_vanna_idx, 'strike']
@@ -177,27 +198,36 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 except:
                     vanna_trigger_strike = spot
                     dist_vanna = 0; dist_vanna_pct = 0
-                
+                    vanna_trigger_val = 0
+
                 alert_color = "#FF4136" if vanna_trigger_val < 0 else "#2ECC40"
                 
-                # BOX HUD che appare solo in Vanna View
+                # BOX HUD informativo per la Vanna View
                 st.markdown(f"""
-                <div style='background-color:rgba(30,30,30,1); border: 1px solid {alert_color}; border-radius:5px; padding:10px; display:flex; justify-content:space-around; margin-bottom: 15px;'>
+                <div style='background-color:rgba(30,30,30,1); border: 1px solid {alert_color}; border-radius:5px; padding:10px; display:flex; justify-content:space-around; margin-bottom: 10px;'>
                     <div><b>🌪️ VOL TRIGGER STRIKE:</b> {vanna_trigger_strike:.0f}</div>
                     <div style='color:{alert_color}'><b>DISTANZA SPOT:</b> {dist_vanna:.2f} pts ({dist_vanna_pct:.2f}%)</div>
-                    <div><b>STATUS:</b> {'⚠️ CRITICAL' if vanna_trigger_val < 0 and abs(dist_vanna_pct) < 0.5 else 'MONITOR'}</div>
+                    <div><b>STATUS:</b> {'⚠️ CRITICAL FLIP' if vanna_trigger_val < 0 and abs(dist_vanna_pct) < 0.5 else 'MONITOR'}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
-                colors = ['#FF00FF' if x < 0 else '#00BFFF' for x in visible_agg[metric]]
-            else:
-                colors = ['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]
+                # 1. Grafico GAMMA in secondo piano (Semi-Trasparente)
+                gamma_colors_overlay = ['rgba(0, 255, 65, 0.25)' if x >= 0 else 'rgba(255, 65, 54, 0.25)' for x in visible_agg['Gamma']]
+                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg['Gamma'], orientation='h', 
+                                     marker=dict(color=gamma_colors_overlay, line_width=0), width=gran * 0.8, name="Gamma (Sfondo)"))
+                
+                # 2. Grafico VANNA in primo piano (Barra più sottile Ciano/Magenta)
+                vanna_colors_overlay = ['#FF00FF' if x < 0 else '#00BFFF' for x in visible_agg['Vanna']]
+                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg['Vanna'], orientation='h', 
+                                     marker=dict(color=vanna_colors_overlay, line_width=1, line_color='rgba(255,255,255,0.4)'), width=gran * 0.35, name="Vanna (Primo Piano)"))
 
-            # Disegno barre
-            fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg[metric], orientation='h', 
-                                 marker=dict(color=colors, line_width=0), width=gran * 0.8))
-            
-            # Linee originali MANTENUTE AL 100%
+                # Aggiunta linea Trigger Max Vanna
+                fig.add_hline(y=vanna_trigger_strike, line_color="#FF00FF", line_width=2, line_dash="dashdot", annotation_text="MAX VOL TRIGGER")
+                
+                fig.update_layout(barmode='overlay')
+                xaxis_title = "Gamma vs Vanna Exposure Overlay"
+
+            # --- LINEE ORIGINALI INTATTE PER ENTRAMBE LE VISUALIZZAZIONI ---
             for strike in visible_agg['strike']:
                 fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
 
@@ -210,11 +240,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
             fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="dot", annotation_text="-2SD")
 
-            # Aggiunta linea Trigger SOLO in Vanna View
-            if metric == "Vanna":
-                fig.add_hline(y=vanna_trigger_strike, line_color="#FF00FF", line_width=2, line_dash="dashdot", annotation_text="MAX VOL TRIGGER")
-
-            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=0,b=0), yaxis=dict(range=[lo, hi], dtick=gran), xaxis=dict(title=f"Net {metric}", tickformat="$.2s"))
+            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=0,b=0), yaxis=dict(range=[lo, hi], dtick=gran), xaxis=dict(title=xaxis_title, tickformat="$.2s"))
             st.plotly_chart(fig, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
