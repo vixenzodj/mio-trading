@@ -178,14 +178,54 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 # Contatore Volatilità IV Media: Il delta inverse significa che se IV sale diventa rosso (negativo per lo scalper)
                 st.metric("📈 VOLATILITÀ CHAIN IV (Dinamica)", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
 
-            # --- GRAFICO ---
+           # --- GRAFICO ---
             fig = go.Figure()
 
             if view_mode == "📊 Vista Standard (Metrica Singola)":
-                # COMPORTAMENTO ORIGINALE INVARIATO AL 100%
-                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg[metric], orientation='h', 
-                                     marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]], line_width=0), width=gran * 0.8))
-                xaxis_title = f"Net {metric}"
+                fig.add_trace(go.Bar(
+                    y=visible_agg['strike'], 
+                    x=visible_agg[metric], 
+                    orientation='h', 
+                    marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]),
+                    name=metric
+                ))
+                xaxis_title = f"Net {metric} Exposure"
+            else:
+                # --- VANNA VIEW CON DOPPIO ASSE (OVERLAY RICALIBRATO) ---
+                # 1. GAMMA (Asse X inferiore)
+                fig.add_trace(go.Bar(
+                    y=visible_agg['strike'], 
+                    x=visible_agg['Gamma'], 
+                    orientation='h', 
+                    marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), # Grigio neutro trasparente per lo sfondo
+                    name="Gamma (Background)",
+                    xaxis="x1"
+                ))
+                
+                # 2. VANNA (Asse X superiore per visibilità massima)
+                fig.add_trace(go.Bar(
+                    y=visible_agg['strike'], 
+                    x=visible_agg['Vanna'], 
+                    orientation='h', 
+                    marker=dict(
+                        color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']], # Ciano e Magenta neon
+                        line=dict(color='white', width=1)
+                    ),
+                    width=gran * 0.4, # Più sottile per stare "dentro" la barra gamma
+                    name="Vanna (Focus)",
+                    xaxis="x2"
+                ))
+
+                # Configurazione del Doppio Asse
+                fig.update_layout(
+                    xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
+                    xaxis2=dict(title="Vanna Exposure (Scaled)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
+                    barmode='overlay'
+                )
+                xaxis_title = "Vanna vs Gamma Overlay (Dual Axis)"
+
+            # --- LINEE DI LIVELLO (Prezzo, Muri, SD) ---
+            # (Mantieni qui tutte le righe fig.add_hline che avevi già, sono perfette)
             else:
                 # OVERLAY GAMMA/VANNA (Barra nella Barra)
                 # Calcolo Vanna Max Negativa (Innesco Volatilità)
