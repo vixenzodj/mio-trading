@@ -226,7 +226,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- LINEE DI LIVELLO (Prezzo, Muri, SD) ---
             # (Mantieni qui tutte le righe fig.add_hline che avevi già, sono perfette)
-            else:
+                else:
                 # OVERLAY GAMMA/VANNA (Barra nella Barra)
                 # Calcolo Vanna Max Negativa (Innesco Volatilità)
                 try:
