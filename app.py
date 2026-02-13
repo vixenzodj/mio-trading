@@ -129,6 +129,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             
             c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
             p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
+            # --- AGGIUNTA VANNA TRIGGER ---
+            v_trigger = agg.loc[agg['Vanna'].abs().idxmax(), 'strike']
 
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
 
@@ -163,6 +165,23 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
             st.markdown("---")
+            
+            # --- AGGIUNTA HUD BOX DISTANZE ---
+            def get_dist(target, spot):
+                d = ((target - spot) / spot) * 100
+                color = "#00FF41" if d > 0 else "#FF4136"
+                return f"<span style='color:{color};'>{d:+.2f}%</span>"
+
+            st.markdown(f"""
+                <div style='background-color:rgba(30, 30, 30, 0.8); padding:10px; border-radius:5px; border: 1px solid #444; margin-bottom: 20px; display: flex; justify-content: space-around;'>
+                    <div><b>📍 DIST. CW:</b> {get_dist(c_wall, spot)}</div>
+                    <div><b>📍 DIST. 0G:</b> {get_dist(z_gamma, spot)}</div>
+                    <div><b>📍 DIST. VT:</b> {get_dist(v_trigger, spot)}</div>
+                    <div><b>📍 DIST. PW:</b> {get_dist(p_wall, spot)}</div>
+                    <div><b>📍 DIST. ±1SD:</b> <span style='color:#FFA500;'>{((sd_move)/spot)*100:.2f}%</span></div>
+                </div>
+                """, unsafe_allow_html=True)
+
             col_view, col_vol = st.columns([2, 1])
             with col_view:
                 view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
@@ -218,6 +237,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G")
             fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
             fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
+            # --- LINEA VANNA TRIGGER ---
+            fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
+            
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
             fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
             fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
