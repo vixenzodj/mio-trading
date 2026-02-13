@@ -201,9 +201,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.1)")
 
             fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
-            st.plotly_chart(fig, use_container_width=True)elif menu == "🔥 SCANNER HOT TICKERS":
-    st.title("🔥 Professional Market Scanner (50 Tickers)")
-    c1, c2 = st.columns([1, 4])
+            st.plotly_chart(fig, use_container_width=True)
+
+elif menu == "🔥 SCANNER HOT TICKERS":
+    st.title("🔥 Professional Market Scanner")
+    # ... (Il resto dello scanner rimane invariato, è corretto) ...
+    st.info("Scanner attivo per i 50 principali ticker.")    c1, c2 = st.columns([1, 4])
     with c1:
         if st.button("🔄 AGGIORNA SCANNER", type="primary"):
             st.cache_data.clear()
