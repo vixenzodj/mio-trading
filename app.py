@@ -78,7 +78,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
-    available_dates = ticker_obj.options
+    # --- PROTEZIONE RATE LIMIT YAHOO FINANCE ---
+    try:
+        available_dates = ticker_obj.options
+    except Exception as e:
+        st.error("⚠️ Limite di richieste Yahoo Finance raggiunto (Rate Limit). Attendi qualche minuto o riduci la frequenza di aggiornamento.")
+        st.stop()
+
     all_dates_info = []
     for d in available_dates:
         try:
@@ -90,8 +96,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     
     date_labels = [x['label'] for x in all_dates_info]
     selected_dte_labels = st.sidebar.multiselect("SCADENZE", date_labels, default=date_labels[:1])
-    
-    # Nota: Rimosso selettore Metrica generico dalla sidebar per usare lo switch tattico nel main
+    metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
     gran = st.sidebar.select_slider("GRANULARITÀ", options=[0.5, 1, 2.5, 5, 10, 25, 50, 100], value=default_gran)
     zoom_val = st.sidebar.slider("ZOOM %", 1.0, 20.0, 5.0)
 
@@ -113,7 +118,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             df = get_greeks_pro(raw_data, spot)
             df['strike_bin'] = (np.round(df['strike'] / gran) * gran)
-            # Calcoliamo tutto
             agg = df.groupby('strike_bin', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum().rename(columns={'strike_bin': 'strike'})
             
             lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
@@ -125,9 +129,22 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             # --- HEADER ---
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
 
-            # --- METRIC REGIME ---
+            # --- RIPRISTINO INTEGRALE MARKET DIRECTION LOGIC ---
             net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
+            direction = "NEUTRALE"; bias_color = "gray"
             
+            if net_gamma < 0 and net_vanna < 0:
+                direction = "☢️ PERICOLO ESTREMO (Crash Risk / Short Gamma & Vanna)"; bias_color = "#8B0000"
+            elif net_gamma < 0:
+                direction = "🔴 SHORT GAMMA BIAS (Espansione Volatilità)"; bias_color = "#FF4136"
+            elif spot < z_gamma:
+                direction = "🟠 PRESSIONE SOTTO ZERO GAMMA (Vulnerabilità)"; bias_color = "#FF851B"
+            elif net_gamma > 0 and net_charm < 0:
+                direction = "🚀 BULLISH FLOW (Charm Support / Long Gamma)"; bias_color = "#2ECC40"
+            else:
+                direction = "🔵 LONG GAMMA / STABILITÀ (Contrazione Volatilità)"; bias_color = "#0074D9"
+            
+            # --- REAL-TIME METRIC REGIME ---
             st.markdown(f"### 📊 Real-Time Metric Regime")
             c_reg1, c_reg2, c_reg3, c_reg4 = st.columns(4)
             c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta=f"{'LONG' if net_gamma > 0 else 'SHORT'}")
@@ -135,95 +152,69 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             c_reg3.metric("Net Charm", f"{net_charm:,.0f}", delta=f"{'SUPPORT' if net_charm < 0 else 'DECAY'}")
             c_reg4.metric("Market Regime", "VOL DRIVEN" if net_gamma < 0 else "SPOT DRIVEN")
 
-            # --- INTEGRAZIONE SWITCH TATTICO (GAMMA vs VANNA VIEW) ---
-            st.write("---")
-            col_switch, col_info = st.columns([1, 2])
-            with col_switch:
-                view_mode = st.radio("👁️ MODALITÀ TATTICA", ["🛡️ GAMMA VIEW (Struttura)", "🌪️ VANNA VIEW (Volatilità)"], horizontal=True)
+            # Box Direzione
+            st.markdown(f"""
+                <div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; margin-top: 10px; margin-bottom: 25px;'>
+                    <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
+                </div>
+                """, unsafe_allow_html=True)
 
-            # --- CALCOLI PER VANNA TRIGGER ---
-            # Identifichiamo lo strike con la Vanna più Negativa (Il punto di esplosione della volatilità)
-            try:
-                max_neg_vanna_idx = visible_agg['Vanna'].idxmin()
-                vanna_trigger_strike = visible_agg.loc[max_neg_vanna_idx, 'strike']
-                vanna_trigger_val = visible_agg.loc[max_neg_vanna_idx, 'Vanna']
-                dist_vanna = spot - vanna_trigger_strike
-                dist_vanna_pct = (dist_vanna / spot) * 100
-            except:
-                vanna_trigger_strike = spot
-                dist_vanna = 0
-                dist_vanna_pct = 0
+            # --- METRICHE MURI ---
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
-            # --- CONFIGURAZIONE GRAFICO ---
+            # --- GRAFICO (CON INTEGRAZIONE VANNA VIEW) ---
             fig = go.Figure()
 
-            if "VANNA VIEW" in view_mode:
-                # --- VISUALIZZAZIONE VANNA ---
-                metric_selected = "Vanna"
+            # Selettore Colori e Box Informativo speciale SOLO se siamo in Vanna View
+            if metric == "Vanna":
+                try:
+                    max_neg_vanna_idx = visible_agg['Vanna'].idxmin()
+                    vanna_trigger_strike = visible_agg.loc[max_neg_vanna_idx, 'strike']
+                    vanna_trigger_val = visible_agg.loc[max_neg_vanna_idx, 'Vanna']
+                    dist_vanna = spot - vanna_trigger_strike
+                    dist_vanna_pct = (dist_vanna / spot) * 100
+                except:
+                    vanna_trigger_strike = spot
+                    dist_vanna = 0; dist_vanna_pct = 0
                 
-                # HUD Informativo Vanna
-                with col_info:
-                    alert_color = "#FF4136" if vanna_trigger_val < 0 else "#2ECC40"
-                    st.markdown(f"""
-                    <div style='background-color:rgba(30,30,30,1); border: 1px solid {alert_color}; border-radius:5px; padding:10px; display:flex; justify-content:space-around;'>
-                        <div><b>🌪️ VOL TRIGGER STRIKE:</b> {vanna_trigger_strike:.0f}</div>
-                        <div style='color:{alert_color}'><b>DISTANZA:</b> {dist_vanna:.2f} pts ({dist_vanna_pct:.2f}%)</div>
-                        <div><b>STATUS:</b> {'⚠️ CRITICAL' if vanna_trigger_val < 0 and abs(dist_vanna_pct) < 0.5 else 'MONITOR'}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                alert_color = "#FF4136" if vanna_trigger_val < 0 else "#2ECC40"
+                
+                # BOX HUD che appare solo in Vanna View
+                st.markdown(f"""
+                <div style='background-color:rgba(30,30,30,1); border: 1px solid {alert_color}; border-radius:5px; padding:10px; display:flex; justify-content:space-around; margin-bottom: 15px;'>
+                    <div><b>🌪️ VOL TRIGGER STRIKE:</b> {vanna_trigger_strike:.0f}</div>
+                    <div style='color:{alert_color}'><b>DISTANZA SPOT:</b> {dist_vanna:.2f} pts ({dist_vanna_pct:.2f}%)</div>
+                    <div><b>STATUS:</b> {'⚠️ CRITICAL' if vanna_trigger_val < 0 and abs(dist_vanna_pct) < 0.5 else 'MONITOR'}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                # Colori Vanna: Magenta (Negativo/Pericolo) vs Ciano (Positivo/Stabile)
-                colors = ['#FF00FF' if x < 0 else '#00BFFF' for x in visible_agg['Vanna']]
-                
-                fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg['Vanna'], 
-                    orientation='h', 
-                    marker=dict(color=colors, line_width=0), 
-                    width=gran * 0.8,
-                    name='Vanna Exposure'
-                ))
-                
-                # Vanna Trigger Line
-                fig.add_hline(y=vanna_trigger_strike, line_color="#FF00FF", line_width=2, line_dash="dashdot", annotation_text="MAX VOL TRIGGER")
-
+                colors = ['#FF00FF' if x < 0 else '#00BFFF' for x in visible_agg[metric]]
             else:
-                # --- VISUALIZZAZIONE GAMMA (Standard) ---
-                metric_selected = "Gamma"
-                with col_info:
-                    st.info(f"🧱 STRUTTURA MURI: Call Wall @ {c_wall:.0f} | Put Wall @ {p_wall:.0f} | Zero Gamma @ {z_gamma:.2f}")
+                colors = ['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]
 
-                colors = ['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg['Gamma']]
-                fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg['Gamma'], 
-                    orientation='h', 
-                    marker=dict(color=colors, line_width=0), 
-                    width=gran * 0.8,
-                    name='Gamma Exposure'
-                ))
-                
-                # Linee Gamma Standard
-                fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G")
-                fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
-                fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
-
-            # --- ELEMENTI COMUNI DEL GRAFICO ---
+            # Disegno barre
+            fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg[metric], orientation='h', 
+                                 marker=dict(color=colors, line_width=0), width=gran * 0.8))
+            
+            # Linee originali MANTENUTE AL 100%
             for strike in visible_agg['strike']:
-                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.1)")
+                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
 
             fig.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
+            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G")
+            fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
+            fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
             fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
-            
-            fig.update_layout(
-                template="plotly_dark", 
-                height=800, 
-                margin=dict(l=0,r=0,t=30,b=0), 
-                yaxis=dict(range=[lo, hi], dtick=gran, title="Strike Price"), 
-                xaxis=dict(title=f"Net {metric_selected} Exposure", tickformat="$.2s"),
-                title=dict(text=f"{asset} {metric_selected} Profile", x=0.5)
-            )
+            fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
+            fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="dot", annotation_text="-2SD")
+
+            # Aggiunta linea Trigger SOLO in Vanna View
+            if metric == "Vanna":
+                fig.add_hline(y=vanna_trigger_strike, line_color="#FF00FF", line_width=2, line_dash="dashdot", annotation_text="MAX VOL TRIGGER")
+
+            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=0,b=0), yaxis=dict(range=[lo, hi], dtick=gran), xaxis=dict(title=f"Net {metric}", tickformat="$.2s"))
             st.plotly_chart(fig, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
