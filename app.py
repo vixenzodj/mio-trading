@@ -78,11 +78,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
-    # --- PROTEZIONE RATE LIMIT YAHOO FINANCE ---
     try:
         available_dates = ticker_obj.options
-    except Exception as e:
-        st.error("⚠️ Blocco temporaneo di Yahoo Finance (Rate Limit). Attendi un minuto prima del prossimo aggiornamento.")
+    except:
+        st.error("⚠️ Yahoo Finance Rate Limit. Riprova tra un minuto.")
         st.stop()
 
     all_dates_info = []
@@ -109,9 +108,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             mean_iv = raw_data['impliedVolatility'].mean()
             dte_ref = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
             
-            # --- SALVATAGGIO VOLATILITA' PER CALCOLO DELTA ---
-            if 'prev_iv' not in st.session_state:
-                st.session_state.prev_iv = mean_iv
+            if 'prev_iv' not in st.session_state: st.session_state.prev_iv = mean_iv
             iv_change = mean_iv - st.session_state.prev_iv
             st.session_state.prev_iv = mean_iv
 
@@ -132,158 +129,79 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
             p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
 
-            # --- HEADER ---
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
 
-            # --- RIPRISTINO INTEGRALE MARKET DIRECTION LOGIC ---
+            # --- MARKET BIAS LOGIC ---
             net_gamma, net_vanna, net_charm = agg['Gamma'].sum(), agg['Vanna'].sum(), agg['Charm'].sum()
             direction = "NEUTRALE"; bias_color = "gray"
-            
-            if net_gamma < 0 and net_vanna < 0:
-                direction = "☢️ PERICOLO ESTREMO (Crash Risk / Short Gamma & Vanna)"; bias_color = "#8B0000"
-            elif net_gamma < 0:
-                direction = "🔴 SHORT GAMMA BIAS (Espansione Volatilità)"; bias_color = "#FF4136"
-            elif spot < z_gamma:
-                direction = "🟠 PRESSIONE SOTTO ZERO GAMMA (Vulnerabilità)"; bias_color = "#FF851B"
-            elif net_gamma > 0 and net_charm < 0:
-                direction = "🚀 BULLISH FLOW (Charm Support / Long Gamma)"; bias_color = "#2ECC40"
-            else:
-                direction = "🔵 LONG GAMMA / STABILITÀ (Contrazione Volatilità)"; bias_color = "#0074D9"
-            
-            # --- REAL-TIME METRIC REGIME ---
+            if net_gamma < 0 and net_vanna < 0: direction = "☢️ PERICOLO ESTREMO"; bias_color = "#8B0000"
+            elif net_gamma < 0: direction = "🔴 SHORT GAMMA BIAS"; bias_color = "#FF4136"
+            elif spot < z_gamma: direction = "🟠 PRESSIONE SOTTO 0-G"; bias_color = "#FF851B"
+            elif net_gamma > 0 and net_charm < 0: direction = "🚀 BULLISH FLOW"; bias_color = "#2ECC40"
+            else: direction = "🔵 LONG GAMMA STABILITY"; bias_color = "#0074D9"
+
+            # Dashboard Metrics
             st.markdown(f"### 📊 Real-Time Metric Regime")
             c_reg1, c_reg2, c_reg3, c_reg4 = st.columns(4)
-            c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta=f"{'LONG' if net_gamma > 0 else 'SHORT'}")
-            c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}", delta=f"{'STABLE' if net_vanna > 0 else 'UNSTABLE'}")
-            c_reg3.metric("Net Charm", f"{net_charm:,.0f}", delta=f"{'SUPPORT' if net_charm < 0 else 'DECAY'}")
+            c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}")
+            c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}")
+            c_reg3.metric("Net Charm", f"{net_charm:,.0f}")
             c_reg4.metric("Market Regime", "VOL DRIVEN" if net_gamma < 0 else "SPOT DRIVEN")
 
-            # Box Direzione
-            st.markdown(f"""
-                <div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; margin-top: 10px; margin-bottom: 25px;'>
-                    <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
-                </div>
-                """, unsafe_allow_html=True)
+            st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; color:white; font-size:24px;'><b>MARKET BIAS: {direction}</b></div>", unsafe_allow_html=True)
 
-            # --- METRICHE MURI ---
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
-            # --- CONTROLLO TATTICO E INDICATORE VOLATILITA' ---
+            # --- CONTROLLI TATTICI ---
             st.markdown("---")
             col_view, col_vol = st.columns([2, 1])
             with col_view:
-                view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
+                view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard", "🌪️ Vanna View (Overlay)"], horizontal=True)
             with col_vol:
-                # Contatore Volatilità IV Media: Il delta inverse significa che se IV sale diventa rosso (negativo per lo scalper)
-                st.metric("📈 VOLATILITÀ CHAIN IV (Dinamica)", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
+                st.metric("📈 VOLATILITÀ CHAIN IV", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
 
-           # --- GRAFICO ---
+            # --- LOGICA GRAFICO ---
             fig = go.Figure()
 
-            if view_mode == "📊 Vista Standard (Metrica Singola)":
+            if view_mode == "📊 Vista Standard":
                 fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg[metric], 
-                    orientation='h', 
+                    y=visible_agg['strike'], x=visible_agg[metric], orientation='h', 
                     marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]),
                     name=metric
                 ))
                 xaxis_title = f"Net {metric} Exposure"
             else:
-                # --- VANNA VIEW CON DOPPIO ASSE (OVERLAY RICALIBRATO) ---
-                # 1. GAMMA (Asse X inferiore)
+                # VANNA VIEW CON DOPPIO ASSE X
+                # 1. Gamma (Sfondo)
                 fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg['Gamma'], 
-                    orientation='h', 
-                    marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), # Grigio neutro trasparente per lo sfondo
-                    name="Gamma (Background)",
-                    xaxis="x1"
+                    y=visible_agg['strike'], x=visible_agg['Gamma'], orientation='h', 
+                    marker=dict(color='rgba(150, 150, 150, 0.25)'), name="Gamma (Sfondo)", xaxis="x1"
                 ))
-                
-                # 2. VANNA (Asse X superiore per visibilità massima)
+                # 2. Vanna (Primo piano - Ciano/Magenta)
                 fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg['Vanna'], 
-                    orientation='h', 
-                    marker=dict(
-                        color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']], # Ciano e Magenta neon
-                        line=dict(color='white', width=1)
-                    ),
-                    width=gran * 0.4, # Più sottile per stare "dentro" la barra gamma
-                    name="Vanna (Focus)",
-                    xaxis="x2"
+                    y=visible_agg['strike'], x=visible_agg['Vanna'], orientation='h', 
+                    marker=dict(color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']]),
+                    width=gran*0.4, name="Vanna (Focus)", xaxis="x2"
                 ))
-
-                # Configurazione del Doppio Asse
                 fig.update_layout(
-                    xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
-                    xaxis2=dict(title="Vanna Exposure (Scaled)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
+                    xaxis=dict(title="Gamma Scale", side="bottom"),
+                    xaxis2=dict(title="Vanna Scale (Neon)", side="top", overlaying="x", zerolinecolor="white"),
                     barmode='overlay'
                 )
-                xaxis_title = "Vanna vs Gamma Overlay (Dual Axis)"
+                xaxis_title = "Vanna vs Gamma Overlay"
 
-            # --- LINEE DI LIVELLO (Prezzo, Muri, SD) ---
-            # (Mantieni qui tutte le righe fig.add_hline che avevi già, sono perfette)
-                else:
-                # OVERLAY GAMMA/VANNA (Barra nella Barra)
-                # Calcolo Vanna Max Negativa (Innesco Volatilità)
-                try:
-                    max_neg_vanna_idx = visible_agg['Vanna'].idxmin()
-                    vanna_trigger_strike = visible_agg.loc[max_neg_vanna_idx, 'strike']
-                    vanna_trigger_val = visible_agg.loc[max_neg_vanna_idx, 'Vanna']
-                    dist_vanna = spot - vanna_trigger_strike
-                    dist_vanna_pct = (dist_vanna / spot) * 100
-                except:
-                    vanna_trigger_strike = spot
-                    dist_vanna = 0; dist_vanna_pct = 0
-                    vanna_trigger_val = 0
-
-                alert_color = "#FF4136" if vanna_trigger_val < 0 else "#2ECC40"
-                
-                # BOX HUD informativo per la Vanna View
-                st.markdown(f"""
-                <div style='background-color:rgba(30,30,30,1); border: 1px solid {alert_color}; border-radius:5px; padding:10px; display:flex; justify-content:space-around; margin-bottom: 10px;'>
-                    <div><b>🌪️ VOL TRIGGER STRIKE:</b> {vanna_trigger_strike:.0f}</div>
-                    <div style='color:{alert_color}'><b>DISTANZA SPOT:</b> {dist_vanna:.2f} pts ({dist_vanna_pct:.2f}%)</div>
-                    <div><b>STATUS:</b> {'⚠️ CRITICAL FLIP' if vanna_trigger_val < 0 and abs(dist_vanna_pct) < 0.5 else 'MONITOR'}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # 1. Grafico GAMMA in secondo piano (Semi-Trasparente)
-                gamma_colors_overlay = ['rgba(0, 255, 65, 0.25)' if x >= 0 else 'rgba(255, 65, 54, 0.25)' for x in visible_agg['Gamma']]
-                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg['Gamma'], orientation='h', 
-                                     marker=dict(color=gamma_colors_overlay, line_width=0), width=gran * 0.8, name="Gamma (Sfondo)"))
-                
-                # 2. Grafico VANNA in primo piano (Barra più sottile Ciano/Magenta)
-                vanna_colors_overlay = ['#FF00FF' if x < 0 else '#00BFFF' for x in visible_agg['Vanna']]
-                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg['Vanna'], orientation='h', 
-                                     marker=dict(color=vanna_colors_overlay, line_width=1, line_color='rgba(255,255,255,0.4)'), width=gran * 0.35, name="Vanna (Primo Piano)"))
-
-                # Aggiunta linea Trigger Max Vanna
-                fig.add_hline(y=vanna_trigger_strike, line_color="#FF00FF", line_width=2, line_dash="dashdot", annotation_text="MAX VOL TRIGGER")
-                
-                fig.update_layout(barmode='overlay')
-                xaxis_title = "Gamma vs Vanna Exposure Overlay"
-
-            # --- LINEE ORIGINALI INTATTE PER ENTRAMBE LE VISUALIZZAZIONI ---
-            for strike in visible_agg['strike']:
-                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
-
+            # --- LIVELLI E FINISH ---
             fig.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
             fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G")
             fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
             fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
-            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
-            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
-            fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
-            fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="dot", annotation_text="-2SD")
+            
+            for strike in visible_agg['strike']:
+                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.1)")
 
-            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=0,b=0), yaxis=dict(range=[lo, hi], dtick=gran), xaxis=dict(title=xaxis_title, tickformat="$.2s"))
-            st.plotly_chart(fig, use_container_width=True)
-
-elif menu == "🔥 SCANNER HOT TICKERS":
+            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
+            st.plotly_chart(fig, use_container_width=True)elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
     c1, c2 = st.columns([1, 4])
     with c1:
