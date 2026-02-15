@@ -18,12 +18,11 @@ def calculate_gex_at_price(price, df, mode='hybrid', r=0.045):
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
     
-    # Selezione della sorgente dati per il calcolo
     if mode == 'oi':
         exposure_size = df['openInterest'].fillna(0).values
     elif mode == 'vol':
         exposure_size = df['volume'].fillna(0).values
-    else: # hybrid (logica originale)
+    else: # hybrid
         exposure_size = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
         
     d1 = (np.log(price/K) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
@@ -88,8 +87,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
     try:
         available_dates = ticker_obj.options
-    except Exception as e:
-        st.error("⚠️ Blocco temporaneo di Yahoo Finance (Rate Limit). Attendi un minuto prima del prossimo aggiornamento.")
+    except:
+        st.error("⚠️ Yahoo Finance Rate Limit. Attendi un minuto.")
         st.stop()
 
     all_dates_info = []
@@ -116,22 +115,17 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             mean_iv = raw_data['impliedVolatility'].mean()
             dte_ref = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
             
-            if 'prev_iv' not in st.session_state:
-                st.session_state.prev_iv = mean_iv
+            if 'prev_iv' not in st.session_state: st.session_state.prev_iv = mean_iv
             iv_change = mean_iv - st.session_state.prev_iv
             st.session_state.prev_iv = mean_iv
 
             sd_move = spot * mean_iv * np.sqrt(max(dte_ref, 0.5)/365)
             sd1_up, sd1_down = spot + sd_move, spot - sd_move
-            sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
 
-            # --- CALCOLO DOPPIO ZERO GAMMA ---
             try: z_gamma_oi = brentq(calculate_gex_at_price, spot * 0.80, spot * 1.20, args=(raw_data, 'oi'))
             except: z_gamma_oi = spot
             try: z_gamma_vol = brentq(calculate_gex_at_price, spot * 0.80, spot * 1.20, args=(raw_data, 'vol'))
             except: z_gamma_vol = spot
-
-            # Manteniamo z_gamma (originale) per il bias
             try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data, 'hybrid'))
             except: z_gamma = spot 
 
@@ -152,28 +146,24 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             direction = "NEUTRALE"; bias_color = "gray"
             
             if net_gamma < 0 and net_vanna < 0:
-                direction = "☢️ PERICOLO ESTREMO (Crash Risk / Short Gamma & Vanna)"; bias_color = "#8B0000"
+                direction = "☢️ PERICOLO ESTREMO"; bias_color = "#8B0000"
             elif net_gamma < 0:
-                direction = "🔴 SHORT GAMMA BIAS (Espansione Volatilità)"; bias_color = "#FF4136"
+                direction = "🔴 SHORT GAMMA BIAS"; bias_color = "#FF4136"
             elif spot < z_gamma:
-                direction = "🟠 PRESSIONE SOTTO ZERO GAMMA (Vulnerabilità)"; bias_color = "#FF851B"
+                direction = "🟠 PRESSIONE SOTTO ZERO GAMMA"; bias_color = "#FF851B"
             elif net_gamma > 0 and net_charm < 0:
-                direction = "🚀 BULLISH FLOW (Charm Support / Long Gamma)"; bias_color = "#2ECC40"
+                direction = "🚀 BULLISH FLOW"; bias_color = "#2ECC40"
             else:
-                direction = "🔵 LONG GAMMA / STABILITÀ (Contrazione Volatilità)"; bias_color = "#0074D9"
+                direction = "🔵 LONG GAMMA STABILITÀ"; bias_color = "#0074D9"
             
             st.markdown(f"### 📊 Real-Time Metric Regime")
             c_reg1, c_reg2, c_reg3, c_reg4 = st.columns(4)
-            c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta=f"{'LONG' if net_gamma > 0 else 'SHORT'}")
-            c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}", delta=f"{'STABLE' if net_vanna > 0 else 'UNSTABLE'}")
-            c_reg3.metric("Net Charm", f"{net_charm:,.0f}", delta=f"{'SUPPORT' if net_charm < 0 else 'DECAY'}")
+            c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta="LONG" if net_gamma > 0 else "SHORT")
+            c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}", delta="STABLE" if net_vanna > 0 else "UNSTABLE")
+            c_reg3.metric("Net Charm", f"{net_charm:,.0f}", delta="SUPPORT" if net_charm < 0 else "DECAY")
             c_reg4.metric("Market Regime", "VOL DRIVEN" if net_gamma < 0 else "SPOT DRIVEN")
 
-            st.markdown(f"""
-                <div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; margin-top: 10px; margin-bottom: 25px;'>
-                    <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
-                </div>
-                """, unsafe_allow_html=True)
+            st.markdown(f"<div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; margin-bottom: 25px;'><b style='color:white; font-size:24px;'>BIAS: {direction}</b></div>", unsafe_allow_html=True)
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
@@ -181,163 +171,86 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             m3.metric("PUT WALL", f"{p_wall:.0f}")
             m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
-            st.markdown("---")
-            
             def get_dist(target, spot):
                 d = ((target - spot) / spot) * 100
                 color = "#00FF41" if d > 0 else "#FF4136"
                 return f"<span style='color:{color};'>{d:+.2f}%</span>"
 
-            st.markdown(f"""
-                <div style='background-color:rgba(30, 30, 30, 0.8); padding:10px; border-radius:5px; border: 1px solid #444; margin-bottom: 20px; display: flex; justify-content: space-around;'>
-                    <div><b>📍 DIST. CW:</b> {get_dist(c_wall, spot)}</div>
-                    <div><b>📍 0G-STATIC:</b> {get_dist(z_gamma_oi, spot)}</div>
-                    <div><b>📍 0G-DYNAMIC:</b> {get_dist(z_gamma_vol, spot)}</div>
-                    <div><b>📍 DIST. VT:</b> {get_dist(v_trigger, spot)}</div>
-                    <div><b>📍 DIST. PW:</b> {get_dist(p_wall, spot)}</div>
-                </div>
-                """, unsafe_allow_html=True)
+            st.markdown(f"""<div style='background-color:rgba(30, 30, 30, 0.8); padding:10px; border-radius:5px; border: 1px solid #444; margin-bottom: 20px; display: flex; justify-content: space-around;'>
+                <div><b>📍 DIST. CW:</b> {get_dist(c_wall, spot)}</div>
+                <div><b>📍 0G-STATIC:</b> {get_dist(z_gamma_oi, spot)}</div>
+                <div><b>📍 0G-DYNAMIC:</b> {get_dist(z_gamma_vol, spot)}</div>
+                <div><b>📍 DIST. VT:</b> {get_dist(v_trigger, spot)}</div>
+                <div><b>📍 DIST. PW:</b> {get_dist(p_wall, spot)}</div>
+            </div>""", unsafe_allow_html=True)
 
             col_view, col_vol = st.columns([2, 1])
-            with col_view:
-                view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
-            with col_vol:
-                st.metric("📈 VOLATILITÀ CHAIN IV (Dinamica)", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
+            with col_view: view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard", "🌪️ Vanna View"], horizontal=True)
+            with col_vol: st.metric("📈 VOLATILITÀ IV", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
 
             fig = go.Figure()
-
-            if view_mode == "📊 Vista Standard (Metrica Singola)":
-                fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg[metric], 
-                    orientation='h', 
-                    marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]),
-                    name=metric
-                ))
-                xaxis_title = f"Net {metric} Exposure"
+            if "Standard" in view_mode:
+                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg[metric], orientation='h', marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]), name=metric))
             else:
-                fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg['Gamma'], 
-                    orientation='h', 
-                    marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), 
-                    name="Gamma (Background)",
-                    xaxis="x1"
-                ))
-                fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], 
-                    x=visible_agg['Vanna'], 
-                    orientation='h', 
-                    marker=dict(color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']], line=dict(color='white', width=1)),
-                    width=gran * 0.4, 
-                    name="Vanna (Focus)",
-                    xaxis="x2"
-                ))
-                fig.update_layout(
-                    xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
-                    xaxis2=dict(title="Vanna Exposure (Scaled)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
-                    barmode='overlay'
-                )
-                xaxis_title = "Vanna vs Gamma Overlay (Dual Axis)"
-
-            for strike in visible_agg['strike']:
-                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
+                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg['Gamma'], orientation='h', marker=dict(color='rgba(100, 100, 100, 0.3)'), name="Gamma", xaxis="x1"))
+                fig.add_trace(go.Bar(y=visible_agg['strike'], x=visible_agg['Vanna'], orientation='h', marker=dict(color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']]), width=gran * 0.4, name="Vanna", xaxis="x2"))
+                fig.update_layout(xaxis=dict(title="Gamma"), xaxis2=dict(title="Vanna", overlaying="x", side="top"), barmode='overlay')
 
             fig.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
             fig.add_hline(y=z_gamma_oi, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G STATIC")
             fig.add_hline(y=z_gamma_vol, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC")
             fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
             fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
-            fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VT")
-            
-            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
-            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
-
-            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
+            fig.update_layout(template="plotly_dark", height=850, yaxis=dict(range=[lo, hi], dtick=gran))
             st.plotly_chart(fig, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
-    st.title("🔥 Professional Market Scanner (50 Tickers)")
-    c1, c2 = st.columns([1, 4])
-    with c1:
-        if st.button("🔄 AGGIORNA SCANNER", type="primary"):
-            st.cache_data.clear()
-            st.rerun()
-    with c2:
-        expiry_mode = st.selectbox("📅 SELEZIONE SCADENZE:", ["0-1 DTE (Scalping/Intraday)", "Prossima Scadenza Mensile (Swing)"])
-    
+    st.title("🔥 Professional Market Scanner")
+    expiry_mode = st.selectbox("📅 SCADENZE:", ["0-1 DTE (Scalping/Intraday)", "Prossima Scadenza Mensile (Swing)"])
     tickers_50 = ["^NDX", "^SPX", "^RUT", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NFLX", "AMD", "AVGO", "MU", "INTC", "QCOM", "ARM", "TSM", "SMCI", "MSTR", "COIN", "MARA", "RIOT", "CLSK", "BITO", "PLTR", "SNOW", "U", "DKNG", "HOOD", "SHOP", "SQ", "PYPL", "ROKU", "JPM", "GS", "BAC", "V", "MA", "LLY", "UNH", "PFE", "XOM", "CVX", "DIS", "BA"]
     
     scan_results = []
     progress_bar = st.progress(0)
-    status_text = st.empty()
-    
     for i, t_name in enumerate(tickers_50):
-        status_text.text(f"Scansione: {t_name} ({i+1}/{len(tickers_50)})")
         try:
             t_obj = yf.Ticker(t_name)
-            hist = t_obj.history(period='5d')
+            hist = t_obj.history(period='1d')
             if hist.empty: continue
             px = hist['Close'].iloc[-1]
             opts = t_obj.options
-            if not opts: continue
             target_opt = opts[0] if "0-1 DTE" in expiry_mode else (opts[2] if len(opts) > 2 else opts[0])
             oc = t_obj.option_chain(target_opt)
             df_scan = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
-            dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today).days + 1, 0.5) / 365
-            df_scan['dte_years'] = dte_years
-            df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
+            df_scan['dte_years'] = max((datetime.strptime(target_opt, '%Y-%m-%d') - today).days + 1, 0.5) / 365
             
-            # --- CALCOLO DUAL CORE SCANNER ---
             try: zg_oi = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan, 'oi'))
             except: zg_oi = px
             try: zg_vol = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan, 'vol'))
             except: zg_vol = px
             
             divergenza = ((zg_vol - zg_oi) / zg_oi) * 100
-            pressione = "🟢 BULLISH FLOW" if zg_vol < zg_oi else "🔴 BEARISH FLOW"
+            pressione = "🟢 BULLISH" if zg_vol < zg_oi else "🔴 BEARISH"
             if abs(divergenza) < 0.1: pressione = "⚪ NEUTRALE"
 
             avg_iv = df_scan['impliedVolatility'].mean()
-            sd_move = px * avg_iv * np.sqrt(dte_years)
-            sd1_up, sd1_down = px + sd_move, px - sd1_down = px - sd_move
+            sd_move = px * avg_iv * np.sqrt(df_scan['dte_years'].iloc[0])
+            sd1_up, sd1_down = px + sd_move, px - sd_move # <--- RIGA CORRETTA QUI
             
             dist_zg_pct = ((px - zg_vol) / px) * 100
-            is_above_0g = px > zg_vol # Usiamo il Dynamic per lo stato reale
+            is_above_0g = px > zg_vol
             
-            near_sd_up = abs(px - sd1_up) / px < 0.005
-            near_sd_down = abs(px - sd1_down) / px < 0.005
-            
-            if not is_above_0g: 
-                if near_sd_down: status_label = "🔴 < 0G | TEST -1SD (Bounce?)"
-                elif px < sd1_down: status_label = "⚫ < 0G | SOTTO -1SD (Short Ext)"
-                else: status_label = "🔻 SOTTO 0G (Short Bias)"
-            else: 
-                if near_sd_up: status_label = "🟡 > 0G | TEST +1SD (Breakout?)"
-                elif px > sd1_up: status_label = "🟢 > 0G | SOPRA +1SD (Long Ext)"
-                elif near_sd_down: status_label = "🟢 > 0G | DIP BUY (Test -1SD)"
-                else: status_label = "✅ SOPRA 0G (Long Bias)"
-            
-            if abs(dist_zg_pct) < 0.3: status_label = "🔥 FLIP IMMINENTE (0G)"
+            if not is_above_0g: status_label = "🔻 SOTTO 0G"
+            else: status_label = "✅ SOPRA 0G"
+            if abs(dist_zg_pct) < 0.3: status_label = "🔥 FLIP"
             
             scan_results.append({
-                "Ticker": t_name.replace("^", ""), 
-                "Prezzo": round(px, 2), 
-                "0-G Static (OI)": round(zg_oi, 2),
-                "0-G Dynamic (Vol)": round(zg_vol, 2),
-                "Div %": f"{divergenza:+.2f}%",
-                "Pressione": pressione,
-                "Analisi": status_label, 
-                "_sort": abs(dist_zg_pct)
+                "Ticker": t_name.replace("^", ""), "Prezzo": round(px, 2), 
+                "0-G Static": round(zg_oi, 2), "0-G Dynamic": round(zg_vol, 2),
+                "Div %": f"{divergenza:+.2f}%", "Pressione": pressione, "Analisi": status_label, "_sort": abs(dist_zg_pct)
             })
         except: continue
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
         final_df = pd.DataFrame(scan_results).sort_values("_sort").drop(columns=["_sort"])
-        def color_logic(val):
-            if "🔥" in val or "🔴" in val: return 'color: #FF4136; font-weight: bold'
-            if "🟢" in val or "✅" in val: return 'color: #2ECC40; font-weight: bold'
-            if "🟡" in val: return 'color: #FFDC00'
-            return ''
-        st.dataframe(final_df.style.applymap(color_logic, subset=['Analisi', 'Pressione']), use_container_width=True, height=800)
+        st.dataframe(final_df.style.applymap(lambda x: 'color: #FF4136' if '🔴' in str(x) or '🔻' in str(x) else 'color: #2ECC40' if '🟢' in str(x) or '✅' in str(x) else ''), use_container_width=True, height=800)
