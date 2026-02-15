@@ -13,11 +13,19 @@ st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", init
 st_autorefresh(interval=60000, key="sentinel_refresh")
 
 # --- CORE QUANT ENGINE ---
-def calculate_gex_at_price(price, df, r=0.045):
+def calculate_gex_at_price(price, df, mode='hybrid', r=0.045):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
-    exposure_size = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
+    
+    # Selezione della sorgente dati per il calcolo
+    if mode == 'oi':
+        exposure_size = df['openInterest'].fillna(0).values
+    elif mode == 'vol':
+        exposure_size = df['volume'].fillna(0).values
+    else: # hybrid (logica originale)
+        exposure_size = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
+        
     d1 = (np.log(price/K) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     gamma = norm.pdf(d1) / (price * iv * np.sqrt(T))
     side = np.where(df['type'] == 'call', 1, -1)
@@ -117,7 +125,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             sd1_up, sd1_down = spot + sd_move, spot - sd_move
             sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
 
-            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
+            # --- CALCOLO DOPPIO ZERO GAMMA ---
+            try: z_gamma_oi = brentq(calculate_gex_at_price, spot * 0.80, spot * 1.20, args=(raw_data, 'oi'))
+            except: z_gamma_oi = spot
+            try: z_gamma_vol = brentq(calculate_gex_at_price, spot * 0.80, spot * 1.20, args=(raw_data, 'vol'))
+            except: z_gamma_vol = spot
+
+            # Manteniamo z_gamma (originale) per il bias
+            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data, 'hybrid'))
             except: z_gamma = spot 
 
             df = get_greeks_pro(raw_data, spot)
@@ -129,7 +144,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             
             c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
             p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
-            # --- AGGIUNTA VANNA TRIGGER ---
             v_trigger = agg.loc[agg['Vanna'].abs().idxmax(), 'strike']
 
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
@@ -162,11 +176,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 """, unsafe_allow_html=True)
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("CALL WALL", f"{c_wall:.0f}"); m2.metric("ZERO GAMMA", f"{z_gamma:.2f}"); m3.metric("PUT WALL", f"{p_wall:.0f}"); m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
+            m1.metric("CALL WALL", f"{c_wall:.0f}")
+            m2.metric("0-G (OI / VOL)", f"{z_gamma_oi:.0f} | {z_gamma_vol:.0f}", delta=f"{z_gamma_vol - z_gamma_oi:+.2f} DIFF", delta_color="inverse")
+            m3.metric("PUT WALL", f"{p_wall:.0f}")
+            m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
 
             st.markdown("---")
             
-            # --- AGGIUNTA HUD BOX DISTANZE ---
             def get_dist(target, spot):
                 d = ((target - spot) / spot) * 100
                 color = "#00FF41" if d > 0 else "#FF4136"
@@ -175,10 +191,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             st.markdown(f"""
                 <div style='background-color:rgba(30, 30, 30, 0.8); padding:10px; border-radius:5px; border: 1px solid #444; margin-bottom: 20px; display: flex; justify-content: space-around;'>
                     <div><b>📍 DIST. CW:</b> {get_dist(c_wall, spot)}</div>
-                    <div><b>📍 DIST. 0G:</b> {get_dist(z_gamma, spot)}</div>
+                    <div><b>📍 0G-STATIC:</b> {get_dist(z_gamma_oi, spot)}</div>
+                    <div><b>📍 0G-DYNAMIC:</b> {get_dist(z_gamma_vol, spot)}</div>
                     <div><b>📍 DIST. VT:</b> {get_dist(v_trigger, spot)}</div>
                     <div><b>📍 DIST. PW:</b> {get_dist(p_wall, spot)}</div>
-                    <div><b>📍 DIST. ±1SD:</b> <span style='color:#FFA500;'>{((sd_move)/spot)*100:.2f}%</span></div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -200,7 +216,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 ))
                 xaxis_title = f"Net {metric} Exposure"
             else:
-                # --- VANNA VIEW CON DOPPIO ASSE ---
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg['Gamma'], 
@@ -209,20 +224,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     name="Gamma (Background)",
                     xaxis="x1"
                 ))
-                
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg['Vanna'], 
                     orientation='h', 
-                    marker=dict(
-                        color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']], 
-                        line=dict(color='white', width=1)
-                    ),
+                    marker=dict(color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']], line=dict(color='white', width=1)),
                     width=gran * 0.4, 
                     name="Vanna (Focus)",
                     xaxis="x2"
                 ))
-
                 fig.update_layout(
                     xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
                     xaxis2=dict(title="Vanna Exposure (Scaled)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
@@ -234,16 +244,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
 
             fig.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
-            fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G")
+            fig.add_hline(y=z_gamma_oi, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G STATIC")
+            fig.add_hline(y=z_gamma_vol, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC")
             fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
             fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
-            # --- LINEA VANNA TRIGGER ---
-            fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
+            fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VT")
             
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
             fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
-            fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
-            fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="dot", annotation_text="-2SD")
 
             fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
             st.plotly_chart(fig, use_container_width=True)
@@ -279,13 +287,24 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today).days + 1, 0.5) / 365
             df_scan['dte_years'] = dte_years
             df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
-            try: zg_val = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan,))
-            except: zg_val = px
+            
+            # --- CALCOLO DUAL CORE SCANNER ---
+            try: zg_oi = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan, 'oi'))
+            except: zg_oi = px
+            try: zg_vol = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan, 'vol'))
+            except: zg_vol = px
+            
+            divergenza = ((zg_vol - zg_oi) / zg_oi) * 100
+            pressione = "🟢 BULLISH FLOW" if zg_vol < zg_oi else "🔴 BEARISH FLOW"
+            if abs(divergenza) < 0.1: pressione = "⚪ NEUTRALE"
+
             avg_iv = df_scan['impliedVolatility'].mean()
             sd_move = px * avg_iv * np.sqrt(dte_years)
-            sd1_up, sd1_down = px + sd_move, px - sd_move
-            dist_zg_pct = ((px - zg_val) / px) * 100
-            is_above_0g = px > zg_val
+            sd1_up, sd1_down = px + sd_move, px - sd1_down = px - sd_move
+            
+            dist_zg_pct = ((px - zg_vol) / px) * 100
+            is_above_0g = px > zg_vol # Usiamo il Dynamic per lo stato reale
+            
             near_sd_up = abs(px - sd1_up) / px < 0.005
             near_sd_down = abs(px - sd1_down) / px < 0.005
             
@@ -298,18 +317,27 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                 elif px > sd1_up: status_label = "🟢 > 0G | SOPRA +1SD (Long Ext)"
                 elif near_sd_down: status_label = "🟢 > 0G | DIP BUY (Test -1SD)"
                 else: status_label = "✅ SOPRA 0G (Long Bias)"
+            
             if abs(dist_zg_pct) < 0.3: status_label = "🔥 FLIP IMMINENTE (0G)"
-            scan_results.append({"Ticker": t_name.replace("^", ""), "Prezzo": round(px, 2), "0-Gamma": round(zg_val, 2), "1SD Range": f"{sd1_down:.0f}-{sd1_up:.0f}", "Dist. 0G %": round(dist_zg_pct, 2), "Analisi": status_label, "_sort": abs(dist_zg_pct)})
+            
+            scan_results.append({
+                "Ticker": t_name.replace("^", ""), 
+                "Prezzo": round(px, 2), 
+                "0-G Static (OI)": round(zg_oi, 2),
+                "0-G Dynamic (Vol)": round(zg_vol, 2),
+                "Div %": f"{divergenza:+.2f}%",
+                "Pressione": pressione,
+                "Analisi": status_label, 
+                "_sort": abs(dist_zg_pct)
+            })
         except: continue
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
         final_df = pd.DataFrame(scan_results).sort_values("_sort").drop(columns=["_sort"])
         def color_logic(val):
-            if "🔥" in val: return 'background-color: #8B0000; color: white'
-            if "🔴" in val: return 'color: #FF4136; font-weight: bold'
-            if "🟢" in val: return 'color: #2ECC40; font-weight: bold'
+            if "🔥" in val or "🔴" in val: return 'color: #FF4136; font-weight: bold'
+            if "🟢" in val or "✅" in val: return 'color: #2ECC40; font-weight: bold'
             if "🟡" in val: return 'color: #FFDC00'
-            if "✅" in val: return 'color: #0074D9'
             return ''
-        st.dataframe(final_df.style.applymap(color_logic, subset=['Analisi']), use_container_width=True, height=800)
+        st.dataframe(final_df.style.applymap(color_logic, subset=['Analisi', 'Pressione']), use_container_width=True, height=800)
