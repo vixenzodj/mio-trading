@@ -11,8 +11,6 @@ import time  # <-- Manteniamo l'import per il delay anti-ban
 
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
-# Refresh spostato a 5 minuti per evitare il Rate Limit su 50 Ticker
-st_autorefresh(interval=300000, key="sentinel_refresh")
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045):
@@ -91,6 +89,16 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS"])
+
+# --- MODIFICA RICHIESTA ---
+# Dashboard: refresh ogni 1 minuto (60000 ms)
+# Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
+if menu == "🏟️ DASHBOARD SINGOLA":
+    st_autorefresh(interval=60000, key="sentinel_dash_refresh")
+else:
+    st_autorefresh(interval=300000, key="sentinel_scan_refresh")
+# --------------------------
+
 today = datetime.now()
 today_str_format = today.strftime('%Y-%m-%d') # Per la cache
 
