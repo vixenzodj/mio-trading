@@ -179,7 +179,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
-            # Visualizzazione Duale dello Zero Gamma
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
             m3.metric("PUT WALL", f"{p_wall:.0f}")
             m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
@@ -200,6 +199,45 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     <div><b>📍 DIST. ±1SD:</b> <span style='color:#FFA500;'>{((sd_move)/spot)*100:.2f}%</span></div>
                 </div>
                 """, unsafe_allow_html=True)
+
+            # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
+            with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
+                # Calcolo Sentiment Score (Max 10, Min -10)
+                pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
+                vanna_score = 3 if net_vanna > 0 else -3
+                charm_score = 3 if net_charm < 0 else -3
+                total_ss = pos_score + vanna_score + charm_score
+                
+                hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
+                
+                pos_text = "🟢 SOPRA entrambi 0-G (Pieno controllo acquirenti)" if pos_score == 4 else ("🔴 SOTTO entrambi 0-G (Pieno controllo venditori)" if pos_score == -4 else "🟡 Divergenza OI vs Volumi (Fase incerta)")
+                vanna_text = "🟢 Stabile (Nessuno Squeeze Imminente)" if vanna_score == 3 else "🔴 Pericolo Squeeze (Dealer costretti a comprare/vendere in corsa)"
+                charm_text = "🔵 Supporto Passivo (Il tempo aiuta i Long)" if charm_score == 3 else "🔴 Flusso in Uscita (Il tempo pesa sul prezzo)"
+
+                st.markdown(f"""
+                <div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
+                    <h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
+                    <hr style='border-color:#333;'>
+                    <div style='display:flex; justify-content:space-between; text-align:center;'>
+                        <div style='width:30%;'>
+                            <h4 style='color:white;'>⚡ Forza Prezzo (40%)</h4>
+                            <p style='color:lightgray;'><i>Confluenza 0G Statico / Dinamico</i></p>
+                            <b>{pos_text}</b>
+                        </div>
+                        <div style='width:30%;'>
+                            <h4 style='color:white;'>🌪️ Forza Vanna (30%)</h4>
+                            <p style='color:lightgray;'><i>Rischio accelerazione Volatilità</i></p>
+                            <b>{vanna_text}</b>
+                        </div>
+                        <div style='width:30%;'>
+                            <h4 style='color:white;'>⏳ Forza Charm (30%)</h4>
+                            <p style='color:lightgray;'><i>Supporto/Pressione legati al Tempo</i></p>
+                            <b>{charm_text}</b>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            # --- FINE NUOVO HUD ---
 
             col_view, col_vol = st.columns([2, 1])
             with col_view:
@@ -283,7 +321,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
     status_text = st.empty()
     
     for i, t_name in enumerate(tickers_50):
-        status_text.text(f"Scansione: {t_name} ({i+1}/{len(tickers_50)})")
+        status_text.text(f"Scansione in profondità: {t_name} ({i+1}/{len(tickers_50)})")
         try:
             t_obj = yf.Ticker(t_name)
             hist = t_obj.history(period='5d')
@@ -303,6 +341,29 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             except: zg_val = px
             try: zg_dyn = brentq(calculate_0g_dynamic, px*0.75, px*1.25, args=(df_scan,))
             except: zg_dyn = px
+
+            # --- NUOVO CALCOLO GRECHE PER LO SCANNER ---
+            df_scan_greeks = get_greeks_pro(df_scan, px)
+            net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
+            net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
+            
+            # Motore di Scoring Confluenza (Max +10, Min -10)
+            p_score = 4 if (px > zg_val and px > zg_dyn) else (-4 if (px < zg_val and px < zg_dyn) else 0)
+            v_score = 3 if net_vanna_scan > 0 else -3
+            c_score = 3 if net_charm_scan < 0 else -3
+            ss = p_score + v_score + c_score
+
+            v_icon = "🟢" if net_vanna_scan > 0 else "🔴"
+            c_icon = "🔵" if net_charm_scan < 0 else "🔴"
+            
+            # Cluster/Market Regime
+            if ss >= 8: verdict = "🚀 CONFLUENZA FULL LONG"
+            elif ss <= -8: verdict = "☢️ CRASH RISK / FULL SHORT"
+            elif px > zg_val and px < zg_dyn: verdict = "⚠️ DISTRIBUZIONE (Volumi in uscita)"
+            elif px < zg_val and px > zg_dyn: verdict = "🔥 SHORT SQUEEZE IN ATTO"
+            elif net_vanna_scan < 0 and px > zg_dyn: verdict = "🌪️ GAMMA SQUEEZE (Alta Volatilità)"
+            else: verdict = "⚖️ NEUTRO / RANGE BOUND"
+            # --------------------------------------------
 
             avg_iv = df_scan['impliedVolatility'].mean()
             sd_move = px * avg_iv * np.sqrt(dte_years)
@@ -326,24 +387,43 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
             scan_results.append({
                 "Ticker": t_name.replace("^", ""), 
+                "Score": int(ss),                 # <-- Nuova Colonna
+                "Verdict (Regime)": verdict,      # <-- Nuova Colonna
+                "Greche V|C": f"V:{v_icon} C:{c_icon}", # <-- Nuova Colonna
                 "Prezzo": round(px, 2), 
                 "0-G Static": round(zg_val, 2), 
-                "0-G Dynamic": round(zg_dyn, 2), # Nuova Colonna
+                "0-G Dynamic": round(zg_dyn, 2),
                 "1SD Range": f"{sd1_down:.0f}-{sd1_up:.0f}", 
                 "Dist. 0G %": round(dist_zg_pct, 2), 
                 "Analisi": status_label, 
-                "_sort": abs(dist_zg_pct)
+                "_sort_score": -ss,               # Ordino prima per lo Score più alto
+                "_sort_dist": abs(dist_zg_pct)
             })
         except: continue
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
-        final_df = pd.DataFrame(scan_results).sort_values("_sort").drop(columns=["_sort"])
-        def color_logic(val):
-            if "🔥" in val: return 'background-color: #8B0000; color: white'
-            if "🔴" in val: return 'color: #FF4136; font-weight: bold'
-            if "🟢" in val: return 'color: #2ECC40; font-weight: bold'
-            if "🟡" in val: return 'color: #FFDC00'
-            if "✅" in val: return 'color: #0074D9'
-            return ''
-        st.dataframe(final_df.style.applymap(color_logic, subset=['Analisi']), use_container_width=True, height=800)
+        final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist"])
+        
+        def color_logic_pro(row):
+            styles = [''] * len(row)
+            # Colore per Score
+            score_idx = row.index.get_loc('Score')
+            val_score = row['Score']
+            if val_score >= 8: styles[score_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
+            elif val_score <= -8: styles[score_idx] = 'background-color: #8B0000; color: white; font-weight: bold'
+            elif val_score > 0: styles[score_idx] = 'color: #2ECC40; font-weight: bold'
+            elif val_score < 0: styles[score_idx] = 'color: #FF4136; font-weight: bold'
+            
+            # Colore per Analisi (Originale)
+            analisi_idx = row.index.get_loc('Analisi')
+            val_ana = row['Analisi']
+            if "🔥" in val_ana: styles[analisi_idx] = 'background-color: #8B0000; color: white'
+            elif "🔴" in val_ana: styles[analisi_idx] = 'color: #FF4136; font-weight: bold'
+            elif "🟢" in val_ana: styles[analisi_idx] = 'color: #2ECC40; font-weight: bold'
+            elif "🟡" in val_ana: styles[analisi_idx] = 'color: #FFDC00'
+            elif "✅" in val_ana: styles[analisi_idx] = 'color: #0074D9'
+
+            return styles
+
+        st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
