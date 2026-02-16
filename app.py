@@ -7,6 +7,7 @@ from scipy.stats import norm
 from scipy.optimize import brentq
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
+import time  # <-- NUOVO IMPORT FONDAMENTALE PER IL DELAY
 
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
@@ -62,10 +63,35 @@ def fetch_data(ticker, dates):
         except: continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
+# --- FUNZIONE PROTETTIVA PER LO SCANNER (Evita Ban IP da Yahoo) ---
+@st.cache_data(ttl=300, show_spinner=False) # Aggiorna max ogni 5 minuti per ticker
+def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
+    try:
+        t_obj = yf.Ticker(t_name)
+        hist = t_obj.history(period='5d')
+        if hist.empty: return None
+        px = hist['Close'].iloc[-1]
+        opts = t_obj.options
+        if not opts: return None
+        target_opt = opts[0] if "0-1 DTE" in expiry_mode_str else (opts[2] if len(opts) > 2 else opts[0])
+        oc = t_obj.option_chain(target_opt)
+        df_scan = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
+        
+        # Conversione stringa a datetime
+        today_obj = datetime.strptime(today_str, '%Y-%m-%d')
+        dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today_obj).days + 1, 0.5) / 365
+        df_scan['dte_years'] = dte_years
+        df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
+        
+        return px, df_scan, dte_years
+    except:
+        return None
+
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS"])
 today = datetime.now()
+today_str_format = today.strftime('%Y-%m-%d') # Per la cache
 
 if menu == "🏟️ DASHBOARD SINGOLA":
     if 'ticker_list' not in st.session_state:
@@ -93,7 +119,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     try:
         available_dates = ticker_obj.options
     except Exception as e:
-        st.error("⚠️ Blocco temporaneo di Yahoo Finance (Rate Limit). Attendi un minuto prima del prossimo aggiornamento.")
+        st.error("⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi 10 minuti prima di riprovare.")
         st.stop()
 
     all_dates_info = []
@@ -202,7 +228,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-                # Calcolo Sentiment Score (Max 10, Min -10)
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
                 vanna_score = 3 if net_vanna > 0 else -3
                 charm_score = 3 if net_charm < 0 else -3
@@ -322,27 +347,27 @@ elif menu == "🔥 SCANNER HOT TICKERS":
     
     for i, t_name in enumerate(tickers_50):
         status_text.text(f"Scansione in profondità: {t_name} ({i+1}/{len(tickers_50)})")
-        try:
-            t_obj = yf.Ticker(t_name)
-            hist = t_obj.history(period='5d')
-            if hist.empty: continue
-            px = hist['Close'].iloc[-1]
-            opts = t_obj.options
-            if not opts: continue
-            target_opt = opts[0] if "0-1 DTE" in expiry_mode else (opts[2] if len(opts) > 2 else opts[0])
-            oc = t_obj.option_chain(target_opt)
-            df_scan = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
-            dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today).days + 1, 0.5) / 365
-            df_scan['dte_years'] = dte_years
-            df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
+        
+        # --- UTILIZZO FUNZIONE PROTETTA ---
+        data_pack = fetch_scanner_ticker(t_name, expiry_mode, today_str_format)
+        
+        # Micro-pausa fondamentale per evitare il ban IP da Yahoo (150ms per ticker)
+        time.sleep(0.15) 
+        
+        if data_pack is None:
+            progress_bar.progress((i + 1) / len(tickers_50))
+            continue
             
+        px, df_scan, dte_years = data_pack
+        
+        try:
             # Calcolo 0-G Statico e Dinamico
             try: zg_val = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan,))
             except: zg_val = px
             try: zg_dyn = brentq(calculate_0g_dynamic, px*0.75, px*1.25, args=(df_scan,))
             except: zg_dyn = px
 
-            # --- NUOVO CALCOLO GRECHE PER LO SCANNER ---
+            # Calcolo Greche Scanner
             df_scan_greeks = get_greeks_pro(df_scan, px)
             net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
             net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
@@ -363,7 +388,6 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             elif px < zg_val and px > zg_dyn: verdict = "🔥 SHORT SQUEEZE IN ATTO"
             elif net_vanna_scan < 0 and px > zg_dyn: verdict = "🌪️ GAMMA SQUEEZE (Alta Volatilità)"
             else: verdict = "⚖️ NEUTRO / RANGE BOUND"
-            # --------------------------------------------
 
             avg_iv = df_scan['impliedVolatility'].mean()
             sd_move = px * avg_iv * np.sqrt(dte_years)
@@ -387,19 +411,19 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
             scan_results.append({
                 "Ticker": t_name.replace("^", ""), 
-                "Score": int(ss),                 # <-- Nuova Colonna
-                "Verdict (Regime)": verdict,      # <-- Nuova Colonna
-                "Greche V|C": f"V:{v_icon} C:{c_icon}", # <-- Nuova Colonna
+                "Score": int(ss),                 
+                "Verdict (Regime)": verdict,      
+                "Greche V|C": f"V:{v_icon} C:{c_icon}", 
                 "Prezzo": round(px, 2), 
                 "0-G Static": round(zg_val, 2), 
                 "0-G Dynamic": round(zg_dyn, 2),
                 "1SD Range": f"{sd1_down:.0f}-{sd1_up:.0f}", 
                 "Dist. 0G %": round(dist_zg_pct, 2), 
                 "Analisi": status_label, 
-                "_sort_score": -ss,               # Ordino prima per lo Score più alto
+                "_sort_score": -ss,               
                 "_sort_dist": abs(dist_zg_pct)
             })
-        except: continue
+        except: pass
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
