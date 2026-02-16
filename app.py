@@ -173,12 +173,17 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             except: z_gamma_dyn = spot
 
             df = get_greeks_pro(raw_data, spot)
-            df['strike_bin'] = (np.round(df['strike'] / gran) * gran)
-            agg = df.groupby('strike_bin', as_index=False)[["Gamma", "Vanna", "Charm", "Vega", "Theta"]].sum().rename(columns={'strike_bin': 'strike'})
+            
+            # --- LOGICA DI AGGREGAZIONE MATEMATICA RICHIESTA ---
+            df['strike_bin'] = np.round(df['strike'] / gran) * gran
+            agg = df.groupby('strike_bin', as_index=False)[['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']].sum()
+            agg = agg.rename(columns={'strike_bin': 'strike'})
+            # ---------------------------------------------------
             
             lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
             visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
             
+            # Calcolo Muri basato sui dati aggregati
             c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
             p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
             v_trigger = agg.loc[agg['Vanna'].abs().idxmax(), 'strike']
