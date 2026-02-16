@@ -174,19 +174,35 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             df = get_greeks_pro(raw_data, spot)
             
-            # --- LOGICA DI AGGREGAZIONE MATEMATICA RICHIESTA ---
-            df['strike_bin'] = np.round(df['strike'] / gran) * gran
-            agg = df.groupby('strike_bin', as_index=False)[['Gamma', 'Vanna', 'Charm', 'Vega', 'Theta']].sum()
-            agg = agg.rename(columns={'strike_bin': 'strike'})
-            # ---------------------------------------------------
+            # --- LOGICA DI AGGREGAZIONE E PLOTTING RESET (RICHIESTA UTENTE) ---
+            # 1. Raggruppamento Matematico (Binning con floor)
+            # Usiamo floor division per forzare ogni contratto nel proprio bin matematico
+            pivot_series = (df['strike'] // gran) * gran
+            
+            # 2. Aggregazione Totale su Pivot
+            agg = df.groupby(pivot_series).agg({
+                'Gamma': 'sum', 
+                'Vanna': 'sum', 
+                'Charm': 'sum', 
+                'Vega': 'sum', 
+                'Theta': 'sum'
+            }).reset_index()
+            
+            # Rinomina la colonna pivot (che prende il nome della serie originale 'strike')
+            # Se la serie non aveva nome o il reset_index si comporta diversamente, forziamo il nome
+            if 'strike' not in agg.columns:
+                agg.rename(columns={'index': 'strike', agg.columns[0]: 'strike'}, inplace=True)
             
             lo, hi = spot * (1 - zoom_val/100), spot * (1 + zoom_val/100)
             visible_agg = agg[(agg['strike'] >= lo) & (agg['strike'] <= hi)]
             
             # Calcolo Muri basato sui dati aggregati
-            c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
-            p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
-            v_trigger = agg.loc[agg['Vanna'].abs().idxmax(), 'strike']
+            if not agg.empty:
+                c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
+                p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
+                v_trigger = agg.loc[agg['Vanna'].abs().idxmax(), 'strike']
+            else:
+                c_wall = p_wall = v_trigger = spot
 
             st.subheader(f"🏟️ {asset} Quant Terminal | Spot: {spot:.2f}")
 
