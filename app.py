@@ -7,18 +7,11 @@ from scipy.stats import norm
 from scipy.optimize import brentq
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
-import time  # <-- NUOVO IMPORT FONDAMENTALE PER IL DELAY
-import requests # <-- IMPORT PER ELUDERE IL BLOCCO IP
-
-# --- CONFIGURAZIONE SESSIONE ANTI-BAN YAHOO ---
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-})
+import time  # <-- Manteniamo l'import per il delay anti-ban
 
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
-# Refresh impostato a 5 minuti (300.000 ms) per permettere a Yahoo di "respirare" con 50 ticker
+# Refresh spostato a 5 minuti per evitare il Rate Limit su 50 Ticker
 st_autorefresh(interval=300000, key="sentinel_refresh")
 
 # --- CORE QUANT ENGINE ---
@@ -62,7 +55,7 @@ def get_greeks_pro(df, S, r=0.045):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker, dates):
-    t = yf.Ticker(ticker, session=session) # <--- Aggiunta sessione
+    t = yf.Ticker(ticker)
     frames = []
     for d in dates:
         try:
@@ -75,7 +68,7 @@ def fetch_data(ticker, dates):
 @st.cache_data(ttl=300, show_spinner=False) # Aggiorna max ogni 5 minuti per ticker
 def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
     try:
-        t_obj = yf.Ticker(t_name, session=session) # <--- Aggiunta sessione
+        t_obj = yf.Ticker(t_name)
         hist = t_obj.history(period='5d')
         if hist.empty: return None
         px = hist['Close'].iloc[-1]
@@ -119,7 +112,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     elif "SPX" in asset: default_gran = 10.0
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
-    ticker_obj = yf.Ticker(current_ticker, session=session) # <--- Aggiunta sessione
+    ticker_obj = yf.Ticker(current_ticker)
     h = ticker_obj.history(period='1d')
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
@@ -359,7 +352,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         # --- UTILIZZO FUNZIONE PROTETTA ---
         data_pack = fetch_scanner_ticker(t_name, expiry_mode, today_str_format)
         
-        # Micro-pausa fondamentale per evitare il ban IP da Yahoo aumentata da 0.15s a 0.5s per i 50 ticker
+        # Micro-pausa fondamentale impostata a 0.5s per evitare il ban IP da Yahoo
         time.sleep(0.5) 
         
         if data_pack is None:
