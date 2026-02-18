@@ -160,14 +160,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             iv_change = mean_iv - st.session_state.prev_iv
             st.session_state.prev_iv = mean_iv
 
-           Per sostituire correttamente il codice in Google AI Studio ed evitare che i numeri "esplodano" a causa della formattazione della Volatilità Implicita (IV), devi copiare e incollare il blocco qui sotto.
-
-Ho aggiunto la funzione di normalizzazione che controlla se Yahoo ti sta dando la IV come 0.18 o 18.0. Questo è il motivo per cui vedevi 700 punti: il programma moltiplicava il prezzo per 18 invece che per 0.18.
-
-🛠️ Codice da sostituire
-Copia questo blocco e chiedi all'AI: "Sostituisci la sezione del calcolo DS con questo codice blindato":
-
-Python
+        
             # --- MODIFICA ASIMMETRICA DS (SKEW DRIVEN) ---
             try:
                 skew_date = available_dates[0]
