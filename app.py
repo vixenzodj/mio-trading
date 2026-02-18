@@ -189,14 +189,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # 2. Calcolo Fixed 1-Day Move (1/252)
             one_day_factor = np.sqrt(1/252)
-            # --- CALCOLO RANGE STATISTICO ---
-            spettro_statistico_1ds = sd1_up - sd1_down
-            percentuale_range = (spettro_statistico_1ds / spot) * 100
+        
             # 3. Creazione delle 4 Linee Asimmetriche
             sd1_up = spot * (1 + (c_iv * one_day_factor))
             sd2_up = spot * (1 + (c_iv * 2 * one_day_factor))
             sd1_down = spot * (1 - (p_iv * one_day_factor))
             sd2_down = spot * (1 - (p_iv * 2 * one_day_factor))
+
+             # --- CALCOLO RANGE STATISTICO ---
+             spettro_statistico_1ds = sd1_up - sd1_down
+             percentuale_range = (spettro_statistico_1ds / spot) * 100
             
             # 4. Calcolo dello Skew Factor e Distanza corretta per la Dashboard
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
