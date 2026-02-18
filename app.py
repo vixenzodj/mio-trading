@@ -265,7 +265,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
             m3.metric("PUT WALL", f"{p_wall:.0f}")
-            m4.metric("EXPECTED 1SD", f"±{spot*one_day_factor*mean_iv:.2f}")
+            m4.metric("EXPECTED 1SD", f"±{expected_move_pts:.2f} pts")
 
             st.markdown("---")
             
