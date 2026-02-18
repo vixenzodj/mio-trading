@@ -90,7 +90,7 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
 st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS"])
 
-# --- MODIFICA RICHIESTA ---
+# --- REFRESH CONFIG ---
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
@@ -160,9 +160,39 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             iv_change = mean_iv - st.session_state.prev_iv
             st.session_state.prev_iv = mean_iv
 
-            sd_move = spot * mean_iv * np.sqrt(max(dte_ref, 0.5)/365)
-            sd1_up, sd1_down = spot + sd_move, spot - sd_move
-            sd2_up, sd2_down = spot + (sd_move * 2), spot - (sd_move * 2)
+            # --- MODIFICA ASIMMETRICA DS (SKEW DRIVEN) ---
+            # 1. Estrazione IV Specifica (Skew) su 0DTE/1DTE
+            try:
+                skew_date = available_dates[0]
+                skew_data = fetch_data(current_ticker, [skew_date])
+                
+                if not skew_data.empty:
+                    # Target: 2% OTM (~25 Delta proxy)
+                    c_target = spot * 1.02
+                    p_target = spot * 0.98
+                    
+                    c_skew = skew_data[skew_data['type'] == 'call']
+                    p_skew = skew_data[skew_data['type'] == 'put']
+                    
+                    # Trova lo strike più vicino al target
+                    c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
+                    p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
+                else:
+                    c_iv = p_iv = mean_iv
+            except:
+                c_iv = p_iv = mean_iv
+
+            # 2. Calcolo Fixed 1-Day Move (1/252)
+            one_day_factor = np.sqrt(1/252)
+            
+            # 3. Creazione delle 4 Linee Asimmetriche
+            sd1_up = spot * (1 + (c_iv * one_day_factor))
+            sd2_up = spot * (1 + (c_iv * 2 * one_day_factor))
+            sd1_down = spot * (1 - (p_iv * one_day_factor))
+            sd2_down = spot * (1 - (p_iv * 2 * one_day_factor))
+            
+            skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
+            # ---------------------------------------------
 
             # CALCOLO 0-GAMMA ORIGINALE
             try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
@@ -174,12 +204,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             df = get_greeks_pro(raw_data, spot)
             
-            # --- LOGICA DI AGGREGAZIONE E PLOTTING RESET (RICHIESTA UTENTE) ---
-            # 1. Raggruppamento Matematico (Binning con floor)
+            # --- LOGICA DI AGGREGAZIONE MATEMATICA (Binning Dinamico) ---
             # Usiamo floor division per forzare ogni contratto nel proprio bin matematico
             pivot_series = (df['strike'] // gran) * gran
             
-            # 2. Aggregazione Totale su Pivot
+            # Aggregazione Totale su Pivot
             agg = df.groupby(pivot_series).agg({
                 'Gamma': 'sum', 
                 'Vanna': 'sum', 
@@ -188,8 +217,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 'Theta': 'sum'
             }).reset_index()
             
-            # Rinomina la colonna pivot (che prende il nome della serie originale 'strike')
-            # Se la serie non aveva nome o il reset_index si comporta diversamente, forziamo il nome
+            # Rinomina la colonna pivot
             if 'strike' not in agg.columns:
                 agg.rename(columns={'index': 'strike', agg.columns[0]: 'strike'}, inplace=True)
             
@@ -225,7 +253,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta=f"{'LONG' if net_gamma > 0 else 'SHORT'}")
             c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}", delta=f"{'STABLE' if net_vanna > 0 else 'UNSTABLE'}")
             c_reg3.metric("Net Charm", f"{net_charm:,.0f}", delta=f"{'SUPPORT' if net_charm < 0 else 'DECAY'}")
-            c_reg4.metric("Market Regime", "VOL DRIVEN" if net_gamma < 0 else "SPOT DRIVEN")
+            c_reg4.metric("SKEW FACTOR (P/C)", f"{skew_factor:.2f}x")
 
             st.markdown(f"""
                 <div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; margin-top: 10px; margin-bottom: 25px;'>
@@ -237,7 +265,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
             m3.metric("PUT WALL", f"{p_wall:.0f}")
-            m4.metric("EXPECTED 1SD", f"±{sd_move:.2f}")
+            m4.metric("EXPECTED 1SD", f"±{spot*one_day_factor*mean_iv:.2f}")
 
             st.markdown("---")
             
@@ -246,13 +274,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 color = "#00FF41" if d > 0 else "#FF4136"
                 return f"<span style='color:{color};'>{d:+.2f}%</span>"
 
+            sd_up_pct = ((sd1_up - spot) / spot) * 100
+            sd_dn_pct = ((sd1_down - spot) / spot) * 100
+
             st.markdown(f"""
                 <div style='background-color:rgba(30, 30, 30, 0.8); padding:10px; border-radius:5px; border: 1px solid #444; margin-bottom: 20px; display: flex; justify-content: space-around;'>
                     <div><b>📍 DIST. CW:</b> {get_dist(c_wall, spot)}</div>
                     <div><b>📍 DIST. 0G-DYN:</b> {get_dist(z_gamma_dyn, spot)}</div>
                     <div><b>📍 DIST. VT:</b> {get_dist(v_trigger, spot)}</div>
                     <div><b>📍 DIST. PW:</b> {get_dist(p_wall, spot)}</div>
-                    <div><b>📍 DIST. ±1SD:</b> <span style='color:#FFA500;'>{((sd_move)/spot)*100:.2f}%</span></div>
+                    <div><b>📍 1SD UP/DN:</b> <span style='color:#FFA500;'>{sd_up_pct:+.2f}% / {sd_dn_pct:+.2f}%</span></div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -351,10 +382,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
             fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
             
-            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text="+1SD")
-            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text="-1SD")
-            fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="dot", annotation_text="+2SD")
-            fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="dot", annotation_text="-2SD")
+            # --- VISUALIZZAZIONE LINEE ASIMMETRICHE ---
+            fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text=f"+1SD (Call IV) {sd1_up:.2f}")
+            fig.add_hline(y=sd1_down, line_color="#FFA500", line_dash="dash", annotation_text=f"-1SD (Put IV) {sd1_down:.2f}")
+            fig.add_hline(y=sd2_up, line_color="#FF0000", line_dash="solid", annotation_text=f"+2SD {sd2_up:.2f}")
+            fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="solid", annotation_text=f"-2SD {sd2_down:.2f}")
+
+            # Nota Skew Factor nella legenda (dummy trace)
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
+                                     name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
 
             fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
             st.plotly_chart(fig, use_container_width=True)
