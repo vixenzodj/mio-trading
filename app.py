@@ -266,7 +266,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
                 </div>
                 """, unsafe_allow_html=True)
-            # Calcoliamo l'ampiezza totale dello spettro (Range tra Lower 1DS e Upper 1DS)
+            # --- CALCOLO RANGE STATISTICO ---
+            spettro_statistico_1ds = sd1_up - sd1_down
+            percentuale_range = (spettro_statistico_1ds / spot) * 100
+            
             # Questo ti dice quanto è larga la "gabbia" del prezzo oggi
             spettro_statistico_1ds = sd1_up - sd1_down
 
