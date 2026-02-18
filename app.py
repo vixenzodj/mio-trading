@@ -160,27 +160,39 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             iv_change = mean_iv - st.session_state.prev_iv
             st.session_state.prev_iv = mean_iv
 
+           Per sostituire correttamente il codice in Google AI Studio ed evitare che i numeri "esplodano" a causa della formattazione della Volatilità Implicita (IV), devi copiare e incollare il blocco qui sotto.
+
+Ho aggiunto la funzione di normalizzazione che controlla se Yahoo ti sta dando la IV come 0.18 o 18.0. Questo è il motivo per cui vedevi 700 punti: il programma moltiplicava il prezzo per 18 invece che per 0.18.
+
+🛠️ Codice da sostituire
+Copia questo blocco e chiedi all'AI: "Sostituisci la sezione del calcolo DS con questo codice blindato":
+
+Python
             # --- MODIFICA ASIMMETRICA DS (SKEW DRIVEN) ---
-            # 1. Estrazione IV Specifica (Skew) su 0DTE/1DTE
             try:
                 skew_date = available_dates[0]
                 skew_data = fetch_data(current_ticker, [skew_date])
                 
                 if not skew_data.empty:
-                    # Target: 2% OTM (~25 Delta proxy)
                     c_target = spot * 1.02
                     p_target = spot * 0.98
-                    
                     c_skew = skew_data[skew_data['type'] == 'call']
                     p_skew = skew_data[skew_data['type'] == 'put']
                     
-                    # Trova lo strike più vicino al target
-                    c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
-                    p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
+                    # Funzione interna per pulire la IV (se Yahoo da 18.0 invece di 0.18)
+                    def clean_iv(val):
+                        if val is None: return mean_iv / 100 if mean_iv > 1 else mean_iv
+                        return val / 100 if val > 1.5 else val
+
+                    raw_c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
+                    raw_p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
+                    
+                    c_iv = clean_iv(raw_c_iv)
+                    p_iv = clean_iv(raw_p_iv)
                 else:
-                    c_iv = p_iv = mean_iv
+                    c_iv = p_iv = clean_iv(mean_iv)
             except:
-                c_iv = p_iv = mean_iv
+                c_iv = p_iv = 0.15 # Fallback prudenziale se tutto fallisce
 
             # 2. Calcolo Fixed 1-Day Move (1/252)
             one_day_factor = np.sqrt(1/252)
@@ -191,6 +203,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             sd1_down = spot * (1 - (p_iv * one_day_factor))
             sd2_down = spot * (1 - (p_iv * 2 * one_day_factor))
             
+            # 4. Calcolo dello Skew Factor e Distanza corretta per la Dashboard
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
             # ---------------------------------------------
 
@@ -260,7 +273,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
                 </div>
                 """, unsafe_allow_html=True)
-
+            # Calcolo della distanza media corretta (Punti dallo Spot alla 1DS)
+            # Usiamo la media della IV delle Call e delle Put normalizzata
+            avg_iv_corretta = (c_iv + p_iv) / 2
+            expected_move_pts = spot * avg_iv_corretta * one_day_factor
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
