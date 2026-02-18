@@ -189,7 +189,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # 2. Calcolo Fixed 1-Day Move (1/252)
             one_day_factor = np.sqrt(1/252)
-            
+            # --- CALCOLO RANGE STATISTICO ---
+            spettro_statistico_1ds = sd1_up - sd1_down
+            percentuale_range = (spettro_statistico_1ds / spot) * 100
             # 3. Creazione delle 4 Linee Asimmetriche
             sd1_up = spot * (1 + (c_iv * one_day_factor))
             sd2_up = spot * (1 + (c_iv * 2 * one_day_factor))
@@ -266,15 +268,17 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
                 </div>
                 """, unsafe_allow_html=True)
-            # Calcolo della distanza media corretta (Punti dallo Spot alla 1DS)
-            # Usiamo la media della IV delle Call e delle Put normalizzata
-            avg_iv_corretta = (c_iv + p_iv) / 2
-            expected_move_pts = spot * avg_iv_corretta * one_day_factor
+            # Calcoliamo l'ampiezza totale dello spettro (Range tra Lower 1DS e Upper 1DS)
+            # Questo ti dice quanto è larga la "gabbia" del prezzo oggi
+            spettro_statistico_1ds = sd1_up - sd1_down
+
+            # Se vuoi vedere anche il range estremo (quello delle linee 2DS)
+            spettro_statistico_2ds = sd2_up - sd2_down
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
             m3.metric("PUT WALL", f"{p_wall:.0f}")
-            m4.metric("EXPECTED 1SD", f"±{expected_move_pts:.2f} pts")
+            m4.metric("STATISTICAL RANGE (1DS)", f"{spettro_statistico_1ds:.2f} pts", f"{percentuale_range:.2f}%")
 
             st.markdown("---")
             
