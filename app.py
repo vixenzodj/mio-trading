@@ -439,55 +439,57 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
         px, df_scan, dte_years = data_pack
         
-        try:
-            # --- 0. CALCOLO PREVENTIVO GRECHE ---
-            # Calcoliamo subito le greche (Gamma, Vanna, Charm) così le colonne esistono
+try:
+            # --- 0. SINCRONIZZAZIONE QUANT ENGINE ---
+            # Calcoliamo immediatamente le greche usando la tua funzione get_greeks_pro
+            # Questo assicura che le colonne Gamma, Vanna, Charm, ecc. esistano subito.
             df_scan = get_greeks_pro(df_scan, px)
             
-            # Normalizziamo i nomi delle colonne in minuscolo per sicurezza
-            df_scan.columns = [c.lower() for c in df_scan.columns]
+            # Normalizziamo i nomi per sicurezza (get_greeks_pro usa maiuscole: 'Gamma', 'Vanna')
+            # Ma per uniformità nel calcolo matematico successivo usiamo i nomi originali.
 
             # --- 1. PREPARAZIONE DATI ---
-            if 'gamma' not in df_scan.columns:
-                st.warning(f"⚠️ Impossibile calcolare Gamma per {t_name}")
+            if 'Gamma' not in df_scan.columns:
+                st.warning(f"⚠️ Dati insufficienti per calcolare Gamma su {t_name}")
                 continue
                 
-            df_scan = df_scan[df_scan['gamma'].notnull()].copy()
+            df_scan = df_scan[df_scan['Gamma'].notnull()].copy()
 
-            # --- 2. CALCOLO ZERO GAMMA RINFORZATO ---
+            # --- 2. CALCOLO ZERO GAMMA IDENTICO ALLA DASHBOARD ---
             def safe_zg_calc(df, current_px):
+                # Definiamo un range di ricerca stretto (±15%) per evitare valori assurdi
+                search_min, search_max = current_px * 0.85, current_px * 1.15
                 try:
-                    # Metodo A: Ricerca Matematica brentq
-                    zg = brentq(calculate_gex_at_price, current_px * 0.1, current_px * 2.0, args=(df,))
-                    if zg <= 1 or abs(zg - current_px) < 0.01: return None
+                    # Usiamo ESATTAMENTE la tua funzione di calcolo GEX (OI + 50% Vol)
+                    zg = brentq(calculate_gex_at_price, search_min, search_max, args=(df,))
                     return zg
                 except:
                     try:
-                        # Metodo B: Ricerca Lineare (Cambio Segno)
-                        df_agg = df.groupby('strike')['gamma'].sum().reset_index()
+                        # Fallback: Ricerca lineare del cambio segno se brentq non converge
+                        df_agg = df.groupby('strike')['Gamma'].sum().reset_index()
                         for idx in range(len(df_agg)-1):
-                            if (df_agg.iloc[idx]['gamma'] * df_agg.iloc[idx+1]['gamma']) <= 0:
+                            if (df_agg.iloc[idx]['Gamma'] * df_agg.iloc[idx+1]['Gamma']) <= 0:
                                 return df_agg.iloc[idx]['strike']
                         return None
                     except: 
                         return None
 
+            # Calcolo Zero Gamma Statico (Quello del tuo Box)
             zg_val = safe_zg_calc(df_scan, px)
-            if zg_val is None: zg_val = px # Fallback
+            if zg_val is None or zg_val == 0: zg_val = px # Fallback al prezzo attuale
 
-            # ZG Dinamico
+            # Calcolo Zero Gamma Dinamico (Solo Volumi - Tua funzione)
             try:
-                zg_dyn = brentq(calculate_0g_dynamic, px * 0.1, px * 2.0, args=(df_scan,))
+                zg_dyn = brentq(calculate_0g_dynamic, px * 0.85, px * 1.15, args=(df_scan,))
             except:
                 zg_dyn = zg_val
 
-            # --- 3. RECUPERO RISULTATI GRECHE (Già calcolate sopra) ---
-            net_vanna_scan = df_scan['vanna'].sum() if 'vanna' in df_scan.columns else 0
-            net_charm_scan = df_scan['charm'].sum() if 'charm' in df_scan.columns else 0
+            # --- 3. RECUPERO RISULTATI GRECHE ---
+            net_vanna_scan = df_scan['Vanna'].sum() if 'Vanna' in df_scan.columns else 0
+            net_charm_scan = df_scan['Charm'].sum() if 'Charm' in df_scan.columns else 0
             
             v_icon = "🟢" if net_vanna_scan > 0 else "🔴"
             c_icon = "🔵" if net_charm_scan < 0 else "🔴"
-            
 
             # --- 4. MOTORE DI SCORING CONFLUENZA ---
             p_score = 4 if (px > zg_val and px > zg_dyn) else (-4 if (px < zg_val and px < zg_dyn) else 0)
@@ -507,8 +509,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             try:
                 mean_iv = df_scan['impliedVolatility'].mean()
                 if not df_scan.empty:
-                    c_target = px * 1.02
-                    p_target = px * 0.98
+                    c_target, p_target = px * 1.02, px * 0.98
                     c_skew = df_scan[df_scan['type'] == 'call']
                     p_skew = df_scan[df_scan['type'] == 'put']
                     
@@ -519,20 +520,15 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                     raw_c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
                     raw_p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
                     
-                    c_iv = clean_iv(raw_c_iv)
-                    p_iv = clean_iv(raw_p_iv)
+                    c_iv, p_iv = clean_iv(raw_c_iv), clean_iv(raw_p_iv)
                 else:
-                    c_iv = p_iv = clean_iv(mean_iv)
+                    c_iv = p_iv = mean_iv / 100 if mean_iv > 1 else mean_iv
             except:
-                c_iv = p_iv = 0.15 # Fallback prudenziale
+                c_iv = p_iv = 0.15
 
             one_day_factor = np.sqrt(1/252)
-            sd1_up = px * (1 + (c_iv * one_day_factor))
-            sd2_up = px * (1 + (c_iv * 2 * one_day_factor))
-            sd1_down = px * (1 - (p_iv * one_day_factor))
-            sd2_down = px * (1 - (p_iv * 2 * one_day_factor))
-            
-            skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
+            sd1_up, sd2_up = px * (1 + (c_iv * one_day_factor)), px * (1 + (c_iv * 2 * one_day_factor))
+            sd1_down, sd2_down = px * (1 - (p_iv * one_day_factor)), px * (1 - (p_iv * 2 * one_day_factor))
 
             # --- 6. MOTORE OPPORTUNITÀ MEAN REVERSION ---
             if px <= sd2_down: reversion_signal, rev_score = "💎 BUY REVERSION (2DS)", 2
@@ -559,26 +555,27 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
             if abs(dist_zg_pct) < 0.3: status_label = "🔥 FLIP IMMINENTE (0G)"
             
-            # --- 8. AGGIUNTA RISULTATI ---
+            # --- 8. AGGIUNTA RISULTATI (Con Arrotondamento Pulito) ---
             scan_results.append({
                 "Ticker": t_name.replace("^", ""), 
                 "Score": int(ss),                 
                 "Verdict (Regime)": verdict,      
                 "Greche V|C": f"V:{v_icon} C:{c_icon}",
-                "Prezzo": round(px, 2), 
-                "0-G Static": round(zg_val, 2), 
+                "Prezzo": round(float(px), 2), 
+                "0-G Static": round(float(zg_val), 2), 
                 "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}", 
                 "2SD Range": f"{sd2_down:.0f} - {sd2_up:.0f}", 
-                "Dist. 0G %": round(dist_zg_pct, 2), 
+                "Dist. 0G %": f"{dist_zg_pct:.2f}%", 
                 "OPPORTUNITÀ": reversion_signal,  
                 "Analisi": status_label, 
                 "_rev_score": rev_score,          
                 "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
+            
         except Exception as e:
-            st.error(f"Errore fatale su {t_name}: {e}")
-            st.stop() # Ferma tutto al primo errore per farti leggere
+            # Rimuoviamo st.stop() per permettere allo scanner di continuare se un ticker fallisce
+            st.error(f"Errore su {t_name}: {e}")
             
         progress_bar.progress((i + 1) / len(tickers_50))
     
