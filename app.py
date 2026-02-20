@@ -445,7 +445,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
 
             # --- 2. CALCOLO ZERO GAMMA RINFORZATO (DALLA DASHBOARD) ---
             def safe_zg_calc(df, current_px):
-        try:
+         try:
              # Metodo A: Ricerca Matematica brentq (Range 0.1x a 2.0x)
              zg = brentq(calculate_gex_at_price, current_px * 0.1, current_px * 2.0, args=(df,))
                 if zg <= 1 or abs(zg - current_px) < 0.01: return None
