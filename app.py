@@ -431,7 +431,6 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         # --- UTILIZZO FUNZIONE PROTETTA ---
         data_pack = fetch_scanner_ticker(t_name, expiry_mode, today_str_format)
         
-        # Micro-pausa fondamentale impostata a 0.5s per evitare il ban IP da Yahoo
         time.sleep(0.5) 
         
         if data_pack is None:
@@ -452,7 +451,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
             net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
             
-            # Motore di Scoring Confluenza (Max +10, Min -10)
+            # Motore di Scoring Confluenza
             p_score = 4 if (px > zg_val and px > zg_dyn) else (-4 if (px < zg_val and px < zg_dyn) else 0)
             v_score = 3 if net_vanna_scan > 0 else -3
             c_score = 3 if net_charm_scan < 0 else -3
@@ -469,21 +468,43 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             elif net_vanna_scan < 0 and px > zg_dyn: verdict = "🌪️ GAMMA SQUEEZE (Alta Volatilità)"
             else: verdict = "⚖️ NEUTRO / RANGE BOUND"
 
-            # --- NUOVO CALCOLO DS (ASIMMETRICO & NORMALIZZATO) ---
-            avg_iv_raw = df_scan['impliedVolatility'].mean()
-            clean_avg_iv = avg_iv_raw / 100 if avg_iv_raw > 1.5 else avg_iv_raw
-            
-            p_iv_avg = df_scan[df_scan['type'] == 'put']['impliedVolatility'].mean()
-            c_iv_avg = df_scan[df_scan['type'] == 'call']['impliedVolatility'].mean()
-            s_factor = (p_iv_avg / c_iv_avg) if (c_iv_avg > 0) else 1.0
-            
-            one_day_std = clean_avg_iv * np.sqrt(1/252)
-            sd1_up = px * (1 + (one_day_std / (s_factor if s_factor > 0 else 1)))
-            sd1_down = px * (1 - (one_day_std * s_factor))
-            sd2_up = px * (1 + (one_day_std * 2 / (s_factor if s_factor > 0 else 1)))
-            sd2_down = px * (1 - (one_day_std * 2 * s_factor))
+            # --- MODIFICA ASIMMETRICA DS (IDENTICA ALLA DASHBOARD) ---
+            try:
+                mean_iv = df_scan['impliedVolatility'].mean()
+                
+                if not df_scan.empty:
+                    c_target = px * 1.02
+                    p_target = px * 0.98
+                    c_skew = df_scan[df_scan['type'] == 'call']
+                    p_skew = df_scan[df_scan['type'] == 'put']
+                    
+                    def clean_iv(val):
+                        if val is None: return mean_iv / 100 if mean_iv > 1 else mean_iv
+                        return val / 100 if val > 1.5 else val
 
-            # --- MOTORE MEAN REVERSION ---
+                    raw_c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
+                    raw_p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
+                    
+                    c_iv = clean_iv(raw_c_iv)
+                    p_iv = clean_iv(raw_p_iv)
+                else:
+                    c_iv = p_iv = clean_iv(mean_iv)
+            except:
+                c_iv = p_iv = 0.15 # Fallback prudenziale
+
+            # 2. Calcolo Fixed 1-Day Move (1/252)
+            one_day_factor = np.sqrt(1/252)
+            
+            # 3. Creazione delle 4 Linee Asimmetriche per lo Scanner
+            sd1_up = px * (1 + (c_iv * one_day_factor))
+            sd2_up = px * (1 + (c_iv * 2 * one_day_factor))
+            sd1_down = px * (1 - (p_iv * one_day_factor))
+            sd2_down = px * (1 - (p_iv * 2 * one_day_factor))
+            
+            # 4. Skew Factor
+            skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
+
+            # --- MOTORE OPPORTUNITÀ MEAN REVERSION ---
             if px <= sd2_down:
                 reversion_signal = "💎 BUY REVERSION (2DS)"
                 rev_score = 2
@@ -506,7 +527,6 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             near_sd_up = abs(px - sd1_up) / px < 0.005
             near_sd_down = abs(px - sd1_down) / px < 0.005
             
-            # (Mantengo la tua logica originale per "Analisi")
             if not is_above_0g: 
                 if near_sd_down: status_label = "🔴 < 0G | TEST -1SD (Bounce?)"
                 elif px < sd1_down: status_label = "⚫ < 0G | SOTTO -1SD (Short Ext)"
@@ -523,15 +543,14 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                 "Ticker": t_name.replace("^", ""), 
                 "Score": int(ss),                 
                 "Verdict (Regime)": verdict,      
-                "Greche V|C": f"V:{v_icon} C:{c_icon}", 
                 "Prezzo": round(px, 2), 
                 "0-G Static": round(zg_val, 2), 
-                "0-G Dynamic": round(zg_dyn, 2),
-                "1SD Range": f"{sd1_down:.0f}-{sd1_up:.0f}", 
+                "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}", 
+                "2SD Range": f"{sd2_down:.0f} - {sd2_up:.0f}", # --- NUOVA COLONNA 2SD ---
                 "Dist. 0G %": round(dist_zg_pct, 2), 
-                "OPPORTUNITÀ": reversion_signal,  # --- NUOVA COLONNA AGGIUNTA QUI ---
+                "OPPORTUNITÀ": reversion_signal,  
                 "Analisi": status_label, 
-                "_rev_score": rev_score,          # (Nascosta, serve per i colori)
+                "_rev_score": rev_score,          
                 "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
@@ -539,41 +558,42 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
-        # Rimuovo anche _rev_score dalle colonne visibili
         final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist", "_rev_score"])
         
         def color_logic_pro(row):
             styles = [''] * len(row)
             
-            # --- Colore per Score (Originale) ---
-            score_idx = row.index.get_loc('Score')
-            val_score = row['Score']
-            if val_score >= 8: styles[score_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
-            elif val_score <= -8: styles[score_idx] = 'background-color: #8B0000; color: white; font-weight: bold'
-            elif val_score > 0: styles[score_idx] = 'color: #2ECC40; font-weight: bold'
-            elif val_score < 0: styles[score_idx] = 'color: #FF4136; font-weight: bold'
+            # --- Colore per Score ---
+            if 'Score' in row.index:
+                score_idx = row.index.get_loc('Score')
+                val_score = row['Score']
+                if val_score >= 8: styles[score_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
+                elif val_score <= -8: styles[score_idx] = 'background-color: #8B0000; color: white; font-weight: bold'
+                elif val_score > 0: styles[score_idx] = 'color: #2ECC40; font-weight: bold'
+                elif val_score < 0: styles[score_idx] = 'color: #FF4136; font-weight: bold'
             
-            # --- Colore per OPPORTUNITÀ (Nuovo) ---
-            opp_idx = row.index.get_loc('OPPORTUNITÀ')
-            # Recuperiamo il valore dal dataframe originale (prima del drop, o ricalcolandolo dalla stringa)
-            val_opp = row['OPPORTUNITÀ']
-            if "💎 BUY" in val_opp:
-                styles[opp_idx] = 'background-color: #00FF00; color: black; font-weight: bold; border: 1px solid white'
-            elif "🟢 BUY" in val_opp:
-                styles[opp_idx] = 'color: #00FF00; font-weight: bold'
-            elif "💀 SELL" in val_opp:
-                styles[opp_idx] = 'background-color: #FF0000; color: white; font-weight: bold; border: 1px solid white'
-            elif "🟠 SELL" in val_opp:
-                styles[opp_idx] = 'color: #FF0000; font-weight: bold'
+            # --- Colore per OPPORTUNITÀ ---
+            if 'OPPORTUNITÀ' in row.index:
+                opp_idx = row.index.get_loc('OPPORTUNITÀ')
+                val_opp = row['OPPORTUNITÀ']
+                if "💎 BUY" in val_opp:
+                    styles[opp_idx] = 'background-color: #00FF00; color: black; font-weight: bold; border: 1px solid white'
+                elif "🟢 BUY" in val_opp:
+                    styles[opp_idx] = 'color: #00FF00; font-weight: bold'
+                elif "💀 SELL" in val_opp:
+                    styles[opp_idx] = 'background-color: #FF0000; color: white; font-weight: bold; border: 1px solid white'
+                elif "🟠 SELL" in val_opp:
+                    styles[opp_idx] = 'color: #FF0000; font-weight: bold'
 
-            # --- Colore per Analisi (Originale) ---
-            analisi_idx = row.index.get_loc('Analisi')
-            val_ana = row['Analisi']
-            if "🔥" in val_ana: styles[analisi_idx] = 'background-color: #8B0000; color: white'
-            elif "🔴" in val_ana: styles[analisi_idx] = 'color: #FF4136; font-weight: bold'
-            elif "🟢" in val_ana: styles[analisi_idx] = 'color: #2ECC40; font-weight: bold'
-            elif "🟡" in val_ana: styles[analisi_idx] = 'color: #FFDC00'
-            elif "✅" in val_ana: styles[analisi_idx] = 'color: #0074D9'
+            # --- Colore per Analisi ---
+            if 'Analisi' in row.index:
+                analisi_idx = row.index.get_loc('Analisi')
+                val_ana = row['Analisi']
+                if "🔥" in val_ana: styles[analisi_idx] = 'background-color: #8B0000; color: white'
+                elif "🔴" in val_ana: styles[analisi_idx] = 'color: #FF4136; font-weight: bold'
+                elif "🟢" in val_ana: styles[analisi_idx] = 'color: #2ECC40; font-weight: bold'
+                elif "🟡" in val_ana: styles[analisi_idx] = 'color: #FFDC00'
+                elif "✅" in val_ana: styles[analisi_idx] = 'color: #0074D9'
 
             return styles
 
