@@ -440,9 +440,17 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         px, df_scan, dte_years = data_pack
         
         try:
-            # --- 1. PREPARAZIONE DATI GAMMA ---
-            df_scan = df_scan[df_scan['gamma'].notnull()].copy()
+            # --- 0. NORMALIZZAZIONE COLONNE ---
+            # Rendiamo tutte le colonne minuscole per evitare errori di case-sensitivity (Gamma vs gamma)
+            df_scan.columns = [c.lower() for c in df_scan.columns]
 
+            # --- 1. PREPARAZIONE DATI GAMMA ---
+            if 'gamma' not in df_scan.columns:
+                # Se la colonna manca, proviamo a calcolarla al volo o saltiamo il ticker
+                st.warning(f"⚠️ Colonna 'gamma' mancante per {t_name}. Verificare funzione fetch.")
+                continue 
+
+            df_scan = df_scan[df_scan['gamma'].notnull()].copy()
             # --- 2. CALCOLO ZERO GAMMA RINFORZATO ---
             def safe_zg_calc(df, current_px):
                 try:
