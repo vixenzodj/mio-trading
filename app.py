@@ -469,14 +469,44 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             elif net_vanna_scan < 0 and px > zg_dyn: verdict = "🌪️ GAMMA SQUEEZE (Alta Volatilità)"
             else: verdict = "⚖️ NEUTRO / RANGE BOUND"
 
-            avg_iv = df_scan['impliedVolatility'].mean()
-            sd_move = px * avg_iv * np.sqrt(dte_years)
-            sd1_up, sd1_down = px + sd_move, px - sd_move
+            # --- NUOVO CALCOLO DS (ASIMMETRICO & NORMALIZZATO) ---
+            avg_iv_raw = df_scan['impliedVolatility'].mean()
+            clean_avg_iv = avg_iv_raw / 100 if avg_iv_raw > 1.5 else avg_iv_raw
+            
+            p_iv_avg = df_scan[df_scan['type'] == 'put']['impliedVolatility'].mean()
+            c_iv_avg = df_scan[df_scan['type'] == 'call']['impliedVolatility'].mean()
+            s_factor = (p_iv_avg / c_iv_avg) if (c_iv_avg > 0) else 1.0
+            
+            one_day_std = clean_avg_iv * np.sqrt(1/252)
+            sd1_up = px * (1 + (one_day_std / (s_factor if s_factor > 0 else 1)))
+            sd1_down = px * (1 - (one_day_std * s_factor))
+            sd2_up = px * (1 + (one_day_std * 2 / (s_factor if s_factor > 0 else 1)))
+            sd2_down = px * (1 - (one_day_std * 2 * s_factor))
+
+            # --- MOTORE MEAN REVERSION ---
+            if px <= sd2_down:
+                reversion_signal = "💎 BUY REVERSION (2DS)"
+                rev_score = 2
+            elif px <= sd1_down:
+                reversion_signal = "🟢 BUY REVERSION (1DS)"
+                rev_score = 1
+            elif px >= sd2_up:
+                reversion_signal = "💀 SELL REVERSION (2DS)"
+                rev_score = -2
+            elif px >= sd1_up:
+                reversion_signal = "🟠 SELL REVERSION (1DS)"
+                rev_score = -1
+            else:
+                reversion_signal = "---"
+                rev_score = 0
+            # ---------------------------------------------
+
             dist_zg_pct = ((px - zg_val) / px) * 100
             is_above_0g = px > zg_val
             near_sd_up = abs(px - sd1_up) / px < 0.005
             near_sd_down = abs(px - sd1_down) / px < 0.005
             
+            # (Mantengo la tua logica originale per "Analisi")
             if not is_above_0g: 
                 if near_sd_down: status_label = "🔴 < 0G | TEST -1SD (Bounce?)"
                 elif px < sd1_down: status_label = "⚫ < 0G | SOTTO -1SD (Short Ext)"
@@ -499,7 +529,9 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                 "0-G Dynamic": round(zg_dyn, 2),
                 "1SD Range": f"{sd1_down:.0f}-{sd1_up:.0f}", 
                 "Dist. 0G %": round(dist_zg_pct, 2), 
+                "OPPORTUNITÀ": reversion_signal,  # --- NUOVA COLONNA AGGIUNTA QUI ---
                 "Analisi": status_label, 
+                "_rev_score": rev_score,          # (Nascosta, serve per i colori)
                 "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
@@ -507,11 +539,13 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
-        final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist"])
+        # Rimuovo anche _rev_score dalle colonne visibili
+        final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist", "_rev_score"])
         
         def color_logic_pro(row):
             styles = [''] * len(row)
-            # Colore per Score
+            
+            # --- Colore per Score (Originale) ---
             score_idx = row.index.get_loc('Score')
             val_score = row['Score']
             if val_score >= 8: styles[score_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
@@ -519,7 +553,20 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             elif val_score > 0: styles[score_idx] = 'color: #2ECC40; font-weight: bold'
             elif val_score < 0: styles[score_idx] = 'color: #FF4136; font-weight: bold'
             
-            # Colore per Analisi (Originale)
+            # --- Colore per OPPORTUNITÀ (Nuovo) ---
+            opp_idx = row.index.get_loc('OPPORTUNITÀ')
+            # Recuperiamo il valore dal dataframe originale (prima del drop, o ricalcolandolo dalla stringa)
+            val_opp = row['OPPORTUNITÀ']
+            if "💎 BUY" in val_opp:
+                styles[opp_idx] = 'background-color: #00FF00; color: black; font-weight: bold; border: 1px solid white'
+            elif "🟢 BUY" in val_opp:
+                styles[opp_idx] = 'color: #00FF00; font-weight: bold'
+            elif "💀 SELL" in val_opp:
+                styles[opp_idx] = 'background-color: #FF0000; color: white; font-weight: bold; border: 1px solid white'
+            elif "🟠 SELL" in val_opp:
+                styles[opp_idx] = 'color: #FF0000; font-weight: bold'
+
+            # --- Colore per Analisi (Originale) ---
             analisi_idx = row.index.get_loc('Analisi')
             val_ana = row['Analisi']
             if "🔥" in val_ana: styles[analisi_idx] = 'background-color: #8B0000; color: white'
