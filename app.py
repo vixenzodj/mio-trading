@@ -439,7 +439,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
         px, df_scan, dte_years = data_pack
         
-       try:
+        try:
             # --- 0. CALCOLO PREVENTIVO GRECHE ---
             # Calcoliamo subito le greche (Gamma, Vanna, Charm) così le colonne esistono
             df_scan = get_greeks_pro(df_scan, px)
