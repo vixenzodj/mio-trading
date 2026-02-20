@@ -572,7 +572,7 @@ try:
                 "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
-            except Exception as e:
+        except Exception as e:
             # Rimuoviamo st.stop() per permettere allo scanner di continuare se un ticker fallisce
             st.error(f"Errore su {t_name}: {e}")
             
