@@ -439,18 +439,21 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
         px, df_scan, dte_years = data_pack
         
-        try:
-            # --- 0. NORMALIZZAZIONE COLONNE ---
-            # Rendiamo tutte le colonne minuscole per evitare errori di case-sensitivity (Gamma vs gamma)
+       try:
+            # --- 0. CALCOLO PREVENTIVO GRECHE ---
+            # Calcoliamo subito le greche (Gamma, Vanna, Charm) così le colonne esistono
+            df_scan = get_greeks_pro(df_scan, px)
+            
+            # Normalizziamo i nomi delle colonne in minuscolo per sicurezza
             df_scan.columns = [c.lower() for c in df_scan.columns]
 
-            # --- 1. PREPARAZIONE DATI GAMMA ---
+            # --- 1. PREPARAZIONE DATI ---
             if 'gamma' not in df_scan.columns:
-                # Se la colonna manca, proviamo a calcolarla al volo o saltiamo il ticker
-                st.warning(f"⚠️ Colonna 'gamma' mancante per {t_name}. Verificare funzione fetch.")
-                continue 
-
+                st.warning(f"⚠️ Impossibile calcolare Gamma per {t_name}")
+                continue
+                
             df_scan = df_scan[df_scan['gamma'].notnull()].copy()
+
             # --- 2. CALCOLO ZERO GAMMA RINFORZATO ---
             def safe_zg_calc(df, current_px):
                 try:
@@ -478,13 +481,13 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             except:
                 zg_dyn = zg_val
 
-            # --- 3. CALCOLO GRECHE SCANNER ---
-            df_scan_greeks = get_greeks_pro(df_scan, px)
-            net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
-            net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
+            # --- 3. RECUPERO RISULTATI GRECHE (Già calcolate sopra) ---
+            net_vanna_scan = df_scan['vanna'].sum() if 'vanna' in df_scan.columns else 0
+            net_charm_scan = df_scan['charm'].sum() if 'charm' in df_scan.columns else 0
             
             v_icon = "🟢" if net_vanna_scan > 0 else "🔴"
             c_icon = "🔵" if net_charm_scan < 0 else "🔴"
+            
 
             # --- 4. MOTORE DI SCORING CONFLUENZA ---
             p_score = 4 if (px > zg_val and px > zg_dyn) else (-4 if (px < zg_val and px < zg_dyn) else 0)
