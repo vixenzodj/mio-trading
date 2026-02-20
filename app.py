@@ -440,17 +440,44 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         px, df_scan, dte_years = data_pack
         
         try:
-            # 1. ALLINEAMENTO ZERO GAMMA (Logica identica alla Dashboard)
-            # Usiamo brentq con lo stesso range di ricerca della dashboard
-            try: 
-                zg_val = brentq(calculate_gex_at_price, px*0.2, px*1.8, args=(df_scan,))
-            except: 
-                zg_val = px # Fallback se non trova il punto di cross
+            # --- 1. PREPARAZIONE DATI GAMMA ---
+            # Pulizia dati per evitare errori matematici durante il calcolo
+            df_scan = df_scan[df_scan['gamma'].notnull()]
+
+            # --- 2. CALCOLO ZERO GAMMA RINFORZATO ---
+            def safe_zg_calc(df, current_px):
+                try:
+                    # Cerchiamo lo Zero Gamma in un range molto ampio (0.1x a 2.0x del prezzo)
+                    # Usiamo il metodo brentq che è il più preciso
+                    zg = brentq(calculate_gex_at_price, current_px * 0.1, current_px * 2.0, args=(df,))
+                    
+                    # Controllo di sicurezza: se il risultato è troppo vicino allo zero o assurdo
+                    if zg <= 1 or abs(zg - current_px) < 0.01:
+                        return None
+                    return zg
+                except:
+                    return None
+
+            # Esecuzione calcolo
+            zg_val = safe_zg_calc(df_scan, px)
             
-            # 2. ZERO GAMMA DINAMICO (Se presente nel tuo codice, lo allineiamo)
-            try: 
-                zg_dyn = brentq(calculate_0g_dynamic, px*0.2, px*1.8, args=(df_scan,))
-            except: 
+            # Se il calcolo fallisce (ritorna None), proviamo una ricerca lineare veloce
+            if zg_val is None:
+                try:
+                    # Sommiamo il gamma per strike e cerchiamo il cambio di segno
+                    df_agg = df_scan.groupby('strike')['gamma'].sum().reset_index()
+                    # Trova lo strike dove il gamma passa da positivo a negativo (o viceversa)
+                    for idx in range(len(df_agg)-1):
+                        if (df_agg.iloc[idx]['gamma'] * df_agg.iloc[idx+1]['gamma']) <= 0:
+                            zg_val = df_agg.iloc[idx]['strike']
+                            break
+                except:
+                    zg_val = px # Solo come ultima spiaggia se tutto fallisce
+
+            # Calcolo ZG Dinamico (con lo stesso metodo safe)
+            try:
+                zg_dyn = brentq(calculate_0g_dynamic, px * 0.1, px * 2.0, args=(df_scan,))
+            except:
                 zg_dyn = zg_val
 
             # Calcolo Greche Scanner
