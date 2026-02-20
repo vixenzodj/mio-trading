@@ -543,6 +543,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                 "Ticker": t_name.replace("^", ""), 
                 "Score": int(ss),                 
                 "Verdict (Regime)": verdict,      
+                "Greche V|C": f"V:{v_icon} C:{c_icon}",
                 "Prezzo": round(px, 2), 
                 "0-G Static": round(zg_val, 2), 
                 "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}", 
