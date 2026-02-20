@@ -565,8 +565,9 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                 "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
-        except: 
-            pass
+        except Exception as e:
+            st.error(f"Errore fatale su {t_name}: {e}")
+            st.stop() # Ferma tutto al primo errore per farti leggere
             
         progress_bar.progress((i + 1) / len(tickers_50))
     
