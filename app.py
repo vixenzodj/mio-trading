@@ -439,26 +439,26 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
         px, df_scan, dte_years = data_pack
         
-       try:
+        try:
             # --- 1. PREPARAZIONE DATI GAMMA ---
             df_scan = df_scan[df_scan['gamma'].notnull()].copy()
 
             # --- 2. CALCOLO ZERO GAMMA RINFORZATO (DALLA DASHBOARD) ---
             def safe_zg_calc(df, current_px):
-                try:
-                    # Metodo A: Ricerca Matematica brentq (Range 0.1x a 2.0x)
-                    zg = brentq(calculate_gex_at_price, current_px * 0.1, current_px * 2.0, args=(df,))
-                    if zg <= 1 or abs(zg - current_px) < 0.01: return None
-                    return zg
+        try:
+             # Metodo A: Ricerca Matematica brentq (Range 0.1x a 2.0x)
+             zg = brentq(calculate_gex_at_price, current_px * 0.1, current_px * 2.0, args=(df,))
+                if zg <= 1 or abs(zg - current_px) < 0.01: return None
+                return zg
                 except:
-                    try:
-                        # Metodo B: Ricerca Lineare (Cambio Segno)
-                        df_agg = df.groupby('strike')['gamma'].sum().reset_index()
-                        for idx in range(len(df_agg)-1):
-                            if (df_agg.iloc[idx]['gamma'] * df_agg.iloc[idx+1]['gamma']) <= 0:
-                                return df_agg.iloc[idx]['strike']
-                    except: return None
-                return None
+         try:
+            # Metodo B: Ricerca Lineare (Cambio Segno)
+             df_agg = df.groupby('strike')['gamma'].sum().reset_index()
+             for idx in range(len(df_agg)-1):
+             if (df_agg.iloc[idx]['gamma'] * df_agg.iloc[idx+1]['gamma']) <= 0:
+             return df_agg.iloc[idx]['strike']
+             except: return None
+             return None
 
             zg_val = safe_zg_calc(df_scan, px)
             if zg_val is None: zg_val = px # Fallback finale
