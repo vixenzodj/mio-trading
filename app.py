@@ -541,18 +541,19 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
             scan_results.append({
                 "Ticker": t_name.replace("^", ""), 
-                "Score": int(ss),                 
+                "Score": int(ss),                  
                 "Verdict (Regime)": verdict,      
                 "Greche V|C": f"V:{v_icon} C:{c_icon}",
                 "Prezzo": round(px, 2), 
                 "0-G Static": round(zg_val, 2), 
+                "0-G Dynamic": round(zg_dyn, 2), # --- NUOVA COLONNA DINAMICA ---
                 "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}", 
                 "2SD Range": f"{sd2_down:.0f} - {sd2_up:.0f}", # --- NUOVA COLONNA 2SD ---
                 "Dist. 0G %": round(dist_zg_pct, 2), 
                 "OPPORTUNITÀ": reversion_signal,  
                 "Analisi": status_label, 
                 "_rev_score": rev_score,          
-                "_sort_score": -ss,                
+                "_sort_score": -ss,                 
                 "_sort_dist": abs(dist_zg_pct)
             })
         except: pass
@@ -598,4 +599,4 @@ elif menu == "🔥 SCANNER HOT TICKERS":
 
             return styles
 
-        st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
+        st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)True, height=800)
