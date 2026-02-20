@@ -599,4 +599,4 @@ elif menu == "🔥 SCANNER HOT TICKERS":
 
             return styles
 
-        st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)True, height=800)
+        st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
