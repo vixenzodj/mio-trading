@@ -440,11 +440,18 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         px, df_scan, dte_years = data_pack
         
         try:
-            # Calcolo 0-G Statico e Dinamico
-            try: zg_val = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan,))
-            except: zg_val = px
-            try: zg_dyn = brentq(calculate_0g_dynamic, px*0.75, px*1.25, args=(df_scan,))
-            except: zg_dyn = px
+            # 1. ALLINEAMENTO ZERO GAMMA (Logica identica alla Dashboard)
+            # Usiamo brentq con lo stesso range di ricerca della dashboard
+            try: 
+                zg_val = brentq(calculate_gex_at_price, px*0.2, px*1.8, args=(df_scan,))
+            except: 
+                zg_val = px # Fallback se non trova il punto di cross
+            
+            # 2. ZERO GAMMA DINAMICO (Se presente nel tuo codice, lo allineiamo)
+            try: 
+                zg_dyn = brentq(calculate_0g_dynamic, px*0.2, px*1.8, args=(df_scan,))
+            except: 
+                zg_dyn = zg_val
 
             # Calcolo Greche Scanner
             df_scan_greeks = get_greeks_pro(df_scan, px)
