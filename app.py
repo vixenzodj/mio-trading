@@ -572,7 +572,181 @@ try:
                 "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
-            except Exception as e:
+try:
+            # --- 0. SINCRONIZZAZIONE QUANT ENGINE ---
+            # Calcoliamo immediatamente le greche usando la tua funzione get_greeks_pro
+            # Questo assicura che le colonne Gamma, Vanna, Charm, ecc. esistano subito.
+            df_scan = get_greeks_pro(df_scan, px)
+            
+            # Normalizziamo i nomi per sicurezza (get_greeks_pro usa maiuscole: 'Gamma', 'Vanna')
+            # Ma per uniformità nel calcolo matematico successivo usiamo i nomi originali.
+
+            # --- 1. PREPARAZIONE DATI ---
+            if 'Gamma' not in df_scan.columns:
+                st.warning(f"⚠️ Dati insufficienti per calcolare Gamma su {t_name}")
+                continue
+                
+            df_scan = df_scan[df_scan['Gamma'].notnull()].copy()
+
+            # --- 2. CALCOLO ZERO GAMMA IDENTICO ALLA DASHBOARD ---
+            def safe_zg_calc(df, current_px):
+                # Definiamo un range di ricerca stretto (±15%) per evitare valori assurdi
+                search_min, search_max = current_px * 0.85, current_px * 1.15
+                try:
+                    # Usiamo ESATTAMENTE la tua funzione di calcolo GEX (OI + 50% Vol)
+                    zg = brentq(calculate_gex_at_price, search_min, search_max, args=(df,))
+                    return zg
+                except:
+                    try:
+                        # Fallback: Ricerca lineare del cambio segno se brentq non converge
+                        df_agg = df.groupby('strike')['Gamma'].sum().reset_index()
+                        for idx in range(len(df_agg)-1):
+                            if (df_agg.iloc[idx]['Gamma'] * df_agg.iloc[idx+1]['Gamma']) <= 0:
+                                return df_agg.iloc[idx]['strike']
+                        return None
+                    except: 
+                        return None
+
+            # Calcolo Zero Gamma Statico (Quello del tuo Box)
+            zg_val = safe_zg_calc(df_scan, px)
+            if zg_val is None or zg_val == 0: zg_val = px # Fallback al prezzo attuale
+
+            # Calcolo Zero Gamma Dinamico (Solo Volumi - Tua funzione)
+            try:
+                zg_dyn = brentq(calculate_0g_dynamic, px * 0.85, px * 1.15, args=(df_scan,))
+            except:
+                zg_dyn = zg_val
+
+            # --- 3. RECUPERO RISULTATI GRECHE ---
+            net_vanna_scan = df_scan['Vanna'].sum() if 'Vanna' in df_scan.columns else 0
+            net_charm_scan = df_scan['Charm'].sum() if 'Charm' in df_scan.columns else 0
+            
+            v_icon = "🟢" if net_vanna_scan > 0 else "🔴"
+            c_icon = "🔵" if net_charm_scan < 0 else "🔴"
+
+            # --- 4. MOTORE DI SCORING CONFLUENZA ---
+            p_score = 4 if (px > zg_val and px > zg_dyn) else (-4 if (px < zg_val and px < zg_dyn) else 0)
+            v_score = 3 if net_vanna_scan > 0 else -3
+            c_score = 3 if net_charm_scan < 0 else -3
+            ss = p_score + v_score + c_score
+            
+            # Cluster/Market Regime
+            if ss >= 8: verdict = "🚀 CONFLUENZA FULL LONG"
+            elif ss <= -8: verdict = "☢️ CRASH RISK / FULL SHORT"
+            elif px > zg_val and px < zg_dyn: verdict = "⚠️ DISTRIBUZIONE (Volumi in uscita)"
+            elif px < zg_val and px > zg_dyn: verdict = "🔥 SHORT SQUEEZE IN ATTO"
+            elif net_vanna_scan < 0 and px > zg_dyn: verdict = "🌪️ GAMMA SQUEEZE (Alta Volatilità)"
+            else: verdict = "⚖️ NEUTRO / RANGE BOUND"
+
+            # --- 5. LOGICA ASIMMETRICA DS ---
+            try:
+                mean_iv = df_scan['impliedVolatility'].mean()
+                if not df_scan.empty:
+                    c_target, p_target = px * 1.02, px * 0.98
+                    c_skew = df_scan[df_scan['type'] == 'call']
+                    p_skew = df_scan[df_scan['type'] == 'put']
+                    
+                    def clean_iv(val):
+                        if val is None or val == 0: return mean_iv / 100 if mean_iv > 1 else mean_iv
+                        return val / 100 if val > 1.5 else val
+
+                    raw_c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
+                    raw_p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
+                    
+                    c_iv, p_iv = clean_iv(raw_c_iv), clean_iv(raw_p_iv)
+                else:
+                    c_iv = p_iv = mean_iv / 100 if mean_iv > 1 else mean_iv
+            except:
+                c_iv = p_iv = 0.15
+
+            one_day_factor = np.sqrt(1/252)
+            sd1_up, sd2_up = px * (1 + (c_iv * one_day_factor)), px * (1 + (c_iv * 2 * one_day_factor))
+            sd1_down, sd2_down = px * (1 - (p_iv * one_day_factor)), px * (1 - (p_iv * 2 * one_day_factor))
+
+            # --- 6. MOTORE OPPORTUNITÀ MEAN REVERSION ---
+            if px <= sd2_down: reversion_signal, rev_score = "💎 BUY REVERSION (2DS)", 2
+            elif px <= sd1_down: reversion_signal, rev_score = "🟢 BUY REVERSION (1DS)", 1
+            elif px >= sd2_up: reversion_signal, rev_score = "💀 SELL REVERSION (2DS)", -2
+            elif px >= sd1_up: reversion_signal, rev_score = "🟠 SELL REVERSION (1DS)", -1
+            else: reversion_signal, rev_score = "---", 0
+
+            # --- 7. ANALISI DETTAGLIATA ---
+            dist_zg_pct = ((px - zg_val) / px) * 100
+            is_above_0g = px > zg_val
+            near_sd_up = abs(px - sd1_up) / px < 0.005
+            near_sd_down = abs(px - sd1_down) / px < 0.005
+            
+            if not is_above_0g: 
+                if near_sd_down: status_label = "🔴 < 0G | TEST -1SD (Bounce?)"
+                elif px < sd1_down: status_label = "⚫ < 0G | SOTTO -1SD (Short Ext)"
+                else: status_label = "🔻 SOTTO 0G (Short Bias)"
+            else: 
+                if near_sd_up: status_label = "🟡 > 0G | TEST +1SD (Breakout?)"
+                elif px > sd1_up: status_label = "🟢 > 0G | SOPRA +1SD (Long Ext)"
+                elif near_sd_down: status_label = "🟢 > 0G | DIP BUY (Test -1SD)"
+                else: status_label = "✅ SOPRA 0G (Long Bias)"
+            
+            if abs(dist_zg_pct) < 0.3: status_label = "🔥 FLIP IMMINENTE (0G)"
+            
+            # --- 8. AGGIUNTA RISULTATI (Con Arrotondamento Pulito) ---
+            scan_results.append({
+                "Ticker": t_name.replace("^", ""), 
+                "Score": int(ss),                 
+                "Verdict (Regime)": verdict,      
+                "Greche V|C": f"V:{v_icon} C:{c_icon}",
+                "Prezzo": round(float(px), 2), 
+                "0-G Static": round(float(zg_val), 2), 
+                "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}", 
+                "2SD Range": f"{sd2_down:.0f} - {sd2_up:.0f}", 
+                "Dist. 0G %": f"{dist_zg_pct:.2f}%", 
+                "OPPORTUNITÀ": reversion_signal,  
+                "Analisi": status_label, 
+                "_rev_score": rev_score,          
+                "_sort_score": -ss,                
+                "_sort_dist": abs(dist_zg_pct)
+            })
+            
+except Exception as e:
+            # Rimuoviamo st.stop() per permettere allo scanner di continuare se un ticker fallisce
+            st.error(f"Errore su {t_name}: {e}")
+            
+        progress_bar.progress((i + 1) / len(tickers_50))
+    
+    # --- 9. DISPLAY FINALE E COLORI ---
+    if scan_results:
+        final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist", "_rev_score"])
+        
+        def color_logic_pro(row):
+            styles = [''] * len(row)
+            
+            if 'Score' in row.index:
+                s_idx = row.index.get_loc('Score')
+                val = row['Score']
+                if val >= 8: styles[s_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
+                elif val <= -8: styles[s_idx] = 'background-color: #8B0000; color: white; font-weight: bold'
+                elif val > 0: styles[s_idx] = 'color: #2ECC40; font-weight: bold'
+                elif val < 0: styles[s_idx] = 'color: #FF4136; font-weight: bold'
+            
+            if 'OPPORTUNITÀ' in row.index:
+                o_idx = row.index.get_loc('OPPORTUNITÀ')
+                val_opp = row['OPPORTUNITÀ']
+                if "💎 BUY" in val_opp: styles[o_idx] = 'background-color: #00FF00; color: black; font-weight: bold; border: 1px solid white'
+                elif "🟢 BUY" in val_opp: styles[o_idx] = 'color: #00FF00; font-weight: bold'
+                elif "💀 SELL" in val_opp: styles[o_idx] = 'background-color: #FF0000; color: white; font-weight: bold; border: 1px solid white'
+                elif "🟠 SELL" in val_opp: styles[o_idx] = 'color: #FF0000; font-weight: bold'
+
+            if 'Analisi' in row.index:
+                a_idx = row.index.get_loc('Analisi')
+                val_ana = row['Analisi']
+                if "🔥" in val_ana: styles[a_idx] = 'background-color: #8B0000; color: white'
+                elif "🔴" in val_ana: styles[a_idx] = 'color: #FF4136; font-weight: bold'
+                elif "🟢" in val_ana: styles[a_idx] = 'color: #2ECC40; font-weight: bold'
+                elif "🟡" in val_ana: styles[a_idx] = 'color: #FFDC00'
+                elif "✅" in val_ana: styles[a_idx] = 'color: #0074D9'
+
+            return styles
+
+        st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)except Exception as e:
             # Rimuoviamo st.stop() per permettere allo scanner di continuare se un ticker fallisce
             st.error(f"Errore su {t_name}: {e}")
             
