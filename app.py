@@ -303,7 +303,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-                # 1. LOGICA ORIGINALE (Preservata al 100%)
+                # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3)
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
                 vanna_score = 3 if net_vanna > 0 else -3
                 charm_score = 3 if net_charm < 0 else -3
@@ -311,50 +311,60 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
                 
+                # 2. CALCOLO DINAMICO DEI PESI (Solo per etichette titoli)
+                p_intensity = abs(spot - z_gamma_dyn) / spot * 100 
+                v_intensity = abs(net_vanna) / 500  
+                c_intensity = abs(net_charm) / 500  
+                total_intensity = p_intensity + v_intensity + c_intensity
+                
+                if total_intensity > 0:
+                    p_w = int((p_intensity / total_intensity) * 100)
+                    v_w = int((v_intensity / total_intensity) * 100)
+                    c_w = 100 - p_w - v_w 
+                else:
+                    p_w, v_w, c_w = 40, 30, 30
+
+                # 3. TESTI COMPLETI ORIGINALI (Ripristinati al 100%)
                 pos_text = "🟢 SOPRA entrambi 0-G (Pieno controllo acquirenti)" if pos_score == 4 else ("🔴 SOTTO entrambi 0-G (Pieno controllo venditori)" if pos_score == -4 else "🟡 Divergenza OI vs Volumi (Fase incerta)")
                 vanna_text = "🟢 Stabile (Nessuno Squeeze Imminente)" if vanna_score == 3 else "🔴 Pericolo Squeeze (Dealer costretti a comprare/vendere in corsa)"
                 charm_text = "🔵 Supporto Passivo (Il tempo aiuta i Long)" if charm_score == 3 else "🔴 Flusso in Uscita (Il tempo pesa sul prezzo)"
 
-                # 2. INTEGRAZIONE LOGICHE OPERATIVE (Rischio e Target)
+                # 4. LOGICA SEGNALI E RISCHIO
                 abs_ss = abs(total_ss)
                 if total_ss >= 8:
-                    res_signal, res_strat, res_target = "🚀 STRONG BUY", "Long Call / Bull Call Spread", "Call Wall"
+                    res_sig, res_strat, res_target = "🚀 STRONG BUY", "Long Call / Bull Call Spread", "Call Wall"
                 elif total_ss <= -8:
-                    res_signal, res_strat, res_target = "☢️ STRONG SELL", "Long Put / Bear Put Spread", "Put Wall"
+                    res_sig, res_strat, res_target = "☢️ STRONG SELL", "Long Put / Bear Put Spread", "Put Wall"
                 elif total_ss >= 4:
-                    res_signal, res_strat, res_target = "🟢 BUY ON DIP", "Bull Put Spread (Credit)", "+1 SD Line"
+                    res_sig, res_strat, res_target = "🟢 BUY ON DIP", "Bull Put Spread (Credit)", "+1 SD Line"
                 elif total_ss <= -4:
-                    res_signal, res_strat, res_target = "🔴 SELL ON RALLY", "Bear Call Spread (Credit)", "-1 SD Line"
+                    res_sig, res_strat, res_target = "🔴 SELL ON RALLY", "Bear Call Spread (Credit)", "-1 SD Line"
                 else:
-                    res_signal, res_strat, res_target = "⚖️ NEUTRAL", "Wait / Iron Condor", "Gamma Flip Zone"
+                    res_sig, res_strat, res_target = "⚖️ NEUTRAL", "Wait / Iron Condor", "Gamma Flip Zone"
 
-                if abs_ss >= 8:
-                    res_risk, res_rr = "2.0% (ALTO)", "1:3+"
-                elif abs_ss >= 4:
-                    res_risk, res_rr = "1.0% (MEDIO)", "1:2"
-                else:
-                    res_risk, res_rr = "0.0% (NO TRADE)", "N/A"
+                res_risk = "2.0% (ALTO)" if abs_ss >= 8 else ("1.0% (MEDIO)" if abs_ss >= 4 else "0.0% (NO TRADE)")
+                res_rr = "1:3+" if abs_ss >= 8 else ("1:2" if abs_ss >= 4 else "N/A")
 
-                # 3. INTERFACCIA GRAFICA (Ripristinata con percentuali e icone)
+                # 5. INTERFACCIA (Testi lunghi + Percentuali dinamiche)
                 st.markdown(f"""
 <div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
 <h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
-<h3 style='text-align:center; color:white; margin-bottom:15px;'>AZIONE: <span style='color:{hud_color};'>{res_signal}</span></h3>
+<h3 style='text-align:center; color:white; margin-bottom:15px;'>AZIONE: <span style='color:{hud_color};'>{res_sig}</span></h3>
 <hr style='border-color:#333;'>
 <div style='display:flex; justify-content:space-between; text-align:center;'>
 <div style='width:30%;'>
-<h4 style='color:white;'>⚡ Forza Prezzo (40%)</h4>
-<p style='color:lightgray; font-size:12px;'><i>Confluenza 0G Statico / Dinamico</i></p>
+<h4 style='color:white;'>⚡ Forza Prezzo ({p_w}%)</h4>
+<p style='color:lightgray; font-size:11px;'><i>Confluenza 0G Statico / Dinamico</i></p>
 <b style='font-size:13px; color:white;'>{pos_text}</b>
 </div>
 <div style='width:30%;'>
-<h4 style='color:white;'>🌪️ Forza Vanna (30%)</h4>
-<p style='color:lightgray; font-size:12px;'><i>Rischio accelerazione Volatilità</i></p>
+<h4 style='color:white;'>🌪️ Forza Vanna ({v_w}%)</h4>
+<p style='color:lightgray; font-size:11px;'><i>Rischio accelerazione Volatilità</i></p>
 <b style='font-size:13px; color:white;'>{vanna_text}</b>
 </div>
 <div style='width:30%;'>
-<h4 style='color:white;'>⏳ Forza Charm (30%)</h4>
-<p style='color:lightgray; font-size:12px;'><i>Supporto/Pressione legati al Tempo</i></p>
+<h4 style='color:white;'>⏳ Forza Charm ({c_w}%)</h4>
+<p style='color:lightgray; font-size:11px;'><i>Supporto/Pressione legati al Tempo</i></p>
 <b style='font-size:13px; color:white;'>{charm_text}</b>
 </div>
 </div>
