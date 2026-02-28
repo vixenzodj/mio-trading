@@ -308,89 +308,79 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 vanna_score = 3 if net_vanna > 0 else -3
                 charm_score = 3 if net_charm < 0 else -3
                 total_ss = pos_score + vanna_score + charm_score
-                abs_ss = abs(total_ss)
+                 # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
+
+            with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
+
+                pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
+
+                vanna_score = 3 if net_vanna > 0 else -3
+
+                charm_score = 3 if net_charm < 0 else -3
+
+                total_ss = pos_score + vanna_score + charm_score
+
                 
-                # 2. COLORI
+
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
+
                 
-                # 3. TESTI BASE ORIGINALI
+
                 pos_text = "🟢 SOPRA entrambi 0-G (Pieno controllo acquirenti)" if pos_score == 4 else ("🔴 SOTTO entrambi 0-G (Pieno controllo venditori)" if pos_score == -4 else "🟡 Divergenza OI vs Volumi (Fase incerta)")
+
                 vanna_text = "🟢 Stabile (Nessuno Squeeze Imminente)" if vanna_score == 3 else "🔴 Pericolo Squeeze (Dealer costretti a comprare/vendere in corsa)"
+
                 charm_text = "🔵 Supporto Passivo (Il tempo aiuta i Long)" if charm_score == 3 else "🔴 Flusso in Uscita (Il tempo pesa sul prezzo)"
 
-                # 4. NUOVA LOGICA: STRATEGIA LONG/SHORT
-                if total_ss >= 8:
-                    signal, strat, target_label = "🚀 STRONG BUY", "Long Call / Bull Call Spread", "Muro Superiore (Call Wall)"
-                elif total_ss <= -8:
-                    signal, strat, target_label = "☢️ STRONG SELL (CRASH RISK)", "Long Put / Bear Put Spread", "Muro Inferiore (Put Wall)"
-                elif total_ss >= 4:
-                    signal, strat, target_label = "🟢 BUY ON DIP", "Bull Put Spread (Credit)", "Resistenza +1 Dev. Standard"
-                elif total_ss <= -4:
-                    signal, strat, target_label = "🔴 SELL ON RALLY", "Bear Call Spread (Credit)", "Supporto -1 Dev. Standard"
-                else:
-                    signal, strat, target_label = "⚖️ NEUTRAL / WAIT", "No Directional (Iron Condor)", "Nessuno (Attesa direzionalità)"
 
-                # 5. NUOVA LOGICA: RISCHIO E R:R
-                if abs_ss >= 8:
-                    rr_ratio, risk_profile, risk_pct = "1:3+", "ALTO (Trend Following)", "2.0%"
-                elif abs_ss >= 4:
-                    rr_ratio, risk_profile, risk_pct = "1:2", "MEDIO (Swing Trade)", "1.0%"
-                elif abs_ss >= 3:
-                    rr_ratio, risk_profile, risk_pct = "1:1", "BASSO (Scalping)", "0.5%"
-                else:
-                    rr_ratio, risk_profile, risk_pct = "N/A", "NULLA (No Trade)", "0.0%"
 
-                # 6. INTERFACCIA GRAFICA (Schiacciata a sinistra per evitare bug Streamlit)
                 st.markdown(f"""
-<div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
-    <h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
-    
-    <div style='text-align:center; margin-bottom:15px;'>
-        <h3 style='margin:0; color:white;'>Azione Suggerita: <span style='color:{hud_color};'>{signal}</span></h3>
-    </div>
-    
-    <hr style='border-color:#333;'>
-    
-    <div style='display:flex; justify-content:space-between; text-align:center;'>
-        <div style='width:30%;'>
-            <h4 style='color:white;'>⚡ Forza Prezzo (40%)</h4>
-            <p style='color:lightgray; font-size:12px;'><i>Confluenza 0G Statico / Dinamico</i></p>
-            <b style='font-size:14px;'>{pos_text}</b>
-        </div>
-        <div style='width:30%;'>
-            <h4 style='color:white;'>🌪️ Forza Vanna (30%)</h4>
-            <p style='color:lightgray; font-size:12px;'><i>Rischio accelerazione Volatilità</i></p>
-            <b style='font-size:14px;'>{vanna_text}</b>
-        </div>
-        <div style='width:30%;'>
-            <h4 style='color:white;'>⏳ Forza Charm (30%)</h4>
-            <p style='color:lightgray; font-size:12px;'><i>Supporto/Pressione legati al Tempo</i></p>
-            <b style='font-size:14px;'>{charm_text}</b>
-        </div>
-    </div>
-    
-    <hr style='border-color:#333; margin-top:20px;'>
-    
-    <div style='display:flex; justify-content:space-between; text-align:center; background:rgba(0,0,0,0.5); padding:15px; border-radius:8px;'>
-        <div style='width:30%;'>
-            <h5 style='color:#FFDC00; margin:0 0 5px 0;'>🎯 STRATEGIA</h5>
-            <b style='color:white; font-size:14px;'>{strat}</b><br>
-            <span style='color:lightgray; font-size:12px;'>Target: {target_label}</span>
-        </div>
-        <div style='width:30%; border-left: 1px solid #444; border-right: 1px solid #444;'>
-            <h5 style='color:#FFDC00; margin:0 0 5px 0;'>⚖️ R/R RATIO MINIMO</h5>
-            <b style='color:white; font-size:16px;'>{rr_ratio}</b>
-        </div>
-        <div style='width:30%;'>
-            <h5 style='color:#FFDC00; margin:0 0 5px 0;'>🛡️ RISK PER TRADE</h5>
-            <b style='color:{hud_color}; font-size:16px;'>{risk_pct}</b><br>
-            <span style='color:lightgray; font-size:12px;'>Profilo: {risk_profile}</span>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-            # --- FINE NUOVO HUD ---
 
+                <div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
+
+                    <h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
+
+                    <hr style='border-color:#333;'>
+
+                    <div style='display:flex; justify-content:space-between; text-align:center;'>
+
+                        <div style='width:30%;'>
+
+                            <h4 style='color:white;'>⚡ Forza Prezzo (40%)</h4>
+
+                            <p style='color:lightgray;'><i>Confluenza 0G Statico / Dinamico</i></p>
+
+                            <b>{pos_text}</b>
+
+                        </div>
+
+                        <div style='width:30%;'>
+
+                            <h4 style='color:white;'>🌪️ Forza Vanna (30%)</h4>
+
+                            <p style='color:lightgray;'><i>Rischio accelerazione Volatilità</i></p>
+
+                            <b>{vanna_text}</b>
+
+                        </div>
+
+                        <div style='width:30%;'>
+
+                            <h4 style='color:white;'>⏳ Forza Charm (30%)</h4>
+
+                            <p style='color:lightgray;'><i>Supporto/Pressione legati al Tempo</i></p>
+
+                            <b>{charm_text}</b>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+                """, unsafe_allow_html=True)
+
+            # --- FINE NUOVO HUD ---
             col_view, col_vol = st.columns([2, 1])
             with col_view:
                 view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
