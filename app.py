@@ -406,19 +406,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
                              name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
 
-    # --- FIX LEGENDA: SPOSTATA IN ALTO E IN ORIZZONTALE ---
+# --- FIX FINALE: LEGENDA SOPRA IL DOPPIO ASSE ---
     fig.update_layout(
         template="plotly_dark", 
         height=850, 
-        margin=dict(l=0, r=0, t=60, b=0), # Aumentato il margine superiore (t) per la legenda
+        margin=dict(l=0, r=0, t=100, b=0), # Aumentato 't' a 100 per far stare asse + legenda
         yaxis=dict(range=[lo, hi], dtick=gran),
         legend=dict(
             orientation="h",        # Legenda orizzontale
             yanchor="bottom",
-            y=1.01,                 # Sopra il grafico
+            y=1.12,                 # Alzata a 1.12 per non toccare l'asse Vanna
             xanchor="left",
-            x=0.01,                 # Allineata a sinistra
-            bgcolor="rgba(0,0,0,0)" # Trasparente
+            x=0.01,                 
+            bgcolor="rgba(0,0,0,0)" 
         )
     )
     st.plotly_chart(fig, use_container_width=True)
