@@ -403,11 +403,25 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="solid", annotation_text=f"-2SD {sd2_down:.2f}")
 
             # Nota Skew Factor nella legenda (dummy trace)
-            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
-                                     name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
+                             name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
 
-            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
-            st.plotly_chart(fig, use_container_width=True)
+    # --- FIX LEGENDA: SPOSTATA IN ALTO E IN ORIZZONTALE ---
+    fig.update_layout(
+        template="plotly_dark", 
+        height=850, 
+        margin=dict(l=0, r=0, t=60, b=0), # Aumentato il margine superiore (t) per la legenda
+        yaxis=dict(range=[lo, hi], dtick=gran),
+        legend=dict(
+            orientation="h",        # Legenda orizzontale
+            yanchor="bottom",
+            y=1.01,                 # Sopra il grafico
+            xanchor="left",
+            x=0.01,                 # Allineata a sinistra
+            bgcolor="rgba(0,0,0,0)" # Trasparente
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
