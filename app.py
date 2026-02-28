@@ -301,86 +301,44 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 </div>
                 """, unsafe_allow_html=True)
 
-# --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
+            # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-                # 1. SCORE ORIGINALE
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
                 vanna_score = 3 if net_vanna > 0 else -3
                 charm_score = 3 if net_charm < 0 else -3
                 total_ss = pos_score + vanna_score + charm_score
-                 # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
-
-            with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-
-                pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
-
-                vanna_score = 3 if net_vanna > 0 else -3
-
-                charm_score = 3 if net_charm < 0 else -3
-
-                total_ss = pos_score + vanna_score + charm_score
-
                 
-
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
-
                 
-
                 pos_text = "🟢 SOPRA entrambi 0-G (Pieno controllo acquirenti)" if pos_score == 4 else ("🔴 SOTTO entrambi 0-G (Pieno controllo venditori)" if pos_score == -4 else "🟡 Divergenza OI vs Volumi (Fase incerta)")
-
                 vanna_text = "🟢 Stabile (Nessuno Squeeze Imminente)" if vanna_score == 3 else "🔴 Pericolo Squeeze (Dealer costretti a comprare/vendere in corsa)"
-
                 charm_text = "🔵 Supporto Passivo (Il tempo aiuta i Long)" if charm_score == 3 else "🔴 Flusso in Uscita (Il tempo pesa sul prezzo)"
 
-
-
                 st.markdown(f"""
-
                 <div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
-
                     <h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
-
                     <hr style='border-color:#333;'>
-
                     <div style='display:flex; justify-content:space-between; text-align:center;'>
-
                         <div style='width:30%;'>
-
                             <h4 style='color:white;'>⚡ Forza Prezzo (40%)</h4>
-
                             <p style='color:lightgray;'><i>Confluenza 0G Statico / Dinamico</i></p>
-
                             <b>{pos_text}</b>
-
                         </div>
-
                         <div style='width:30%;'>
-
                             <h4 style='color:white;'>🌪️ Forza Vanna (30%)</h4>
-
                             <p style='color:lightgray;'><i>Rischio accelerazione Volatilità</i></p>
-
                             <b>{vanna_text}</b>
-
                         </div>
-
                         <div style='width:30%;'>
-
                             <h4 style='color:white;'>⏳ Forza Charm (30%)</h4>
-
                             <p style='color:lightgray;'><i>Supporto/Pressione legati al Tempo</i></p>
-
                             <b>{charm_text}</b>
-
                         </div>
-
                     </div>
-
                 </div>
-
                 """, unsafe_allow_html=True)
-
             # --- FINE NUOVO HUD ---
+
             col_view, col_vol = st.columns([2, 1])
             with col_view:
                 view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
