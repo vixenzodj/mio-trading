@@ -301,9 +301,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 </div>
                 """, unsafe_allow_html=True)
 
-            # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND (VERSIONE LOGARITMICA BILANCIATA) ---
+            # --- INIZIO HUD QUANTISTICO (VERSIONE BILANCIATA PRO) ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-                import math # Necessario per il bilanciamento logaritmico
+                import math 
                 
                 # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3) - INVARIATA
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
@@ -313,12 +313,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
                 
-                # 2. CALCOLO DINAMICO LOGARITMICO (Bilancia automaticamente NDX, NVDA, TLT)
-                # Portiamo la forza del prezzo in una scala competitiva (moltiplicatore 5000)
-                p_intensity = (abs(spot - z_gamma_dyn) / spot) * 5000 
+                # 2. NUOVO BILANCIAMENTO "ANTI-OSCURAMENTO"
+                # Usiamo un moltiplicatore più dolce (800 invece di 5000) e mettiamo un tetto (CAP)
+                p_dist_raw = (abs(spot - z_gamma_dyn) / spot) * 800
+                p_intensity = min(15, p_dist_raw) # Il prezzo non può pesare più di "15 punti" nella torta totale
                 
-                # Usiamo il Logaritmo per "domare" i milioni di Vanna e Charm.
-                # Questo impedisce al decadimento temporale (Charm) di oscurare il prezzo nell'HUD.
+                # Le Greche rimangono logaritmiche per gestire i milioni/miliardi senza esplodere
                 v_intensity = math.log10(abs(net_vanna) + 1)
                 c_intensity = math.log10(abs(net_charm) + 1)
                 
