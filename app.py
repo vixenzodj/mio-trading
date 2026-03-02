@@ -301,8 +301,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 </div>
                 """, unsafe_allow_html=True)
 
-            # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
+            # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND (VERSIONE LOGARITMICA BILANCIATA) ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
+                import math # Necessario per il bilanciamento logaritmico
+                
                 # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3) - INVARIATA
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
                 vanna_score = 3 if net_vanna > 0 else -3
@@ -311,21 +313,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
                 
-                # 2. CALCOLO DINAMICO AUTO-ADATTIVO (Funziona su NDX, NVDA, QQQ, TLT, ecc.)
-                # Misuriamo la forza del prezzo (segnali solitamente tra 0.1 e 10)
-                p_intensity = (abs(spot - z_gamma_dyn) / spot) * 1000 
+                # 2. CALCOLO DINAMICO LOGARITMICO (Bilancia automaticamente NDX, NVDA, TLT)
+                # Portiamo la forza del prezzo in una scala competitiva (moltiplicatore 5000)
+                p_intensity = (abs(spot - z_gamma_dyn) / spot) * 5000 
                 
-                # Calcoliamo la "Massa Critica" delle Greche correnti
-                v_raw = abs(net_vanna)
-                c_raw = abs(net_charm)
-                massa_critica = (v_raw + c_raw) / 2
-                
-                # Se la massa critica è presente, normalizziamo Vanna e Charm per farli "competere" col prezzo
-                if massa_critica > 0:
-                    v_intensity = (v_raw / massa_critica) * 5
-                    c_intensity = (c_raw / massa_critica) * 5
-                else:
-                    v_intensity, c_intensity = 0, 0
+                # Usiamo il Logaritmo per "domare" i milioni di Vanna e Charm.
+                # Questo impedisce al decadimento temporale (Charm) di oscurare il prezzo nell'HUD.
+                v_intensity = math.log10(abs(net_vanna) + 1)
+                c_intensity = math.log10(abs(net_charm) + 1)
                 
                 total_intensity = p_intensity + v_intensity + c_intensity
                 
