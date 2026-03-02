@@ -303,7 +303,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-                # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3)
+                # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3) - INVARIATA
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
                 vanna_score = 3 if net_vanna > 0 else -3
                 charm_score = 3 if net_charm < 0 else -3
@@ -311,10 +311,22 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
                 
-                # 2. CALCOLO DINAMICO DEI PESI (Solo per etichette titoli)
-                p_intensity = abs(spot - z_gamma_dyn) / spot * 100 
-                v_intensity = abs(net_vanna) / 500  
-                c_intensity = abs(net_charm) / 500  
+                # 2. CALCOLO DINAMICO AUTO-ADATTIVO (Funziona su NDX, NVDA, QQQ, TLT, ecc.)
+                # Misuriamo la forza del prezzo (segnali solitamente tra 0.1 e 10)
+                p_intensity = (abs(spot - z_gamma_dyn) / spot) * 1000 
+                
+                # Calcoliamo la "Massa Critica" delle Greche correnti
+                v_raw = abs(net_vanna)
+                c_raw = abs(net_charm)
+                massa_critica = (v_raw + c_raw) / 2
+                
+                # Se la massa critica è presente, normalizziamo Vanna e Charm per farli "competere" col prezzo
+                if massa_critica > 0:
+                    v_intensity = (v_raw / massa_critica) * 5
+                    c_intensity = (c_raw / massa_critica) * 5
+                else:
+                    v_intensity, c_intensity = 0, 0
+                
                 total_intensity = p_intensity + v_intensity + c_intensity
                 
                 if total_intensity > 0:
@@ -324,12 +336,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 else:
                     p_w, v_w, c_w = 40, 30, 30
 
-                # 3. TESTI COMPLETI ORIGINALI (Ripristinati al 100%)
+                # 3. TESTI COMPLETI ORIGINALI (Invariati)
                 pos_text = "🟢 SOPRA entrambi 0-G (Pieno controllo acquirenti)" if pos_score == 4 else ("🔴 SOTTO entrambi 0-G (Pieno controllo venditori)" if pos_score == -4 else "🟡 Divergenza OI vs Volumi (Fase incerta)")
                 vanna_text = "🟢 Stabile (Nessuno Squeeze Imminente)" if vanna_score == 3 else "🔴 Pericolo Squeeze (Dealer costretti a comprare/vendere in corsa)"
                 charm_text = "🔵 Supporto Passivo (Il tempo aiuta i Long)" if charm_score == 3 else "🔴 Flusso in Uscita (Il tempo pesa sul prezzo)"
 
-                # 4. LOGICA SEGNALI E RISCHIO
+                # 4. LOGICA SEGNALI E RISCHIO (Invariata)
                 abs_ss = abs(total_ss)
                 if total_ss >= 8:
                     res_sig, res_strat, res_target = "🚀 STRONG BUY", "Long Call / Bull Call Spread", "Call Wall"
