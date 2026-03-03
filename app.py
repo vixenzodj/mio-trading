@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 from scipy.optimize import brentq
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime
+from datetime import datetime, timedelta
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
 
@@ -108,13 +108,28 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     tf_map = {"1Min": "1Min", "5Min": "5Min", "15Min": "15Min", "1H": "1Hour", "1D": "1Day"}
     tf = tf_map.get(timeframe, "1Day")
     
+    # Gestione ritardo 15 min per account Free (SIP Data Restriction)
+    now_utc = datetime.utcnow()
+    safe_end_dt = now_utc - timedelta(minutes=20)
+    
+    # Se la data di fine richiesta è oggi (o futura), limitiamo a 20 min fa
+    try:
+        req_end_obj = datetime.strptime(end_str, '%Y-%m-%d')
+        if req_end_obj.date() >= now_utc.date():
+            final_end = safe_end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        else:
+            final_end = end_str + "T23:59:59Z"
+    except:
+        final_end = end_str + "T23:59:59Z"
+
     url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
     params = {
         "start": start_str + "T00:00:00Z",
-        "end": end_str + "T23:59:59Z",
+        "end": final_end,
         "timeframe": tf,
         "limit": 10000,
-        "adjustment": "raw"
+        "adjustment": "raw",
+        "feed": "iex" # Forziamo IEX per evitare errori SIP su account free
     }
     
     try:
