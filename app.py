@@ -746,7 +746,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             # Usiamo Volatility Multiplier standard per ora, ma assicuriamo che i dati siano reali.
             
             # Utilizziamo la Sensibilità scelta dall'utente per modulare la distanza
-            df_hist['Vol_Mult'] = level_sensitivity + (df_hist['Roll_Vol'] * 5)
+            # NUOVA FORMULA: level_sensitivity è ora un moltiplicatore DIRETTO dell'ampiezza.
+            # (1 + Roll_Vol) aggiunge un componente dinamico ma controllato.
+            df_hist['Vol_Mult'] = level_sensitivity * (1 + df_hist['Roll_Vol'])
+            
             df_hist['CallWall_Sim'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * df_hist['Vol_Mult'])
             df_hist['PutWall_Sim'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * df_hist['Vol_Mult'])
             
@@ -966,11 +969,17 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             total_pnl = sum([t['pnl'] for t in closed_trades])
             profit_factor = (sum([t['pnl'] for t in wins]) / abs(sum([t['pnl'] for t in losses]))) if losses else 99.9
             
+            # Coverage Stats
+            trading_days = df_hist['datetime'].dt.date.nunique()
+            days_with_trades = pd.to_datetime([t['time'] for t in trades]).date
+            active_days = len(set(days_with_trades))
+            coverage_pct = (active_days / trading_days * 100) if trading_days > 0 else 0
+            
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Net Profit", f"${total_pnl:,.2f}", delta=f"{(total_pnl/initial_capital)*100:.2f}%")
             k2.metric("Win Rate", f"{win_rate:.1f}%", f"{len(wins)}W / {len(losses)}L")
             k3.metric("Profit Factor", f"{profit_factor:.2f}")
-            k4.metric("Total Trades", f"{total_trades}")
+            k4.metric("Active Days", f"{active_days}/{trading_days}", f"{coverage_pct:.1f}% Coverage")
             
             st.area_chart(equity_curve)
             
