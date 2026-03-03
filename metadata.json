@@ -1,0 +1,5 @@
+{
+  "name": "Sentinel GEX V63",
+  "description": "Financial analysis tool for options flow, gamma exposure, and market sentiment using Yahoo Finance data.",
+  "requestFramePermissions": []
+}
