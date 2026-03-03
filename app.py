@@ -567,7 +567,21 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
                                      name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
 
-            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
+            # --- FIX FINALE: LEGENDA SOPRA IL DOPPIO ASSE ---
+            fig.update_layout(
+                template="plotly_dark", 
+                height=850, 
+                margin=dict(l=0, r=0, t=100, b=0), # Aumentato 't' a 100 per far stare asse + legenda
+                yaxis=dict(range=[lo, hi], dtick=gran),
+                legend=dict(
+                    orientation="h",        # Legenda orizzontale
+                    yanchor="bottom",
+                    y=1.12,                 # Alzata a 1.12 per non toccare l'asse Vanna
+                    xanchor="left",
+                    x=0.01,                 
+                    bgcolor="rgba(0,0,0,0)" 
+                )
+            )
             st.plotly_chart(fig, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
