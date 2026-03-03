@@ -87,15 +87,52 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
     except:
         return None
 
+def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
+    # Mapping Timeframe Yahoo
+    tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
+    tf = tf_map.get(timeframe, "1d")
+    
+    try:
+        # Yahoo ha limiti sullo storico intraday
+        # 1m = 7gg, 5m-15m = 60gg, 1h = 730gg
+        df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False)
+        
+        if df.empty: return pd.DataFrame()
+        
+        # Flatten MultiIndex columns if present (yfinance update)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df.reset_index(inplace=True)
+        
+        # Standardize columns
+        col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
+        df.rename(columns=col_map, inplace=True)
+        
+        # Ensure datetime
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        
+        # Filter out rows with missing data
+        df.dropna(inplace=True)
+        
+        return df
+    except Exception as e:
+        st.error(f"Errore Yahoo Finance: {e}")
+        return pd.DataFrame()
+
 def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
+    # SE E' UN INDICE (^...), USA YAHOO PER PREZZI REALI
+    if symbol.startswith("^"):
+        return fetch_yahoo_history(symbol, timeframe, start_str, end_str)
+
     # Mappatura Ticker Yahoo -> Alpaca (ETF fallback per indici su Free Tier)
     # Aggiunto mapping per NDX, SPX, RUT e altri indici comuni
     symbol_map = {
-        "^SPX": "SPY", "SPX": "SPY",
-        "^NDX": "QQQ", "NDX": "QQQ",
-        "^RUT": "IWM", "RUT": "IWM",
-        "^DJI": "DIA", "DJI": "DIA",
-        "^VIX": "VIXY", "VIX": "VIXY"
+        "SPX": "SPY",
+        "NDX": "QQQ",
+        "RUT": "IWM",
+        "DJI": "DIA",
+        "VIX": "VIXY"
     } 
     alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
     
@@ -607,6 +644,16 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     with c4:
         initial_capital = st.number_input("Capitale Iniziale ($)", value=10000)
 
+    # --- 1.1 ORARI DI TRADING (SESSIONI) ---
+    st.subheader("⏰ Orari Operativi (Fuso Orario Dati)")
+    t1, t2, t3 = st.columns(3)
+    with t1:
+        use_time_filter = st.checkbox("Filtra per Orario", value=False)
+    with t2:
+        start_time = st.time_input("Ora Inizio", value=datetime.strptime("09:30", "%H:%M").time())
+    with t3:
+        end_time = st.time_input("Ora Fine", value=datetime.strptime("16:00", "%H:%M").time())
+
     # --- 2. COSTRUTTORE STRATEGIA ---
     st.markdown("---")
     st.subheader("2️⃣ Costruttore Regole di Ingresso")
@@ -688,7 +735,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             true_range = np.max(ranges, axis=1)
             df_hist['ATR'] = true_range.rolling(14).mean()
             
-            # Dynamic Walls
+            # Dynamic Walls (Volume Weighted Logic Attempt)
+            # Se abbiamo Volume, usiamolo per pesare la larghezza dei muri?
+            # Idea: High Volume = Stronger Walls (More OI usually). 
+            # Ma qui stiamo simulando la distanza.
+            # Usiamo Volatility Multiplier standard per ora, ma assicuriamo che i dati siano reali.
+            
             df_hist['Vol_Mult'] = 2.0 + (df_hist['Roll_Vol'] * 5)
             df_hist['CallWall_Sim'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * df_hist['Vol_Mult'])
             df_hist['PutWall_Sim'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * df_hist['Vol_Mult'])
@@ -719,6 +771,24 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 price = curr_bar['Close']
                 ts = curr_bar['datetime']
                 
+                # --- TIME FILTER CHECK ---
+                if use_time_filter:
+                    # Assumiamo che ts sia datetime
+                    # Se i dati sono daily, il time filter non ha senso (ts.time() è 00:00)
+                    if bt_tf == "1D":
+                        pass # Ignora filtro su daily
+                    else:
+                        bar_time = ts.time()
+                        if not (start_time <= bar_time <= end_time):
+                            # Se siamo fuori orario, chiudiamo posizioni intraday? 
+                            # O semplicemente non entriamo?
+                            # Per ora: NON ENTRIAMO. Le posizioni aperte restano overnight (swing).
+                            # Se si vuole chiudere a fine sessione, serve logica extra.
+                            
+                            # Gestione Posizione (Swing): continuiamo a monitorare SL/TP anche fuori orario?
+                            # Nei dati storici intraday, le barre fuori orario potrebbero non esserci se il feed è solo RTH.
+                            pass
+
                 # Levels
                 zg = prev_bar['ZeroGamma_Sim']
                 cw = prev_bar['CallWall_Sim']
@@ -764,77 +834,79 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     continue 
 
                 # --- VALUTAZIONE SEGNALI ---
+                # Verifica Orario per NUOVI ingressi
+                can_enter = True
+                if use_time_filter and bt_tf != "1D":
+                     bar_time = ts.time()
+                     if not (start_time <= bar_time <= end_time):
+                         can_enter = False
+                
                 signal = None
                 
-                # Trend Filter Check
-                trend_ok_long = (curr_bar['Close'] > sma200) if use_trend_filter else True
-                trend_ok_short = (curr_bar['Close'] < sma200) if use_trend_filter else True
-                
-                # --- LONG LOGIC ---
-                if trend_ok_long and "Nessun" not in long_trigger:
-                    trigger_met = False
+                if can_enter:
+                    # Trend Filter Check
+                    trend_ok_long = (curr_bar['Close'] > sma200) if use_trend_filter else True
+                    trend_ok_short = (curr_bar['Close'] < sma200) if use_trend_filter else True
                     
-                    if "Rimbalza su Put Wall" in long_trigger:
-                        # Touch: Low <= PW
-                        # Close: Close > PW (bounce confirmed) ? No, usually bounce is touch.
-                        # Let's define Bounce as: Price touched PW.
-                        if wait_for_close:
-                            # Close logic: Prev Close < PW and Curr Close > PW (Reclaim) OR Just touch and close green?
-                            # Let's use Reclaim logic for Close mode: Price went below and closed back above?
-                            # Or simple: Low <= PW and Close > PW
-                            if curr_bar['Low'] <= pw and curr_bar['Close'] > pw: trigger_met = True
-                        else:
-                            if curr_bar['Low'] <= pw: trigger_met = True
-                            
-                    elif "Rompe a Rialzo 0-Gamma" in long_trigger:
-                        if wait_for_close:
-                            if prev_bar['Close'] < zg and curr_bar['Close'] > zg: trigger_met = True
-                        else:
-                            if prev_bar['Close'] < zg and curr_bar['High'] > zg: trigger_met = True
-                            
-                    elif "Rompe a Rialzo Call Wall" in long_trigger:
-                        if wait_for_close:
-                            if prev_bar['Close'] < cw and curr_bar['Close'] > cw: trigger_met = True
-                        else:
-                            if prev_bar['Close'] < cw and curr_bar['High'] > cw: trigger_met = True
+                    # --- LONG LOGIC ---
+                    if trend_ok_long and "Nessun" not in long_trigger:
+                        trigger_met = False
+                        
+                        if "Rimbalza su Put Wall" in long_trigger:
+                            if wait_for_close:
+                                if curr_bar['Low'] <= pw and curr_bar['Close'] > pw: trigger_met = True
+                            else:
+                                if curr_bar['Low'] <= pw: trigger_met = True
+                                
+                        elif "Rompe a Rialzo 0-Gamma" in long_trigger:
+                            if wait_for_close:
+                                if prev_bar['Close'] < zg and curr_bar['Close'] > zg: trigger_met = True
+                            else:
+                                if prev_bar['Close'] < zg and curr_bar['High'] > zg: trigger_met = True
+                                
+                        elif "Rompe a Rialzo Call Wall" in long_trigger:
+                            if wait_for_close:
+                                if prev_bar['Close'] < cw and curr_bar['Close'] > cw: trigger_met = True
+                            else:
+                                if prev_bar['Close'] < cw and curr_bar['High'] > cw: trigger_met = True
 
-                    elif "Rompe a Rialzo +1SD" in long_trigger:
-                        if wait_for_close:
-                            if prev_bar['Close'] < sd_up and curr_bar['Close'] > sd_up: trigger_met = True
-                        else:
-                            if prev_bar['Close'] < sd_up and curr_bar['High'] > sd_up: trigger_met = True
-                            
-                    if trigger_met: signal = 'long'
+                        elif "Rompe a Rialzo +1SD" in long_trigger:
+                            if wait_for_close:
+                                if prev_bar['Close'] < sd_up and curr_bar['Close'] > sd_up: trigger_met = True
+                            else:
+                                if prev_bar['Close'] < sd_up and curr_bar['High'] > sd_up: trigger_met = True
+                                
+                        if trigger_met: signal = 'long'
 
-                # --- SHORT LOGIC ---
-                if trend_ok_short and "Nessun" not in short_trigger and signal is None:
-                    trigger_met = False
-                    
-                    if "Rimbalza su Call Wall" in short_trigger:
-                        if wait_for_close:
-                            if curr_bar['High'] >= cw and curr_bar['Close'] < cw: trigger_met = True
-                        else:
-                            if curr_bar['High'] >= cw: trigger_met = True
-                            
-                    elif "Rompe a Ribasso 0-Gamma" in short_trigger:
-                        if wait_for_close:
-                            if prev_bar['Close'] > zg and curr_bar['Close'] < zg: trigger_met = True
-                        else:
-                            if prev_bar['Close'] > zg and curr_bar['Low'] < zg: trigger_met = True
-                            
-                    elif "Rompe a Ribasso Put Wall" in short_trigger:
-                        if wait_for_close:
-                            if prev_bar['Close'] > pw and curr_bar['Close'] < pw: trigger_met = True
-                        else:
-                            if prev_bar['Close'] > pw and curr_bar['Low'] < pw: trigger_met = True
+                    # --- SHORT LOGIC ---
+                    if trend_ok_short and "Nessun" not in short_trigger and signal is None:
+                        trigger_met = False
+                        
+                        if "Rimbalza su Call Wall" in short_trigger:
+                            if wait_for_close:
+                                if curr_bar['High'] >= cw and curr_bar['Close'] < cw: trigger_met = True
+                            else:
+                                if curr_bar['High'] >= cw: trigger_met = True
+                                
+                        elif "Rompe a Ribasso 0-Gamma" in short_trigger:
+                            if wait_for_close:
+                                if prev_bar['Close'] > zg and curr_bar['Close'] < zg: trigger_met = True
+                            else:
+                                if prev_bar['Close'] > zg and curr_bar['Low'] < zg: trigger_met = True
+                                
+                        elif "Rompe a Ribasso Put Wall" in short_trigger:
+                            if wait_for_close:
+                                if prev_bar['Close'] > pw and curr_bar['Close'] < pw: trigger_met = True
+                            else:
+                                if prev_bar['Close'] > pw and curr_bar['Low'] < pw: trigger_met = True
 
-                    elif "Rompe a Ribasso -1SD" in short_trigger:
-                        if wait_for_close:
-                            if prev_bar['Close'] > sd_dn and curr_bar['Close'] < sd_dn: trigger_met = True
-                        else:
-                            if prev_bar['Close'] > sd_dn and curr_bar['Low'] < sd_dn: trigger_met = True
-                            
-                    if trigger_met: signal = 'short'
+                        elif "Rompe a Ribasso -1SD" in short_trigger:
+                            if wait_for_close:
+                                if prev_bar['Close'] > sd_dn and curr_bar['Close'] < sd_dn: trigger_met = True
+                            else:
+                                if prev_bar['Close'] > sd_dn and curr_bar['Low'] < sd_dn: trigger_met = True
+                                
+                        if trigger_met: signal = 'short'
                 
                 # --- ENTRY EXECUTION ---
                 if signal:
