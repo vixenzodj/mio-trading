@@ -994,11 +994,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             active_days = len(set(days_with_trades))
             coverage_pct = (active_days / trading_days * 100) if trading_days > 0 else 0
             
-            k1, k2, k3, k4 = st.columns(4)
+            k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("Net Profit", f"${total_pnl:,.2f}", delta=f"{(total_pnl/initial_capital)*100:.2f}%")
-            k2.metric("Win Rate", f"{win_rate:.1f}%", f"{len(wins)}W / {len(losses)}L")
-            k3.metric("Profit Factor", f"{profit_factor:.2f}")
-            k4.metric("Active Days", f"{active_days}/{trading_days}", f"{coverage_pct:.1f}% Coverage")
+            k2.metric("Total Trades", f"{total_trades}", help="Numero totale di operazioni chiuse (Win + Loss)")
+            k3.metric("Win Rate", f"{win_rate:.1f}%", f"{len(wins)}W / {len(losses)}L")
+            k4.metric("Profit Factor", f"{profit_factor:.2f}")
+            k5.metric("Active Days", f"{active_days}/{trading_days}", f"{coverage_pct:.1f}% Coverage")
             
             st.area_chart(equity_curve)
             
