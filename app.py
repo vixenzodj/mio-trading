@@ -688,6 +688,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         ], help="Instant: entra subito durante la candela. Candle Close: entra all'apertura della candela successiva se la condizione è confermata.")
         
         use_trend_filter = st.checkbox("Filtro Trend (SMA 200)", value=False, help="Long solo se Prezzo > SMA200, Short solo se Prezzo < SMA200")
+        
+        # SENSITIVITY SLIDER
+        st.markdown("### 🎚️ SENSIBILITÀ LIVELLI")
+        level_sensitivity = st.slider("Moltiplicatore Distanza Muri (Basso = Più Trade)", 0.5, 4.0, 1.5, 0.1, help="Valori più bassi avvicinano i muri al prezzo (più segnali, più rumore). Valori alti li allontanano (meno segnali, più affidabili).")
 
     # --- 3. GESTIONE RISCHIO ---
     st.markdown("---")
@@ -741,13 +745,15 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             # Ma qui stiamo simulando la distanza.
             # Usiamo Volatility Multiplier standard per ora, ma assicuriamo che i dati siano reali.
             
-            df_hist['Vol_Mult'] = 2.0 + (df_hist['Roll_Vol'] * 5)
+            # Utilizziamo la Sensibilità scelta dall'utente per modulare la distanza
+            df_hist['Vol_Mult'] = level_sensitivity + (df_hist['Roll_Vol'] * 5)
             df_hist['CallWall_Sim'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * df_hist['Vol_Mult'])
             df_hist['PutWall_Sim'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * df_hist['Vol_Mult'])
             
             # SD Lines (Bollinger-like for Momentum)
-            df_hist['SD1_Up'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * 2)
-            df_hist['SD1_Down'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * 2)
+            # Anche le SD devono scalare con la sensibilità per coerenza
+            df_hist['SD1_Up'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * level_sensitivity)
+            df_hist['SD1_Down'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * level_sensitivity)
             
             # Trend Filter
             df_hist['SMA200'] = df_hist['Close'].rolling(window=200).mean()
