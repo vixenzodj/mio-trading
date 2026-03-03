@@ -89,8 +89,15 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
 
 def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     # Mappatura Ticker Yahoo -> Alpaca (ETF fallback per indici su Free Tier)
-    symbol_map = {"^SPX": "SPY", "^NDX": "QQQ", "^RUT": "IWM"} 
-    alpaca_sym = symbol_map.get(symbol, symbol.replace("^", ""))
+    # Aggiunto mapping per NDX, SPX, RUT e altri indici comuni
+    symbol_map = {
+        "^SPX": "SPY", "SPX": "SPY",
+        "^NDX": "QQQ", "NDX": "QQQ",
+        "^RUT": "IWM", "RUT": "IWM",
+        "^DJI": "DIA", "DJI": "DIA",
+        "^VIX": "VIXY", "VIX": "VIXY"
+    } 
+    alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
     
     headers = {
         "APCA-API-KEY-ID": "PKQVMHYR25JUXQVLTEEBEKVIMV",
@@ -119,8 +126,13 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
                 df['t'] = pd.to_datetime(df['t'])
                 df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
                 return df
+            else:
+                # Fallback per timeframe lunghi o dati mancanti
+                return pd.DataFrame()
+        else:
+            st.error(f"Errore Alpaca API ({response.status_code}): {response.text}")
     except Exception as e:
-        st.error(f"Errore Alpaca API: {e}")
+        st.error(f"Errore Connessione Alpaca: {e}")
     return pd.DataFrame()
 
 # --- NAVIGAZIONE ---
@@ -556,162 +568,255 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
 
 elif menu == "🔙 BACKTESTING STRATEGIA":
-    st.title("🔙 Backtesting Strategia GEX (Simulation)")
+    st.title("🔙 Backtesting Strategia GEX (Historical Simulation)")
+    
     st.markdown("""
-    <div style='background-color:rgba(255, 165, 0, 0.1); padding:10px; border-radius:5px; border: 1px solid orange;'>
-    <b>⚠️ ATTENZIONE:</b> Questo modulo simula una strategia utilizzando i <b>Livelli GEX calcolati OGGI</b> applicati ai dati storici dei prezzi (Forward Test Simulation).
-    Le API Free non forniscono lo storico delle Option Chain necessario per ricalcolare i livelli GEX nel passato.
+    <div style='background-color:rgba(0, 100, 255, 0.1); padding:15px; border-radius:5px; border: 1px solid #0074D9; margin-bottom: 20px;'>
+    <b>ℹ️ NOTA TECNICA SUI DATI STORICI:</b><br>
+    Le API Free (Yahoo/Alpaca) <b>NON forniscono lo storico delle Option Chain</b> (Open Interest/Volume per strike nel passato). 
+    Senza questi dati, è impossibile calcolare <i>esattamente</i> i livelli GEX (Call Wall, Put Wall, 0-Gamma) di 7 anni fa.<br><br>
+    ✅ <b>SOLUZIONE IMPLEMENTATA:</b> Il sistema utilizza un modello di <b>Ricostruzione Volatilità Dinamica</b>. 
+    Stima dove si trovavano <i>probabilmente</i> i Muri e lo 0-Gamma basandosi sulla Volatilità Storica (HV), ATR e Medie Mobili di quel periodo. 
+    Questo permette di testare la logica della strategia su dati passati in modo realistico.
     </div>
     """, unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns(3)
+    # --- CONFIGURAZIONE BACKTEST ---
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        bt_ticker = st.selectbox("Seleziona Ticker", ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "AMD", "COIN"])
+        bt_ticker = st.selectbox("Ticker", ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "AMD", "COIN", "^SPX", "^NDX", "^RUT"])
     with c2:
-        bt_tf = st.selectbox("Timeframe", ["1Min", "5Min", "15Min", "1H", "1D"], index=2)
+        bt_tf = st.selectbox("Timeframe", ["1Min", "5Min", "15Min", "1H", "1D"], index=4)
     with c3:
-        bt_days = st.slider("Giorni di Backtest", 1, 30, 5)
+        # Esteso fino a 7 anni (2520 giorni)
+        bt_days = st.number_input("Giorni Backtest (Max 2500)", min_value=10, max_value=2500, value=365)
+    with c4:
+        initial_capital = st.number_input("Capitale Iniziale ($)", value=10000)
 
-    # Fetch Expiries for Selector
-    y_ticker_for_dates = bt_ticker
-    if bt_ticker == "SPY": y_ticker_for_dates = "^SPX"
-    elif bt_ticker == "QQQ": y_ticker_for_dates = "^NDX"
-    elif bt_ticker == "IWM": y_ticker_for_dates = "^RUT"
+    st.markdown("---")
+    st.subheader("⚙️ Configurazione Strategia")
     
-    try:
-        bt_avail_dates = yf.Ticker(y_ticker_for_dates).options
-    except:
-        bt_avail_dates = []
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        strategy_type = st.selectbox("Logica Operativa", [
+            "Trend Following (Breakout 0-Gamma)", 
+            "Mean Reversion (Rimbalzo sui Muri)",
+            "Gamma Squeeze (Breakout Call Wall)"
+        ])
+    with s2:
+        rr_ratio = st.selectbox("Rischio : Rendimento", ["1:1", "1:2", "1:3", "1:5"])
+    with s3:
+        risk_per_trade = st.slider("Rischio per Trade (%)", 0.5, 5.0, 1.0)
+
+    # Parsing R:R
+    rr_map = {"1:1": 1.0, "1:2": 2.0, "1:3": 3.0, "1:5": 5.0}
+    target_mult = rr_map[rr_ratio]
+
+    if st.button("🚀 AVVIA SIMULAZIONE STORICA COMPLETA", type="primary"):
+        end_date = datetime.now()
+        start_date = end_date - pd.Timedelta(days=bt_days)
         
-    if bt_avail_dates:
-        bt_expiry = st.selectbox("Scadenza Opzioni (GEX Ref)", bt_avail_dates)
-    else:
-        st.warning("Impossibile recuperare scadenze opzioni (Rate Limit Yahoo?). Riprova tra poco.")
-        bt_expiry = None
-
-    # Fetch Data
-    end_date = datetime.now()
-    start_date = end_date - pd.Timedelta(days=bt_days)
-    
-    if st.button("🚀 AVVIA BACKTEST"):
-        if not bt_expiry:
-            st.error("Seleziona una scadenza valida.")
-            st.stop()
-            
-        with st.spinner("Scaricamento dati Alpaca e Calcolo Livelli..."):
+        with st.spinner(f"Scaricamento dati storici ({bt_days} giorni) e Ricostruzione Livelli GEX..."):
             # 1. Fetch Price History
+            # Se il periodo è molto lungo (> 100 giorni) e il TF è basso, forziamo TF più alto o gestiamo limiti
+            if bt_days > 60 and bt_tf in ["1Min", "5Min"]:
+                st.warning(f"⚠️ Per {bt_days} giorni, il timeframe {bt_tf} è troppo pesante. Passaggio automatico a 1H/1D per stabilità.")
+                bt_tf = "1H"
+            
             df_hist = fetch_alpaca_history(bt_ticker, bt_tf, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
             
             if df_hist.empty:
-                st.error("Nessun dato storico trovato su Alpaca per il periodo selezionato.")
+                st.error("❌ Nessun dato storico trovato. Prova a ridurre il periodo o cambiare Ticker/Timeframe.")
                 st.stop()
-
-            # 2. Calculate GEX Levels (Current)
-            y_ticker = y_ticker_for_dates
             
-            # Fetch Option Data
-            try:
-                target_date = bt_expiry
-                raw_data = fetch_data(y_ticker, [target_date])
-                
-                # Get Spot for GEX calc
-                spot = df_hist['Close'].iloc[-1]
-                
-                # Calculate Levels
-                raw_data['dte_years'] = max((datetime.strptime(target_date, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
-                
-                # 0-Gamma
-                try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
-                except: z_gamma = spot
-                
-                # Walls
-                df_greeks = get_greeks_pro(raw_data, spot)
-                pivot_series = (df_greeks['strike'] // 1) * 1
-                agg = df_greeks.groupby(pivot_series).agg({'Gamma': 'sum'}).reset_index()
-                if 'strike' not in agg.columns: agg.rename(columns={'index': 'strike', agg.columns[0]: 'strike'}, inplace=True)
-                
-                c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
-                p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
-                
-            except Exception as e:
-                st.error(f"Errore calcolo GEX: {e}")
-                st.stop()
-
-            # 3. Simulation Loop
-            initial_balance = 10000
-            balance = initial_balance
-            position = None # 'long', 'short'
-            entry_price = 0
+            # 2. CALCOLO LIVELLI GEX SINTETICI (RECONSTRUCTION ENGINE)
+            # Usiamo ATR e Rolling Volatility per stimare l'ampiezza della chain e i muri probabili
+            
+            # Calcolo Indicatori Tecnici per la ricostruzione
+            df_hist['Returns'] = df_hist['Close'].pct_change()
+            df_hist['Roll_Vol'] = df_hist['Returns'].rolling(window=20).std() * np.sqrt(252) # HV Annualizzata
+            
+            # 0-Gamma Proxy: Spesso agisce come pivot tra regime positivo/negativo. 
+            # Usiamo una Hull MA o EMA 20 come proxy del "Flip Level"
+            df_hist['ZeroGamma_Sim'] = df_hist['Close'].rolling(window=20).mean() 
+            
+            # ATR per definire la distanza dei Muri (i Muri si allargano quando la vola sale)
+            # ATR manual calculation
+            high_low = df_hist['High'] - df_hist['Low']
+            high_close = np.abs(df_hist['High'] - df_hist['Close'].shift())
+            low_close = np.abs(df_hist['Low'] - df_hist['Close'].shift())
+            ranges = pd.concat([high_low, high_close, low_close], axis=1)
+            true_range = np.max(ranges, axis=1)
+            df_hist['ATR'] = true_range.rolling(14).mean()
+            
+            # Call Wall & Put Wall Simulation
+            # In genere i muri sono a circa 1-2 Deviazioni Standard o multipli dell'ATR
+            # Moltiplicatore dinamico basato su Vola: Se Vola alta, muri più larghi
+            df_hist['Vol_Mult'] = 2.0 + (df_hist['Roll_Vol'] * 5) # Adatta i muri alla volatilità
+            
+            df_hist['CallWall_Sim'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * df_hist['Vol_Mult'])
+            df_hist['PutWall_Sim'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * df_hist['Vol_Mult'])
+            
+            # Pulizia NaN iniziali
+            df_hist.dropna(inplace=True)
+            
+            # 3. ENGINE DI TRADING
+            balance = initial_capital
+            equity_curve = [initial_capital]
             trades = []
+            position = None # {'type': 'long'/'short', 'entry': float, 'sl': float, 'tp': float, 'time': datetime}
             
-            # Strategy Params (Hardcoded or UI?)
-            tp_pct = 0.01 # 1%
-            sl_pct = 0.005 # 0.5%
-            
-            st.write(f"**Livelli Riferimento:** Call Wall: {c_wall:.2f} | Put Wall: {p_wall:.2f} | 0-Gamma: {z_gamma:.2f}")
-            
-            for i, row in df_hist.iterrows():
-                price = row['Close']
-                ts = row['datetime']
+            # Loop Bar-by-Bar
+            for i in range(len(df_hist)):
+                if i < 1: continue
                 
-                # Logic: Mean Reversion on Walls
-                # Buy at Put Wall, Sell at Call Wall
+                curr_bar = df_hist.iloc[i]
+                prev_bar = df_hist.iloc[i-1]
                 
-                if position is None:
-                    # Long Entry (Touch Put Wall)
-                    if price <= p_wall * 1.002 and price >= p_wall * 0.998:
-                        position = 'long'
-                        entry_price = price
-                        trades.append({'type': 'ENTRY LONG', 'price': price, 'time': ts, 'reason': 'Put Wall Test'})
+                price = curr_bar['Close']
+                ts = curr_bar['datetime']
+                
+                zg = prev_bar['ZeroGamma_Sim'] # Usiamo i livelli calcolati alla chiusura precedente
+                cw = prev_bar['CallWall_Sim']
+                pw = prev_bar['PutWall_Sim']
+                atr = prev_bar['ATR']
+                
+                # --- GESTIONE POSIZIONE APERTA ---
+                if position:
+                    # Check SL/TP
+                    if position['type'] == 'long':
+                        if curr_bar['Low'] <= position['sl']: # Hit SL
+                            exit_price = position['sl'] # Slippage simulato? No, usiamo SL price
+                            pnl = (exit_price - position['entry']) * position['size']
+                            balance += pnl
+                            trades.append({'time': ts, 'type': 'EXIT SL', 'price': exit_price, 'pnl': pnl, 'res': 'LOSS'})
+                            position = None
+                        elif curr_bar['High'] >= position['tp']: # Hit TP
+                            exit_price = position['tp']
+                            pnl = (exit_price - position['entry']) * position['size']
+                            balance += pnl
+                            trades.append({'time': ts, 'type': 'EXIT TP', 'price': exit_price, 'pnl': pnl, 'res': 'WIN'})
+                            position = None
+                            
+                    elif position['type'] == 'short':
+                        if curr_bar['High'] >= position['sl']: # Hit SL
+                            exit_price = position['sl']
+                            pnl = (position['entry'] - exit_price) * position['size']
+                            balance += pnl
+                            trades.append({'time': ts, 'type': 'EXIT SL', 'price': exit_price, 'pnl': pnl, 'res': 'LOSS'})
+                            position = None
+                        elif curr_bar['Low'] <= position['tp']: # Hit TP
+                            exit_price = position['tp']
+                            pnl = (position['entry'] - exit_price) * position['size']
+                            balance += pnl
+                            trades.append({'time': ts, 'type': 'EXIT TP', 'price': exit_price, 'pnl': pnl, 'res': 'WIN'})
+                            position = None
                     
-                    # Short Entry (Touch Call Wall)
-                    elif price >= c_wall * 0.998 and price <= c_wall * 1.002:
-                        position = 'short'
-                        entry_price = price
-                        trades.append({'type': 'ENTRY SHORT', 'price': price, 'time': ts, 'reason': 'Call Wall Test'})
-                        
-                elif position == 'long':
-                    # TP
-                    if price >= entry_price * (1 + tp_pct):
-                        balance += (price - entry_price) * (10000/entry_price) # Invest full balance
-                        position = None
-                        trades.append({'type': 'TP LONG', 'price': price, 'time': ts, 'pnl': (price - entry_price)/entry_price})
-                    # SL
-                    elif price <= entry_price * (1 - sl_pct):
-                        balance -= (entry_price - price) * (10000/entry_price)
-                        position = None
-                        trades.append({'type': 'SL LONG', 'price': price, 'time': ts, 'pnl': (price - entry_price)/entry_price})
-                        
-                elif position == 'short':
-                    # TP
-                    if price <= entry_price * (1 - tp_pct):
-                        balance += (entry_price - price) * (10000/entry_price)
-                        position = None
-                        trades.append({'type': 'TP SHORT', 'price': price, 'time': ts, 'pnl': (entry_price - price)/entry_price})
-                    # SL
-                    elif price >= entry_price * (1 + sl_pct):
-                        balance -= (price - entry_price) * (10000/entry_price)
-                        position = None
-                        trades.append({'type': 'SL SHORT', 'price': price, 'time': ts, 'pnl': (entry_price - price)/entry_price})
+                    equity_curve.append(balance)
+                    continue # Se siamo a mercato, non apriamo nuove posizioni nello stesso tick (semplificazione)
 
-            # 4. Results
-            win_trades = [t for t in trades if 'pnl' in t and t['pnl'] > 0]
-            loss_trades = [t for t in trades if 'pnl' in t and t['pnl'] <= 0]
-            win_rate = len(win_trades) / len([t for t in trades if 'pnl' in t]) * 100 if trades else 0
+                # --- LOGICA DI INGRESSO (STRATEGIE) ---
+                signal = None # 'long', 'short'
+                stop_loss_dist = atr * 1.5 # Default SL distance based on ATR
+                
+                # 1. Trend Following (Breakout 0-Gamma)
+                if strategy_type == "Trend Following (Breakout 0-Gamma)":
+                    # Buy se prezzo rompe 0-Gamma dal basso verso l'alto
+                    if prev_bar['Close'] < zg and curr_bar['Close'] > zg:
+                        signal = 'long'
+                    # Sell se prezzo rompe 0-Gamma dall'alto verso il basso
+                    elif prev_bar['Close'] > zg and curr_bar['Close'] < zg:
+                        signal = 'short'
+                
+                # 2. Mean Reversion (Rimbalzo sui Muri)
+                elif strategy_type == "Mean Reversion (Rimbalzo sui Muri)":
+                    # Buy se tocca Put Wall
+                    if curr_bar['Low'] <= pw: 
+                        signal = 'long'
+                    # Sell se tocca Call Wall
+                    elif curr_bar['High'] >= cw:
+                        signal = 'short'
+                        
+                # 3. Gamma Squeeze (Breakout Call Wall)
+                elif strategy_type == "Gamma Squeeze (Breakout Call Wall)":
+                    # Buy se rompe Call Wall
+                    if prev_bar['Close'] < cw and curr_bar['Close'] > cw:
+                        signal = 'long'
+                
+                # ESECUZIONE ENTRY
+                if signal:
+                    risk_amt = balance * (risk_per_trade / 100)
+                    
+                    if signal == 'long':
+                        sl_price = price - stop_loss_dist
+                        risk_per_share = price - sl_price
+                        if risk_per_share <= 0: continue
+                        size = risk_amt / risk_per_share
+                        tp_price = price + (risk_per_share * target_mult)
+                        
+                        position = {'type': 'long', 'entry': price, 'sl': sl_price, 'tp': tp_price, 'size': size}
+                        trades.append({'time': ts, 'type': 'ENTRY LONG', 'price': price, 'pnl': 0, 'res': 'OPEN'})
+                        
+                    elif signal == 'short':
+                        sl_price = price + stop_loss_dist
+                        risk_per_share = sl_price - price
+                        if risk_per_share <= 0: continue
+                        size = risk_amt / risk_per_share
+                        tp_price = price - (risk_per_share * target_mult)
+                        
+                        position = {'type': 'short', 'entry': price, 'sl': sl_price, 'tp': tp_price, 'size': size}
+                        trades.append({'time': ts, 'type': 'ENTRY SHORT', 'price': price, 'pnl': 0, 'res': 'OPEN'})
+
+            # --- RISULTATI ---
+            st.success("✅ Simulazione Completata!")
             
-            st.metric("Win Rate", f"{win_rate:.2f}%", f"{len(win_trades)}W / {len(loss_trades)}L")
+            # Statistiche
+            closed_trades = [t for t in trades if t['res'] in ['WIN', 'LOSS']]
+            wins = [t for t in closed_trades if t['res'] == 'WIN']
+            losses = [t for t in closed_trades if t['res'] == 'LOSS']
             
-            # Chart
+            total_trades = len(closed_trades)
+            win_rate = (len(wins) / total_trades * 100) if total_trades > 0 else 0
+            total_pnl = sum([t['pnl'] for t in closed_trades])
+            profit_factor = (sum([t['pnl'] for t in wins]) / abs(sum([t['pnl'] for t in losses]))) if losses else 99.9
+            
+            # KPI Cards
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Net Profit", f"${total_pnl:,.2f}", delta=f"{(total_pnl/initial_capital)*100:.2f}%")
+            k2.metric("Win Rate", f"{win_rate:.1f}%", f"{len(wins)}W / {len(losses)}L")
+            k3.metric("Profit Factor", f"{profit_factor:.2f}")
+            k4.metric("Total Trades", f"{total_trades}")
+            
+            # Grafico Equity
+            st.area_chart(equity_curve)
+            
+            # Grafico Tecnico con Muri Sintetici
             fig = go.Figure()
-            fig.add_trace(go.Candlestick(x=df_hist['datetime'], open=df_hist['Open'], high=df_hist['High'], low=df_hist['Low'], close=df_hist['Close'], name='Price'))
-            fig.add_hline(y=c_wall, line_color="green", annotation_text="Call Wall")
-            fig.add_hline(y=p_wall, line_color="red", annotation_text="Put Wall")
+            # Candele (limitiamo a ultimi 500 per performance se troppi dati)
+            display_limit = 500
+            df_chart = df_hist.tail(display_limit)
             
-            # Add Trade Markers
-            for t in trades:
-                color = "blue" if "ENTRY" in t['type'] else ("green" if "TP" in t['type'] else "red")
-                fig.add_trace(go.Scatter(x=[t['time']], y=[t['price']], mode='markers', marker=dict(color=color, size=10), name=t['type']))
+            fig.add_trace(go.Candlestick(x=df_chart['datetime'], open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name='Prezzo'))
+            fig.add_trace(go.Scatter(x=df_chart['datetime'], y=df_chart['CallWall_Sim'], line=dict(color='green', width=1, dash='dash'), name='Sim Call Wall'))
+            fig.add_trace(go.Scatter(x=df_chart['datetime'], y=df_chart['PutWall_Sim'], line=dict(color='red', width=1, dash='dash'), name='Sim Put Wall'))
+            fig.add_trace(go.Scatter(x=df_chart['datetime'], y=df_chart['ZeroGamma_Sim'], line=dict(color='yellow', width=2), name='Sim 0-Gamma'))
+            
+            # Marker Trades
+            trade_df = pd.DataFrame(trades)
+            if not trade_df.empty:
+                # Filtra trades nel range del grafico
+                trade_df = trade_df[trade_df['time'] >= df_chart['datetime'].iloc[0]]
+                
+                entries = trade_df[trade_df['type'].str.contains('ENTRY')]
+                exits_win = trade_df[trade_df['res'] == 'WIN']
+                exits_loss = trade_df[trade_df['res'] == 'LOSS']
+                
+                fig.add_trace(go.Scatter(x=entries['time'], y=entries['price'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='blue'), name='Entry'))
+                fig.add_trace(go.Scatter(x=exits_win['time'], y=exits_win['price'], mode='markers', marker=dict(symbol='circle', size=8, color='green'), name='Take Profit'))
+                fig.add_trace(go.Scatter(x=exits_loss['time'], y=exits_loss['price'], mode='markers', marker=dict(symbol='x', size=8, color='red'), name='Stop Loss'))
 
+            fig.update_layout(title=f"Analisi Tecnica Ultimi {display_limit} Periodi", template="plotly_dark", height=600)
             st.plotly_chart(fig, use_container_width=True)
-            if trades:
+            
+            with st.expander("📜 Storico Operazioni"):
                 st.dataframe(pd.DataFrame(trades))
