@@ -8,6 +8,7 @@ from scipy.optimize import brentq
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 import time  # <-- Manteniamo l'import per il delay anti-ban
+import requests
 
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
@@ -86,16 +87,52 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
     except:
         return None
 
+def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
+    # Mappatura Ticker Yahoo -> Alpaca (ETF fallback per indici su Free Tier)
+    symbol_map = {"^SPX": "SPY", "^NDX": "QQQ", "^RUT": "IWM"} 
+    alpaca_sym = symbol_map.get(symbol, symbol.replace("^", ""))
+    
+    headers = {
+        "APCA-API-KEY-ID": "PKQVMHYR25JUXQVLTEEBEKVIMV",
+        "APCA-API-SECRET-KEY": "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"
+    }
+    
+    # Mapping Timeframe Alpaca
+    tf_map = {"1Min": "1Min", "5Min": "5Min", "15Min": "15Min", "1H": "1Hour", "1D": "1Day"}
+    tf = tf_map.get(timeframe, "1Day")
+    
+    url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
+    params = {
+        "start": start_str + "T00:00:00Z",
+        "end": end_str + "T23:59:59Z",
+        "timeframe": tf,
+        "limit": 10000,
+        "adjustment": "raw"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if "bars" in data and data["bars"]:
+                df = pd.DataFrame(data["bars"])
+                df['t'] = pd.to_datetime(df['t'])
+                df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
+                return df
+    except Exception as e:
+        st.error(f"Errore Alpaca API: {e}")
+    return pd.DataFrame()
+
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🧭 SISTEMA")
-menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS"])
+menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA"])
 
 # --- REFRESH CONFIG ---
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
     st_autorefresh(interval=60000, key="sentinel_dash_refresh")
-else:
+elif menu == "🔥 SCANNER HOT TICKERS":
     st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
 
@@ -160,43 +197,37 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             iv_change = mean_iv - st.session_state.prev_iv
             st.session_state.prev_iv = mean_iv
 
-        
             # --- MODIFICA ASIMMETRICA DS (SKEW DRIVEN) ---
+            # 1. Estrazione IV Specifica (Skew) su 0DTE/1DTE
             try:
                 skew_date = available_dates[0]
                 skew_data = fetch_data(current_ticker, [skew_date])
                 
                 if not skew_data.empty:
+                    # Target: 2% OTM (~25 Delta proxy)
                     c_target = spot * 1.02
                     p_target = spot * 0.98
+                    
                     c_skew = skew_data[skew_data['type'] == 'call']
                     p_skew = skew_data[skew_data['type'] == 'put']
                     
-                    # Funzione interna per pulire la IV (se Yahoo da 18.0 invece di 0.18)
-                    def clean_iv(val):
-                        if val is None: return mean_iv / 100 if mean_iv > 1 else mean_iv
-                        return val / 100 if val > 1.5 else val
-
-                    raw_c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
-                    raw_p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
-                    
-                    c_iv = clean_iv(raw_c_iv)
-                    p_iv = clean_iv(raw_p_iv)
+                    # Trova lo strike più vicino al target
+                    c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
+                    p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
                 else:
-                    c_iv = p_iv = clean_iv(mean_iv)
+                    c_iv = p_iv = mean_iv
             except:
-                c_iv = p_iv = 0.15 # Fallback prudenziale se tutto fallisce
+                c_iv = p_iv = mean_iv
 
             # 2. Calcolo Fixed 1-Day Move (1/252)
             one_day_factor = np.sqrt(1/252)
-        
+            
             # 3. Creazione delle 4 Linee Asimmetriche
             sd1_up = spot * (1 + (c_iv * one_day_factor))
             sd2_up = spot * (1 + (c_iv * 2 * one_day_factor))
             sd1_down = spot * (1 - (p_iv * one_day_factor))
             sd2_down = spot * (1 - (p_iv * 2 * one_day_factor))
             
-            # 4. Calcolo dello Skew Factor e Distanza corretta per la Dashboard
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
             # ---------------------------------------------
 
@@ -266,20 +297,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     <b style='color:white; font-size:24px;'>MARKET BIAS: {direction}</b>
                 </div>
                 """, unsafe_allow_html=True)
-            # --- CALCOLO RANGE STATISTICO ---
-            spettro_statistico_1ds = sd1_up - sd1_down
-            percentuale_range = (spettro_statistico_1ds / spot) * 100
-            
-            # Questo ti dice quanto è larga la "gabbia" del prezzo oggi
-            spettro_statistico_1ds = sd1_up - sd1_down
 
-            # Se vuoi vedere anche il range estremo (quello delle linee 2DS)
-            spettro_statistico_2ds = sd2_up - sd2_down
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
             m3.metric("PUT WALL", f"{p_wall:.0f}")
-            m4.metric("STATISTICAL RANGE (1DS)", f"{spettro_statistico_1ds:.2f} pts", f"{percentuale_range:.2f}%")
+            m4.metric("EXPECTED 1SD", f"±{spot*one_day_factor*mean_iv:.2f}")
 
             st.markdown("---")
             
@@ -301,11 +324,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 </div>
                 """, unsafe_allow_html=True)
 
-            # --- INIZIO HUD QUANTISTICO (VERSIONE BILANCIATA PRO) ---
+            # --- INIZIO NUOVO HUD QUANTISTICO ON-DEMAND ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
-                import math 
-                
-                # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3) - INVARIATA
                 pos_score = 4 if (spot > z_gamma and spot > z_gamma_dyn) else (-4 if (spot < z_gamma and spot < z_gamma_dyn) else 0)
                 vanna_score = 3 if net_vanna > 0 else -3
                 charm_score = 3 if net_charm < 0 else -3
@@ -313,85 +333,33 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 hud_color = "#2ECC40" if total_ss >= 5 else ("#FF4136" if total_ss <= -5 else "#FFDC00")
                 
-                # 2. NUOVO BILANCIAMENTO "ANTI-OSCURAMENTO"
-                # Usiamo un moltiplicatore più dolce (800 invece di 5000) e mettiamo un tetto (CAP)
-                p_dist_raw = (abs(spot - z_gamma_dyn) / spot) * 800
-                p_intensity = min(15, p_dist_raw) # Il prezzo non può pesare più di "15 punti" nella torta totale
-                
-                # Le Greche rimangono logaritmiche per gestire i milioni/miliardi senza esplodere
-                v_intensity = math.log10(abs(net_vanna) + 1)
-                c_intensity = math.log10(abs(net_charm) + 1)
-                
-                total_intensity = p_intensity + v_intensity + c_intensity
-                
-                if total_intensity > 0:
-                    p_w = int((p_intensity / total_intensity) * 100)
-                    v_w = int((v_intensity / total_intensity) * 100)
-                    c_w = 100 - p_w - v_w 
-                else:
-                    p_w, v_w, c_w = 40, 30, 30
-
-                # 3. TESTI COMPLETI ORIGINALI (Invariati)
                 pos_text = "🟢 SOPRA entrambi 0-G (Pieno controllo acquirenti)" if pos_score == 4 else ("🔴 SOTTO entrambi 0-G (Pieno controllo venditori)" if pos_score == -4 else "🟡 Divergenza OI vs Volumi (Fase incerta)")
                 vanna_text = "🟢 Stabile (Nessuno Squeeze Imminente)" if vanna_score == 3 else "🔴 Pericolo Squeeze (Dealer costretti a comprare/vendere in corsa)"
                 charm_text = "🔵 Supporto Passivo (Il tempo aiuta i Long)" if charm_score == 3 else "🔴 Flusso in Uscita (Il tempo pesa sul prezzo)"
 
-                # 4. LOGICA SEGNALI E RISCHIO (Invariata)
-                abs_ss = abs(total_ss)
-                if total_ss >= 8:
-                    res_sig, res_strat, res_target = "🚀 STRONG BUY", "Long Call / Bull Call Spread", "Call Wall"
-                elif total_ss <= -8:
-                    res_sig, res_strat, res_target = "☢️ STRONG SELL", "Long Put / Bear Put Spread", "Put Wall"
-                elif total_ss >= 4:
-                    res_sig, res_strat, res_target = "🟢 BUY ON DIP", "Bull Put Spread (Credit)", "+1 SD Line"
-                elif total_ss <= -4:
-                    res_sig, res_strat, res_target = "🔴 SELL ON RALLY", "Bear Call Spread (Credit)", "-1 SD Line"
-                else:
-                    res_sig, res_strat, res_target = "⚖️ NEUTRAL", "Wait / Iron Condor", "Gamma Flip Zone"
-
-                res_risk = "2.0% (ALTO)" if abs_ss >= 8 else ("1.0% (MEDIO)" if abs_ss >= 4 else "0.0% (NO TRADE)")
-                res_rr = "1:3+" if abs_ss >= 8 else ("1:2" if abs_ss >= 4 else "N/A")
-
-                # 5. INTERFACCIA (Testi lunghi + Percentuali dinamiche)
                 st.markdown(f"""
-<div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
-<h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
-<h3 style='text-align:center; color:white; margin-bottom:15px;'>AZIONE: <span style='color:{hud_color};'>{res_sig}</span></h3>
-<hr style='border-color:#333;'>
-<div style='display:flex; justify-content:space-between; text-align:center;'>
-<div style='width:30%;'>
-<h4 style='color:white;'>⚡ Forza Prezzo ({p_w}%)</h4>
-<p style='color:lightgray; font-size:11px;'><i>Confluenza 0G Statico / Dinamico</i></p>
-<b style='font-size:13px; color:white;'>{pos_text}</b>
-</div>
-<div style='width:30%;'>
-<h4 style='color:white;'>🌪️ Forza Vanna ({v_w}%)</h4>
-<p style='color:lightgray; font-size:11px;'><i>Rischio accelerazione Volatilità</i></p>
-<b style='font-size:13px; color:white;'>{vanna_text}</b>
-</div>
-<div style='width:30%;'>
-<h4 style='color:white;'>⏳ Forza Charm ({c_w}%)</h4>
-<p style='color:lightgray; font-size:11px;'><i>Supporto/Pressione legati al Tempo</i></p>
-<b style='font-size:13px; color:white;'>{charm_text}</b>
-</div>
-</div>
-<hr style='border-color:#333; margin-top:20px;'>
-<div style='display:flex; justify-content:space-between; text-align:center; background:rgba(255,255,255,0.05); padding:15px; border-radius:8px;'>
-<div style='width:33%;'>
-<p style='color:#FFDC00; margin:0; font-size:12px; font-weight:bold;'>STRATEGIA</p>
-<b style='color:white;'>{res_strat}</b>
-</div>
-<div style='width:33%; border-left:1px solid #444; border-right:1px solid #444;'>
-<p style='color:#FFDC00; margin:0; font-size:12px; font-weight:bold;'>RISCHIO CONSIGLIATO</p>
-<b style='color:white;'>{res_risk}</b>
-</div>
-<div style='width:33%;'>
-<p style='color:#FFDC00; margin:0; font-size:12px; font-weight:bold;'>TARGET / R:R</p>
-<b style='color:white;'>{res_target} ({res_rr})</b>
-</div>
-</div>
-</div>
-""", unsafe_allow_html=True)
+                <div style='background-color:rgba(15,15,15,0.9); padding:20px; border: 2px solid {hud_color}; border-radius:10px;'>
+                    <h2 style='text-align:center; color:{hud_color}; margin-top:0;'>SENTIMENT SCORE: {total_ss} / 10</h2>
+                    <hr style='border-color:#333;'>
+                    <div style='display:flex; justify-content:space-between; text-align:center;'>
+                        <div style='width:30%;'>
+                            <h4 style='color:white;'>⚡ Forza Prezzo (40%)</h4>
+                            <p style='color:lightgray;'><i>Confluenza 0G Statico / Dinamico</i></p>
+                            <b>{pos_text}</b>
+                        </div>
+                        <div style='width:30%;'>
+                            <h4 style='color:white;'>🌪️ Forza Vanna (30%)</h4>
+                            <p style='color:lightgray;'><i>Rischio accelerazione Volatilità</i></p>
+                            <b>{vanna_text}</b>
+                        </div>
+                        <div style='width:30%;'>
+                            <h4 style='color:white;'>⏳ Forza Charm (30%)</h4>
+                            <p style='color:lightgray;'><i>Supporto/Pressione legati al Tempo</i></p>
+                            <b>{charm_text}</b>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
             # --- FINE NUOVO HUD ---
 
             col_view, col_vol = st.columns([2, 1])
@@ -458,25 +426,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=sd2_down, line_color="#FF0000", line_dash="solid", annotation_text=f"-2SD {sd2_down:.2f}")
 
             # Nota Skew Factor nella legenda (dummy trace)
-    fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
-                             name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='rgba(0,0,0,0)'), 
+                                     name=f"Skew Factor: {skew_factor:.2f}x (Put/Call IV)", showlegend=True))
 
-# --- FIX FINALE: LEGENDA SOPRA IL DOPPIO ASSE ---
-    fig.update_layout(
-        template="plotly_dark", 
-        height=850, 
-        margin=dict(l=0, r=0, t=100, b=0), # Aumentato 't' a 100 per far stare asse + legenda
-        yaxis=dict(range=[lo, hi], dtick=gran),
-        legend=dict(
-            orientation="h",        # Legenda orizzontale
-            yanchor="bottom",
-            y=1.12,                 # Alzata a 1.12 per non toccare l'asse Vanna
-            xanchor="left",
-            x=0.01,                 
-            bgcolor="rgba(0,0,0,0)" 
-        )
-    )
-    st.plotly_chart(fig, use_container_width=True)
+            fig.update_layout(template="plotly_dark", height=850, margin=dict(l=0,r=0,t=40,b=0), yaxis=dict(range=[lo, hi], dtick=gran))
+            st.plotly_chart(fig, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
@@ -500,6 +454,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         # --- UTILIZZO FUNZIONE PROTETTA ---
         data_pack = fetch_scanner_ticker(t_name, expiry_mode, today_str_format)
         
+        # Micro-pausa fondamentale impostata a 0.5s per evitare il ban IP da Yahoo
         time.sleep(0.5) 
         
         if data_pack is None:
@@ -520,7 +475,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
             net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
             
-            # Motore di Scoring Confluenza
+            # Motore di Scoring Confluenza (Max +10, Min -10)
             p_score = 4 if (px > zg_val and px > zg_dyn) else (-4 if (px < zg_val and px < zg_dyn) else 0)
             v_score = 3 if net_vanna_scan > 0 else -3
             c_score = 3 if net_charm_scan < 0 else -3
@@ -537,60 +492,9 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             elif net_vanna_scan < 0 and px > zg_dyn: verdict = "🌪️ GAMMA SQUEEZE (Alta Volatilità)"
             else: verdict = "⚖️ NEUTRO / RANGE BOUND"
 
-            # --- MODIFICA ASIMMETRICA DS (IDENTICA ALLA DASHBOARD) ---
-            try:
-                mean_iv = df_scan['impliedVolatility'].mean()
-                
-                if not df_scan.empty:
-                    c_target = px * 1.02
-                    p_target = px * 0.98
-                    c_skew = df_scan[df_scan['type'] == 'call']
-                    p_skew = df_scan[df_scan['type'] == 'put']
-                    
-                    def clean_iv(val):
-                        if val is None: return mean_iv / 100 if mean_iv > 1 else mean_iv
-                        return val / 100 if val > 1.5 else val
-
-                    raw_c_iv = c_skew.iloc[(c_skew['strike'] - c_target).abs().argmin()]['impliedVolatility'] if not c_skew.empty else mean_iv
-                    raw_p_iv = p_skew.iloc[(p_skew['strike'] - p_target).abs().argmin()]['impliedVolatility'] if not p_skew.empty else mean_iv
-                    
-                    c_iv = clean_iv(raw_c_iv)
-                    p_iv = clean_iv(raw_p_iv)
-                else:
-                    c_iv = p_iv = clean_iv(mean_iv)
-            except:
-                c_iv = p_iv = 0.15 # Fallback prudenziale
-
-            # 2. Calcolo Fixed 1-Day Move (1/252)
-            one_day_factor = np.sqrt(1/252)
-            
-            # 3. Creazione delle 4 Linee Asimmetriche per lo Scanner
-            sd1_up = px * (1 + (c_iv * one_day_factor))
-            sd2_up = px * (1 + (c_iv * 2 * one_day_factor))
-            sd1_down = px * (1 - (p_iv * one_day_factor))
-            sd2_down = px * (1 - (p_iv * 2 * one_day_factor))
-            
-            # 4. Skew Factor
-            skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
-
-            # --- MOTORE OPPORTUNITÀ MEAN REVERSION ---
-            if px <= sd2_down:
-                reversion_signal = "💎 BUY REVERSION (2DS)"
-                rev_score = 2
-            elif px <= sd1_down:
-                reversion_signal = "🟢 BUY REVERSION (1DS)"
-                rev_score = 1
-            elif px >= sd2_up:
-                reversion_signal = "💀 SELL REVERSION (2DS)"
-                rev_score = -2
-            elif px >= sd1_up:
-                reversion_signal = "🟠 SELL REVERSION (1DS)"
-                rev_score = -1
-            else:
-                reversion_signal = "---"
-                rev_score = 0
-            # ---------------------------------------------
-
+            avg_iv = df_scan['impliedVolatility'].mean()
+            sd_move = px * avg_iv * np.sqrt(dte_years)
+            sd1_up, sd1_down = px + sd_move, px - sd_move
             dist_zg_pct = ((px - zg_val) / px) * 100
             is_above_0g = px > zg_val
             near_sd_up = abs(px - sd1_up) / px < 0.005
@@ -610,62 +514,204 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             
             scan_results.append({
                 "Ticker": t_name.replace("^", ""), 
-                "Score": int(ss),                  
+                "Score": int(ss),                 
                 "Verdict (Regime)": verdict,      
-                "Greche V|C": f"V:{v_icon} C:{c_icon}",
+                "Greche V|C": f"V:{v_icon} C:{c_icon}", 
                 "Prezzo": round(px, 2), 
                 "0-G Static": round(zg_val, 2), 
-                "0-G Dynamic": round(zg_dyn, 2), # --- NUOVA COLONNA DINAMICA ---
-                "1SD Range": f"{sd1_down:.0f} - {sd1_up:.0f}", 
-                "2SD Range": f"{sd2_down:.0f} - {sd2_up:.0f}", # --- NUOVA COLONNA 2SD ---
+                "0-G Dynamic": round(zg_dyn, 2),
+                "1SD Range": f"{sd1_down:.0f}-{sd1_up:.0f}", 
                 "Dist. 0G %": round(dist_zg_pct, 2), 
-                "OPPORTUNITÀ": reversion_signal,  
                 "Analisi": status_label, 
-                "_rev_score": rev_score,          
-                "_sort_score": -ss,                 
+                "_sort_score": -ss,                
                 "_sort_dist": abs(dist_zg_pct)
             })
         except: pass
         progress_bar.progress((i + 1) / len(tickers_50))
     
     if scan_results:
-        final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist", "_rev_score"])
+        final_df = pd.DataFrame(scan_results).sort_values(by=["_sort_score", "_sort_dist"]).drop(columns=["_sort_score", "_sort_dist"])
         
         def color_logic_pro(row):
             styles = [''] * len(row)
+            # Colore per Score
+            score_idx = row.index.get_loc('Score')
+            val_score = row['Score']
+            if val_score >= 8: styles[score_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
+            elif val_score <= -8: styles[score_idx] = 'background-color: #8B0000; color: white; font-weight: bold'
+            elif val_score > 0: styles[score_idx] = 'color: #2ECC40; font-weight: bold'
+            elif val_score < 0: styles[score_idx] = 'color: #FF4136; font-weight: bold'
             
-            # --- Colore per Score ---
-            if 'Score' in row.index:
-                score_idx = row.index.get_loc('Score')
-                val_score = row['Score']
-                if val_score >= 8: styles[score_idx] = 'background-color: #2ECC40; color: white; font-weight: bold'
-                elif val_score <= -8: styles[score_idx] = 'background-color: #8B0000; color: white; font-weight: bold'
-                elif val_score > 0: styles[score_idx] = 'color: #2ECC40; font-weight: bold'
-                elif val_score < 0: styles[score_idx] = 'color: #FF4136; font-weight: bold'
-            
-            # --- Colore per OPPORTUNITÀ ---
-            if 'OPPORTUNITÀ' in row.index:
-                opp_idx = row.index.get_loc('OPPORTUNITÀ')
-                val_opp = row['OPPORTUNITÀ']
-                if "💎 BUY" in val_opp:
-                    styles[opp_idx] = 'background-color: #00FF00; color: black; font-weight: bold; border: 1px solid white'
-                elif "🟢 BUY" in val_opp:
-                    styles[opp_idx] = 'color: #00FF00; font-weight: bold'
-                elif "💀 SELL" in val_opp:
-                    styles[opp_idx] = 'background-color: #FF0000; color: white; font-weight: bold; border: 1px solid white'
-                elif "🟠 SELL" in val_opp:
-                    styles[opp_idx] = 'color: #FF0000; font-weight: bold'
-
-            # --- Colore per Analisi ---
-            if 'Analisi' in row.index:
-                analisi_idx = row.index.get_loc('Analisi')
-                val_ana = row['Analisi']
-                if "🔥" in val_ana: styles[analisi_idx] = 'background-color: #8B0000; color: white'
-                elif "🔴" in val_ana: styles[analisi_idx] = 'color: #FF4136; font-weight: bold'
-                elif "🟢" in val_ana: styles[analisi_idx] = 'color: #2ECC40; font-weight: bold'
-                elif "🟡" in val_ana: styles[analisi_idx] = 'color: #FFDC00'
-                elif "✅" in val_ana: styles[analisi_idx] = 'color: #0074D9'
+            # Colore per Analisi (Originale)
+            analisi_idx = row.index.get_loc('Analisi')
+            val_ana = row['Analisi']
+            if "🔥" in val_ana: styles[analisi_idx] = 'background-color: #8B0000; color: white'
+            elif "🔴" in val_ana: styles[analisi_idx] = 'color: #FF4136; font-weight: bold'
+            elif "🟢" in val_ana: styles[analisi_idx] = 'color: #2ECC40; font-weight: bold'
+            elif "🟡" in val_ana: styles[analisi_idx] = 'color: #FFDC00'
+            elif "✅" in val_ana: styles[analisi_idx] = 'color: #0074D9'
 
             return styles
 
         st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
+
+elif menu == "🔙 BACKTESTING STRATEGIA":
+    st.title("🔙 Backtesting Strategia GEX (Simulation)")
+    st.markdown("""
+    <div style='background-color:rgba(255, 165, 0, 0.1); padding:10px; border-radius:5px; border: 1px solid orange;'>
+    <b>⚠️ ATTENZIONE:</b> Questo modulo simula una strategia utilizzando i <b>Livelli GEX calcolati OGGI</b> applicati ai dati storici dei prezzi (Forward Test Simulation).
+    Le API Free non forniscono lo storico delle Option Chain necessario per ricalcolare i livelli GEX nel passato.
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        bt_ticker = st.selectbox("Seleziona Ticker", ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "AMD", "COIN"])
+    with c2:
+        bt_tf = st.selectbox("Timeframe", ["1Min", "5Min", "15Min", "1H", "1D"], index=2)
+    with c3:
+        bt_days = st.slider("Giorni di Backtest", 1, 30, 5)
+
+    # Fetch Expiries for Selector
+    y_ticker_for_dates = bt_ticker
+    if bt_ticker == "SPY": y_ticker_for_dates = "^SPX"
+    elif bt_ticker == "QQQ": y_ticker_for_dates = "^NDX"
+    elif bt_ticker == "IWM": y_ticker_for_dates = "^RUT"
+    
+    try:
+        bt_avail_dates = yf.Ticker(y_ticker_for_dates).options
+    except:
+        bt_avail_dates = []
+        
+    if bt_avail_dates:
+        bt_expiry = st.selectbox("Scadenza Opzioni (GEX Ref)", bt_avail_dates)
+    else:
+        st.warning("Impossibile recuperare scadenze opzioni (Rate Limit Yahoo?). Riprova tra poco.")
+        bt_expiry = None
+
+    # Fetch Data
+    end_date = datetime.now()
+    start_date = end_date - pd.Timedelta(days=bt_days)
+    
+    if st.button("🚀 AVVIA BACKTEST"):
+        if not bt_expiry:
+            st.error("Seleziona una scadenza valida.")
+            st.stop()
+            
+        with st.spinner("Scaricamento dati Alpaca e Calcolo Livelli..."):
+            # 1. Fetch Price History
+            df_hist = fetch_alpaca_history(bt_ticker, bt_tf, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            
+            if df_hist.empty:
+                st.error("Nessun dato storico trovato su Alpaca per il periodo selezionato.")
+                st.stop()
+
+            # 2. Calculate GEX Levels (Current)
+            y_ticker = y_ticker_for_dates
+            
+            # Fetch Option Data
+            try:
+                target_date = bt_expiry
+                raw_data = fetch_data(y_ticker, [target_date])
+                
+                # Get Spot for GEX calc
+                spot = df_hist['Close'].iloc[-1]
+                
+                # Calculate Levels
+                raw_data['dte_years'] = max((datetime.strptime(target_date, '%Y-%m-%d') - datetime.now()).days, 0.5) / 365
+                
+                # 0-Gamma
+                try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
+                except: z_gamma = spot
+                
+                # Walls
+                df_greeks = get_greeks_pro(raw_data, spot)
+                pivot_series = (df_greeks['strike'] // 1) * 1
+                agg = df_greeks.groupby(pivot_series).agg({'Gamma': 'sum'}).reset_index()
+                if 'strike' not in agg.columns: agg.rename(columns={'index': 'strike', agg.columns[0]: 'strike'}, inplace=True)
+                
+                c_wall = agg.loc[agg['Gamma'].idxmax(), 'strike']
+                p_wall = agg.loc[agg['Gamma'].idxmin(), 'strike']
+                
+            except Exception as e:
+                st.error(f"Errore calcolo GEX: {e}")
+                st.stop()
+
+            # 3. Simulation Loop
+            initial_balance = 10000
+            balance = initial_balance
+            position = None # 'long', 'short'
+            entry_price = 0
+            trades = []
+            
+            # Strategy Params (Hardcoded or UI?)
+            tp_pct = 0.01 # 1%
+            sl_pct = 0.005 # 0.5%
+            
+            st.write(f"**Livelli Riferimento:** Call Wall: {c_wall:.2f} | Put Wall: {p_wall:.2f} | 0-Gamma: {z_gamma:.2f}")
+            
+            for i, row in df_hist.iterrows():
+                price = row['Close']
+                ts = row['datetime']
+                
+                # Logic: Mean Reversion on Walls
+                # Buy at Put Wall, Sell at Call Wall
+                
+                if position is None:
+                    # Long Entry (Touch Put Wall)
+                    if price <= p_wall * 1.002 and price >= p_wall * 0.998:
+                        position = 'long'
+                        entry_price = price
+                        trades.append({'type': 'ENTRY LONG', 'price': price, 'time': ts, 'reason': 'Put Wall Test'})
+                    
+                    # Short Entry (Touch Call Wall)
+                    elif price >= c_wall * 0.998 and price <= c_wall * 1.002:
+                        position = 'short'
+                        entry_price = price
+                        trades.append({'type': 'ENTRY SHORT', 'price': price, 'time': ts, 'reason': 'Call Wall Test'})
+                        
+                elif position == 'long':
+                    # TP
+                    if price >= entry_price * (1 + tp_pct):
+                        balance += (price - entry_price) * (10000/entry_price) # Invest full balance
+                        position = None
+                        trades.append({'type': 'TP LONG', 'price': price, 'time': ts, 'pnl': (price - entry_price)/entry_price})
+                    # SL
+                    elif price <= entry_price * (1 - sl_pct):
+                        balance -= (entry_price - price) * (10000/entry_price)
+                        position = None
+                        trades.append({'type': 'SL LONG', 'price': price, 'time': ts, 'pnl': (price - entry_price)/entry_price})
+                        
+                elif position == 'short':
+                    # TP
+                    if price <= entry_price * (1 - tp_pct):
+                        balance += (entry_price - price) * (10000/entry_price)
+                        position = None
+                        trades.append({'type': 'TP SHORT', 'price': price, 'time': ts, 'pnl': (entry_price - price)/entry_price})
+                    # SL
+                    elif price >= entry_price * (1 + sl_pct):
+                        balance -= (price - entry_price) * (10000/entry_price)
+                        position = None
+                        trades.append({'type': 'SL SHORT', 'price': price, 'time': ts, 'pnl': (entry_price - price)/entry_price})
+
+            # 4. Results
+            win_trades = [t for t in trades if 'pnl' in t and t['pnl'] > 0]
+            loss_trades = [t for t in trades if 'pnl' in t and t['pnl'] <= 0]
+            win_rate = len(win_trades) / len([t for t in trades if 'pnl' in t]) * 100 if trades else 0
+            
+            st.metric("Win Rate", f"{win_rate:.2f}%", f"{len(win_trades)}W / {len(loss_trades)}L")
+            
+            # Chart
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=df_hist['datetime'], open=df_hist['Open'], high=df_hist['High'], low=df_hist['Low'], close=df_hist['Close'], name='Price'))
+            fig.add_hline(y=c_wall, line_color="green", annotation_text="Call Wall")
+            fig.add_hline(y=p_wall, line_color="red", annotation_text="Put Wall")
+            
+            # Add Trade Markers
+            for t in trades:
+                color = "blue" if "ENTRY" in t['type'] else ("green" if "TP" in t['type'] else "red")
+                fig.add_trace(go.Scatter(x=[t['time']], y=[t['price']], mode='markers', marker=dict(color=color, size=10), name=t['type']))
+
+            st.plotly_chart(fig, use_container_width=True)
+            if trades:
+                st.dataframe(pd.DataFrame(trades))
