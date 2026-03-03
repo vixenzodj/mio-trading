@@ -92,47 +92,45 @@ def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
     tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
     tf = tf_map.get(timeframe, "1d")
     
+    # Controllo Limiti Yahoo Intraday
+    start_dt = datetime.strptime(start_str, '%Y-%m-%d')
+    end_dt = datetime.strptime(end_str, '%Y-%m-%d')
+    delta_days = (end_dt - start_dt).days
+    
+    if delta_days > 7 and tf == "1m":
+        st.warning("⚠️ Yahoo limita i dati 1Min a 7 giorni. Passaggio automatico a 1H.")
+        tf = "1h"
+    elif delta_days > 60 and tf in ["5m", "15m"]:
+        st.warning("⚠️ Yahoo limita i dati 5Min/15Min a 60 giorni. Passaggio automatico a 1D.")
+        tf = "1d"
+    elif delta_days > 730 and tf == "1h":
+        st.warning("⚠️ Yahoo limita i dati 1H a 730 giorni. Passaggio automatico a 1D.")
+        tf = "1d"
+
     try:
-        # Yahoo ha limiti sullo storico intraday
-        # 1m = 7gg, 5m-15m = 60gg, 1h = 730gg
         df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False)
         
         if df.empty: return pd.DataFrame()
         
-        # Flatten MultiIndex columns if present (yfinance update)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
         df.reset_index(inplace=True)
-        
-        # Standardize columns
         col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
         df.rename(columns=col_map, inplace=True)
-        
-        # Ensure datetime
         df['datetime'] = pd.to_datetime(df['datetime'])
-        
-        # Filter out rows with missing data
         df.dropna(inplace=True)
-        
         return df
     except Exception as e:
         st.error(f"Errore Yahoo Finance: {e}")
         return pd.DataFrame()
 
 def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
-    # SE E' UN INDICE (^...), USA YAHOO PER PREZZI REALI
     if symbol.startswith("^"):
         return fetch_yahoo_history(symbol, timeframe, start_str, end_str)
 
-    # Mappatura Ticker Yahoo -> Alpaca (ETF fallback per indici su Free Tier)
-    # Aggiunto mapping per NDX, SPX, RUT e altri indici comuni
     symbol_map = {
-        "SPX": "SPY",
-        "NDX": "QQQ",
-        "RUT": "IWM",
-        "DJI": "DIA",
-        "VIX": "VIXY"
+        "SPX": "SPY", "NDX": "QQQ", "RUT": "IWM", "DJI": "DIA", "VIX": "VIXY"
     } 
     alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
     
@@ -141,15 +139,12 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
         "APCA-API-SECRET-KEY": "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"
     }
     
-    # Mapping Timeframe Alpaca
     tf_map = {"1Min": "1Min", "5Min": "5Min", "15Min": "15Min", "1H": "1Hour", "1D": "1Day"}
     tf = tf_map.get(timeframe, "1Day")
     
-    # Gestione ritardo 15 min per account Free (SIP Data Restriction)
     now_utc = datetime.utcnow()
     safe_end_dt = now_utc - timedelta(minutes=20)
     
-    # Se la data di fine richiesta è oggi (o futura), limitiamo a 20 min fa
     try:
         req_end_obj = datetime.strptime(end_str, '%Y-%m-%d')
         if req_end_obj.date() >= now_utc.date():
@@ -160,31 +155,55 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
         final_end = end_str + "T23:59:59Z"
 
     url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
-    params = {
-        "start": start_str + "T00:00:00Z",
-        "end": final_end,
-        "timeframe": tf,
-        "limit": 10000,
-        "adjustment": "raw",
-        "feed": "iex" # Forziamo IEX per evitare errori SIP su account free
-    }
     
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if "bars" in data and data["bars"]:
-                df = pd.DataFrame(data["bars"])
-                df['t'] = pd.to_datetime(df['t'])
-                df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
-                return df
+    all_bars = []
+    next_token = None
+    
+    # Progress Bar per download lunghi
+    p_bar = st.progress(0, text="Scaricamento dati storici (Pagination)...")
+    
+    while True:
+        params = {
+            "start": start_str + "T00:00:00Z",
+            "end": final_end,
+            "timeframe": tf,
+            "limit": 10000,
+            "adjustment": "raw",
+            "feed": "iex",
+            "page_token": next_token
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if "bars" in data and data["bars"]:
+                    all_bars.extend(data["bars"])
+                    next_token = data.get("next_page_token")
+                    
+                    # Update progress (fake visual feedback)
+                    current_len = len(all_bars)
+                    p_bar.progress(min(current_len % 100, 90), text=f"Scaricati {current_len} records...")
+                    
+                    if not next_token:
+                        break
+                else:
+                    break
             else:
-                # Fallback per timeframe lunghi o dati mancanti
-                return pd.DataFrame()
-        else:
-            st.error(f"Errore Alpaca API ({response.status_code}): {response.text}")
-    except Exception as e:
-        st.error(f"Errore Connessione Alpaca: {e}")
+                st.error(f"Errore Alpaca API ({response.status_code}): {response.text}")
+                break
+        except Exception as e:
+            st.error(f"Errore Connessione Alpaca: {e}")
+            break
+            
+    p_bar.empty()
+    
+    if all_bars:
+        df = pd.DataFrame(all_bars)
+        df['t'] = pd.to_datetime(df['t'])
+        df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
+        return df
+        
     return pd.DataFrame()
 
 # --- NAVIGAZIONE ---
