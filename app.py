@@ -795,6 +795,66 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         end_date = st.date_input("End Date", value=datetime.now())
         initial_capital = st.number_input("Capital", value=10000)
 
+    # --- DATA FETCHING ENHANCED ---
+    def fetch_data_smart(ticker, timeframe, start_date, end_date):
+        """
+        Tries to fetch data from Alpaca first, falls back to yfinance if empty or error.
+        """
+        df = pd.DataFrame()
+        
+        # 1. Try Alpaca
+        try:
+            # Convert timeframe to Alpaca format if needed
+            tf_alpaca = timeframe
+            if timeframe == "1D": tf_alpaca = "1Day"
+            elif timeframe == "1H": tf_alpaca = "1Hour"
+            elif timeframe == "15Min": tf_alpaca = "15Min"
+            elif timeframe == "5Min": tf_alpaca = "5Min"
+            
+            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+        except Exception as e:
+            print(f"Alpaca fetch failed: {e}")
+
+        # 2. Fallback to yfinance if Alpaca failed or returned empty
+        if df.empty:
+            st.warning(f"⚠️ Alpaca data empty or failed for {ticker}. Falling back to Yahoo Finance (slower but deeper history).")
+            try:
+                # Convert timeframe to yfinance format
+                tf_yf = "1d"
+                if timeframe == "1D": tf_yf = "1d"
+                elif timeframe == "1H": tf_yf = "1h"
+                elif timeframe == "15Min": tf_yf = "15m"
+                elif timeframe == "5Min": tf_yf = "5m"
+                
+                # yfinance download
+                df = yf.download(ticker, start=start_date, end=end_date, interval=tf_yf, progress=False)
+                
+                if not df.empty:
+                    # Standardize columns
+                    df.reset_index(inplace=True)
+                    # Handle MultiIndex columns if present (yfinance update)
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    
+                    # Rename to match system standard
+                    rename_map = {
+                        'Date': 'datetime', 'Datetime': 'datetime',
+                        'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
+                    }
+                    df.rename(columns=rename_map, inplace=True)
+                    
+                    # Ensure datetime column exists
+                    if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
+                        df.reset_index(inplace=True)
+                        df.rename(columns={df.index.name: 'datetime'}, inplace=True)
+                    
+                    # Filter by date just in case
+                    df['datetime'] = pd.to_datetime(df['datetime'])
+            except Exception as e:
+                st.error(f"Yahoo Finance fetch failed: {e}")
+                
+        return df
+
     # --- BACKTESTING ENGINE & VISUALIZER ---
     class TechnicalIndicators:
         @staticmethod
@@ -839,6 +899,36 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             true_range = np.max(ranges, axis=1)
             return true_range.rolling(period).mean()
 
+        @staticmethod
+        def sma(series, period):
+            return series.rolling(window=period).mean()
+
+        @staticmethod
+        def ema(series, period):
+            return series.ewm(span=period, adjust=False).mean()
+
+        @staticmethod
+        def stochastic(df, k_period=14, d_period=3):
+            low_min = df['Low'].rolling(window=k_period).min()
+            high_max = df['High'].rolling(window=k_period).max()
+            k = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+            d = k.rolling(window=d_period).mean()
+            return k, d
+
+        @staticmethod
+        def adx(df, period=14):
+            plus_dm = df['High'].diff()
+            minus_dm = df['Low'].diff()
+            plus_dm[plus_dm < 0] = 0
+            minus_dm[minus_dm > 0] = 0
+            
+            tr = TechnicalIndicators.atr(df, period)
+            plus_di = 100 * (plus_dm.ewm(alpha=1/period).mean() / tr)
+            minus_di = 100 * (minus_dm.ewm(alpha=1/period).mean() / tr)
+            dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+            adx = dx.ewm(alpha=1/period).mean()
+            return adx
+
     class BacktestEngine:
         def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
             self.ticker = ticker
@@ -849,17 +939,21 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             self.df = pd.DataFrame()
 
         def fetch_data(self):
-            # Uses existing fetch_alpaca_history logic but ensures max depth
-            self.df = fetch_alpaca_history(self.ticker, self.timeframe, self.start_date, self.end_date)
+            self.df = fetch_data_smart(self.ticker, self.timeframe, self.start_date, self.end_date)
             return not self.df.empty
 
         def add_technical_indicators(self):
             if self.df.empty: return
+            # Core Indicators
             self.df['RSI'] = TechnicalIndicators.rsi(self.df['Close'])
             self.df['MACD'], self.df['MACD_Signal'] = TechnicalIndicators.macd(self.df['Close'])
             self.df['BB_Upper'], self.df['BB_Lower'] = TechnicalIndicators.bollinger_bands(self.df['Close'])
             self.df['ATR'] = TechnicalIndicators.atr(self.df)
-            self.df['SMA200'] = self.df['Close'].rolling(window=200).mean()
+            self.df['SMA200'] = TechnicalIndicators.sma(self.df['Close'], 200)
+            self.df['SMA50'] = TechnicalIndicators.sma(self.df['Close'], 50)
+            self.df['EMA20'] = TechnicalIndicators.ema(self.df['Close'], 20)
+            self.df['Stoch_K'], self.df['Stoch_D'] = TechnicalIndicators.stochastic(self.df)
+            self.df['ADX'] = TechnicalIndicators.adx(self.df)
 
         def add_gex_levels(self, sensitivity=1.5):
             if self.df.empty: return
@@ -937,21 +1031,18 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
             return trades, equity_curve
 
-        def run_technical_strategy(self, rsi_period, rsi_overbought, rsi_oversold, risk_reward, risk_per_trade):
+        def run_technical_strategy(self, strategy_type, params, risk_reward, risk_per_trade):
             trades = []
             balance = self.initial_capital
             equity_curve = [balance]
             position = None
             
-            # Recalculate RSI with custom period if needed
-            self.df['RSI_Strat'] = TechnicalIndicators.rsi(self.df['Close'], rsi_period)
-
             for i in range(len(self.df)):
                 if i < 200: continue
                 curr = self.df.iloc[i]
                 prev = self.df.iloc[i-1]
                 
-                # Exit Logic (Same as Hybrid)
+                # Exit Logic
                 if position:
                     exit_res = None
                     if position['type'] == 'long':
@@ -969,10 +1060,33 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     equity_curve.append(balance)
                     continue
 
-                # Entry Logic (Technical)
+                # Entry Logic (Dynamic based on Strategy Type)
                 signal = None
-                if prev['RSI_Strat'] < rsi_oversold and curr['RSI_Strat'] > rsi_oversold: signal = 'long'
-                elif prev['RSI_Strat'] > rsi_overbought and curr['RSI_Strat'] < rsi_overbought: signal = 'short'
+                
+                if strategy_type == "RSI Mean Reversion":
+                    # RSI Oversold/Overbought
+                    if prev['RSI'] < params['os'] and curr['RSI'] > params['os']: signal = 'long'
+                    elif prev['RSI'] > params['ob'] and curr['RSI'] < params['ob']: signal = 'short'
+                    
+                elif strategy_type == "MACD Crossover":
+                    # MACD Line crosses Signal Line
+                    if prev['MACD'] < prev['MACD_Signal'] and curr['MACD'] > curr['MACD_Signal']: signal = 'long'
+                    elif prev['MACD'] > prev['MACD_Signal'] and curr['MACD'] < curr['MACD_Signal']: signal = 'short'
+                    
+                elif strategy_type == "Bollinger Breakout":
+                    # Close breaks Upper/Lower Band
+                    if prev['Close'] < prev['BB_Lower'] and curr['Close'] > prev['BB_Lower']: signal = 'long' # Reversal from bottom
+                    elif prev['Close'] > prev['BB_Upper'] and curr['Close'] < prev['BB_Upper']: signal = 'short' # Reversal from top
+                    
+                elif strategy_type == "Golden/Death Cross":
+                    # SMA 50 crosses SMA 200
+                    if prev['SMA50'] < prev['SMA200'] and curr['SMA50'] > curr['SMA200']: signal = 'long'
+                    elif prev['SMA50'] > prev['SMA200'] and curr['SMA50'] < curr['SMA200']: signal = 'short'
+                    
+                elif strategy_type == "Stochastic Oscillator":
+                    # K crosses D in OS/OB zones
+                    if prev['Stoch_K'] < params['os'] and curr['Stoch_K'] > params['os']: signal = 'long'
+                    elif prev['Stoch_K'] > params['ob'] and curr['Stoch_K'] < params['ob']: signal = 'short'
 
                 if signal:
                     risk_amt = balance * (risk_per_trade / 100)
@@ -999,7 +1113,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     class Visualizer:
         @staticmethod
-        def plot_tradingview_clone(df, trades, engine_type="Hybrid"):
+        def plot_tradingview_clone(df, trades, engine_type="Hybrid", strategy_name=""):
             fig = go.Figure()
             
             # Candlestick
@@ -1013,9 +1127,13 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 fig.add_trace(go.Scatter(x=df['datetime'], y=df['CallWall'], name='Call Wall', line=dict(color='green', dash='dash')))
                 fig.add_trace(go.Scatter(x=df['datetime'], y=df['PutWall'], name='Put Wall', line=dict(color='red', dash='dash')))
             else:
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Upper'], name='BB Upper', line=dict(color='gray', width=1)))
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Lower'], name='BB Lower', line=dict(color='gray', width=1)))
+                # Technical Indicators Visualization
                 fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA200'], name='SMA 200', line=dict(color='blue', width=2)))
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA50'], name='SMA 50', line=dict(color='cyan', width=1)))
+                
+                if "Bollinger" in strategy_name:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dot')))
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dot')))
 
             # Signals
             buy_signals = [t for t in trades if 'ENTRY LONG' in t['type']]
@@ -1035,7 +1153,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 ))
 
             fig.update_layout(
-                title=f"TradingView Clone - {engine_type} Strategy",
+                title=f"TradingView Clone - {engine_type} Strategy ({strategy_name})",
                 template="plotly_dark",
                 xaxis_rangeslider_visible=False,
                 height=600,
@@ -1092,14 +1210,24 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     else: # MOTORE B
         st.subheader("📈 Technical Strategy Hub Configuration")
+        
+        # Strategy Selection
+        strategy_type = st.selectbox("Select Strategy Type", 
+                                     ["RSI Mean Reversion", "MACD Crossover", "Bollinger Breakout", "Golden/Death Cross", "Stochastic Oscillator"])
+        
+        # Dynamic Parameters
+        params = {}
         col1, col2, col3 = st.columns(3)
-        with col1:
-            rsi_period = st.number_input("RSI Period", 14)
-        with col2:
-            rsi_ob = st.number_input("RSI Overbought", 70)
-        with col3:
-            rsi_os = st.number_input("RSI Oversold", 30)
-            
+        
+        if strategy_type == "RSI Mean Reversion":
+            with col1: params['period'] = st.number_input("RSI Period", 14)
+            with col2: params['ob'] = st.number_input("Overbought", 70)
+            with col3: params['os'] = st.number_input("Oversold", 30)
+        elif strategy_type == "Stochastic Oscillator":
+            with col1: params['k_period'] = st.number_input("K Period", 14)
+            with col2: params['ob'] = st.number_input("Overbought", 80)
+            with col3: params['os'] = st.number_input("Oversold", 20)
+        
         rr = st.slider("Risk:Reward", 1.0, 5.0, 2.0, 0.5)
         risk_pct = st.slider("Risk per Trade (%)", 0.5, 5.0, 1.0, 0.1)
         
@@ -1107,7 +1235,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             with st.spinner("Downloading Deep History & Calculating Indicators..."):
                 if engine.fetch_data():
                     engine.add_technical_indicators()
-                    trades, equity = engine.run_technical_strategy(rsi_period, rsi_ob, rsi_os, rr, risk_pct)
+                    trades, equity = engine.run_technical_strategy(strategy_type, params, rr, risk_pct)
                     
                     # Results
                     st.success(f"Simulation Complete. Total Trades: {len(trades)}")
@@ -1124,7 +1252,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         m3.metric("Profit Factor", f"{pf:.2f}")
                         m4.metric("Final Balance", f"${equity[-1]:.2f}")
                         
-                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical"), use_container_width=True)
+                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True)
                         st.line_chart(equity)
                         st.dataframe(df_res)
                     else:
