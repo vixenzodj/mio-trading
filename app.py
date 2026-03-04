@@ -777,267 +777,6 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
 
 elif menu == "🔙 BACKTESTING STRATEGIA":
-    st.title("🔙 Backtesting Strategia GEX (Advanced Builder)")
-    
-    st.markdown("""
-    <div style='background-color:rgba(0, 100, 255, 0.1); padding:15px; border-radius:5px; border: 1px solid #0074D9; margin-bottom: 20px;'>
-    <b>🛠️ COSTRUTTORE STRATEGIE:</b> Qui puoi simulare migliaia di combinazioni.
-    Scegli le date, definisci i <b>Trigger di Ingresso</b> (es. Rimbalzo sui Muri, Breakout 0-Gamma) e decidi se attendere la <b>Chiusura Candela</b> per confermare il segnale.
-    </div>
-    """, unsafe_allow_html=True)
-
-# --- BACKTESTING ENGINE & VISUALIZER ---
-
-class TechnicalIndicators:
-    @staticmethod
-    def rsi(series, period=14):
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-
-    @staticmethod
-    def macd(series, fast=12, slow=26, signal=9):
-        exp1 = series.ewm(span=fast, adjust=False).mean()
-        exp2 = series.ewm(span=slow, adjust=False).mean()
-        macd = exp1 - exp2
-        signal_line = macd.ewm(span=signal, adjust=False).mean()
-        return macd, signal_line
-
-    @staticmethod
-    def bollinger_bands(series, period=20, std_dev=2):
-        sma = series.rolling(window=period).mean()
-        std = series.rolling(window=period).std()
-        upper = sma + (std * std_dev)
-        lower = sma - (std * std_dev)
-        return upper, lower
-
-    @staticmethod
-    def supertrend(df, period=10, multiplier=3):
-        # Basic implementation of SuperTrend
-        hl2 = (df['High'] + df['Low']) / 2
-        atr = TechnicalIndicators.atr(df, period)
-        upper = hl2 + (multiplier * atr)
-        lower = hl2 - (multiplier * atr)
-        return upper, lower # Simplified for brevity, full logic requires trend state
-
-    @staticmethod
-    def atr(df, period=14):
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift())
-        low_close = np.abs(df['Low'] - df['Close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        return true_range.rolling(period).mean()
-
-class BacktestEngine:
-    def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
-        self.ticker = ticker
-        self.start_date = start_date
-        self.end_date = end_date
-        self.timeframe = timeframe
-        self.initial_capital = initial_capital
-        self.df = pd.DataFrame()
-
-    def fetch_data(self):
-        # Uses existing fetch_alpaca_history logic but ensures max depth
-        self.df = fetch_alpaca_history(self.ticker, self.timeframe, self.start_date, self.end_date)
-        return not self.df.empty
-
-    def add_technical_indicators(self):
-        if self.df.empty: return
-        self.df['RSI'] = TechnicalIndicators.rsi(self.df['Close'])
-        self.df['MACD'], self.df['MACD_Signal'] = TechnicalIndicators.macd(self.df['Close'])
-        self.df['BB_Upper'], self.df['BB_Lower'] = TechnicalIndicators.bollinger_bands(self.df['Close'])
-        self.df['ATR'] = TechnicalIndicators.atr(self.df)
-        self.df['SMA200'] = self.df['Close'].rolling(window=200).mean()
-
-    def add_gex_levels(self, sensitivity=1.5):
-        if self.df.empty: return
-        # Synthetic GEX Logic
-        self.df['Returns'] = self.df['Close'].pct_change()
-        self.df['Roll_Vol'] = self.df['Returns'].rolling(window=20).std() * np.sqrt(252)
-        self.df['ZeroGamma'] = self.df['Close'].rolling(window=20).mean()
-        
-        # Dynamic Walls based on Volatility and Sensitivity
-        vol_mult = sensitivity * (1 + self.df['Roll_Vol'])
-        self.df['CallWall'] = self.df['ZeroGamma'] + (self.df['ATR'] * vol_mult)
-        self.df['PutWall'] = self.df['ZeroGamma'] - (self.df['ATR'] * vol_mult)
-
-    def run_hybrid_strategy(self, long_trigger, short_trigger, risk_reward, risk_per_trade):
-        trades = []
-        balance = self.initial_capital
-        equity_curve = [balance]
-        position = None
-
-        for i in range(len(self.df)):
-            if i < 200: continue # Warmup
-            curr = self.df.iloc[i]
-            prev = self.df.iloc[i-1]
-            
-            # Exit Logic
-            if position:
-                exit_res = None
-                if position['type'] == 'long':
-                    if curr['Low'] <= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
-                    elif curr['High'] >= position['tp']: exit_res, exit_price = 'WIN', position['tp']
-                else:
-                    if curr['High'] >= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
-                    elif curr['Low'] <= position['tp']: exit_res, exit_price = 'WIN', position['tp']
-                
-                if exit_res:
-                    pnl = (exit_price - position['entry']) * position['size'] if position['type'] == 'long' else (position['entry'] - exit_price) * position['size']
-                    balance += pnl
-                    trades.append({'time': curr['datetime'], 'type': f'EXIT {exit_res}', 'price': exit_price, 'pnl': pnl, 'balance': balance})
-                    position = None
-                equity_curve.append(balance)
-                continue
-
-            # Entry Logic (Hybrid GEX)
-            signal = None
-            # Long
-            if long_trigger == "Bounce Put Wall" and prev['Low'] <= prev['PutWall'] and curr['Close'] > prev['PutWall']: signal = 'long'
-            elif long_trigger == "Breakout 0-Gamma" and prev['Close'] < prev['ZeroGamma'] and curr['Close'] > prev['ZeroGamma']: signal = 'long'
-            elif long_trigger == "Breakout Call Wall" and prev['Close'] < prev['CallWall'] and curr['Close'] > prev['CallWall']: signal = 'long'
-            
-            # Short
-            if short_trigger == "Bounce Call Wall" and prev['High'] >= prev['CallWall'] and curr['Close'] < prev['CallWall']: signal = 'short'
-            elif short_trigger == "Breakdown 0-Gamma" and prev['Close'] > prev['ZeroGamma'] and curr['Close'] < prev['ZeroGamma']: signal = 'short'
-            elif short_trigger == "Breakdown Put Wall" and prev['Close'] > prev['PutWall'] and curr['Close'] < prev['PutWall']: signal = 'short'
-
-            if signal:
-                risk_amt = balance * (risk_per_trade / 100)
-                sl_dist = curr['ATR'] * 2
-                
-                if signal == 'long':
-                    sl = curr['Close'] - sl_dist
-                    tp = curr['Close'] + (sl_dist * risk_reward)
-                    size = risk_amt / (curr['Close'] - sl) if (curr['Close'] - sl) > 0 else 0
-                    if size > 0:
-                        position = {'type': 'long', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                        trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
-                else:
-                    sl = curr['Close'] + sl_dist
-                    tp = curr['Close'] - (sl_dist * risk_reward)
-                    size = risk_amt / (sl - curr['Close']) if (sl - curr['Close']) > 0 else 0
-                    if size > 0:
-                        position = {'type': 'short', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                        trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
-            
-            equity_curve.append(balance)
-            
-        return trades, equity_curve
-
-    def run_technical_strategy(self, rsi_period, rsi_overbought, rsi_oversold, risk_reward, risk_per_trade):
-        trades = []
-        balance = self.initial_capital
-        equity_curve = [balance]
-        position = None
-        
-        # Recalculate RSI with custom period if needed
-        self.df['RSI_Strat'] = TechnicalIndicators.rsi(self.df['Close'], rsi_period)
-
-        for i in range(len(self.df)):
-            if i < 200: continue
-            curr = self.df.iloc[i]
-            prev = self.df.iloc[i-1]
-            
-            # Exit Logic (Same as Hybrid)
-            if position:
-                exit_res = None
-                if position['type'] == 'long':
-                    if curr['Low'] <= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
-                    elif curr['High'] >= position['tp']: exit_res, exit_price = 'WIN', position['tp']
-                else:
-                    if curr['High'] >= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
-                    elif curr['Low'] <= position['tp']: exit_res, exit_price = 'WIN', position['tp']
-                
-                if exit_res:
-                    pnl = (exit_price - position['entry']) * position['size'] if position['type'] == 'long' else (position['entry'] - exit_price) * position['size']
-                    balance += pnl
-                    trades.append({'time': curr['datetime'], 'type': f'EXIT {exit_res}', 'price': exit_price, 'pnl': pnl, 'balance': balance})
-                    position = None
-                equity_curve.append(balance)
-                continue
-
-            # Entry Logic (Technical)
-            signal = None
-            if prev['RSI_Strat'] < rsi_oversold and curr['RSI_Strat'] > rsi_oversold: signal = 'long'
-            elif prev['RSI_Strat'] > rsi_overbought and curr['RSI_Strat'] < rsi_overbought: signal = 'short'
-
-            if signal:
-                risk_amt = balance * (risk_per_trade / 100)
-                sl_dist = curr['ATR'] * 2
-                
-                if signal == 'long':
-                    sl = curr['Close'] - sl_dist
-                    tp = curr['Close'] + (sl_dist * risk_reward)
-                    size = risk_amt / (curr['Close'] - sl) if (curr['Close'] - sl) > 0 else 0
-                    if size > 0:
-                        position = {'type': 'long', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                        trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
-                else:
-                    sl = curr['Close'] + sl_dist
-                    tp = curr['Close'] - (sl_dist * risk_reward)
-                    size = risk_amt / (sl - curr['Close']) if (sl - curr['Close']) > 0 else 0
-                    if size > 0:
-                        position = {'type': 'short', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                        trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
-            
-            equity_curve.append(balance)
-            
-        return trades, equity_curve
-
-class Visualizer:
-    @staticmethod
-    def plot_tradingview_clone(df, trades, engine_type="Hybrid"):
-        fig = go.Figure()
-        
-        # Candlestick
-        fig.add_trace(go.Candlestick(x=df['datetime'],
-                        open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                        name='Price'))
-        
-        # Indicators based on Engine
-        if engine_type == "Hybrid":
-            fig.add_trace(go.Scatter(x=df['datetime'], y=df['ZeroGamma'], name='Zero Gamma', line=dict(color='orange', width=1)))
-            fig.add_trace(go.Scatter(x=df['datetime'], y=df['CallWall'], name='Call Wall', line=dict(color='green', dash='dash')))
-            fig.add_trace(go.Scatter(x=df['datetime'], y=df['PutWall'], name='Put Wall', line=dict(color='red', dash='dash')))
-        else:
-            fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Upper'], name='BB Upper', line=dict(color='gray', width=1)))
-            fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Lower'], name='BB Lower', line=dict(color='gray', width=1)))
-            fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA200'], name='SMA 200', line=dict(color='blue', width=2)))
-
-        # Signals
-        buy_signals = [t for t in trades if 'ENTRY LONG' in t['type']]
-        sell_signals = [t for t in trades if 'ENTRY SHORT' in t['type']]
-        
-        if buy_signals:
-            fig.add_trace(go.Scatter(
-                x=[t['time'] for t in buy_signals], 
-                y=[t['price'] for t in buy_signals],
-                mode='markers', marker=dict(symbol='triangle-up', size=12, color='green'), name='Buy Signal'
-            ))
-        if sell_signals:
-            fig.add_trace(go.Scatter(
-                x=[t['time'] for t in sell_signals], 
-                y=[t['price'] for t in sell_signals],
-                mode='markers', marker=dict(symbol='triangle-down', size=12, color='red'), name='Sell Signal'
-            ))
-
-        fig.update_layout(
-            title=f"TradingView Clone - {engine_type} Strategy",
-            template="plotly_dark",
-            xaxis_rangeslider_visible=False,
-            height=600,
-            yaxis_title="Price",
-            xaxis_title="Date"
-        )
-        return fig
-
-# --- MAIN UI REPLACEMENT ---
-if menu == "🛠️ BACKTESTING STRATEGIA":
     st.title("🛠️ Professional Backtesting Suite")
     
     # Engine Selection
@@ -1055,6 +794,255 @@ if menu == "🛠️ BACKTESTING STRATEGIA":
     with c4: 
         end_date = st.date_input("End Date", value=datetime.now())
         initial_capital = st.number_input("Capital", value=10000)
+
+    # --- BACKTESTING ENGINE & VISUALIZER ---
+    class TechnicalIndicators:
+        @staticmethod
+        def rsi(series, period=14):
+            delta = series.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            rs = gain / loss
+            return 100 - (100 / (1 + rs))
+
+        @staticmethod
+        def macd(series, fast=12, slow=26, signal=9):
+            exp1 = series.ewm(span=fast, adjust=False).mean()
+            exp2 = series.ewm(span=slow, adjust=False).mean()
+            macd = exp1 - exp2
+            signal_line = macd.ewm(span=signal, adjust=False).mean()
+            return macd, signal_line
+
+        @staticmethod
+        def bollinger_bands(series, period=20, std_dev=2):
+            sma = series.rolling(window=period).mean()
+            std = series.rolling(window=period).std()
+            upper = sma + (std * std_dev)
+            lower = sma - (std * std_dev)
+            return upper, lower
+
+        @staticmethod
+        def supertrend(df, period=10, multiplier=3):
+            # Basic implementation of SuperTrend
+            hl2 = (df['High'] + df['Low']) / 2
+            atr = TechnicalIndicators.atr(df, period)
+            upper = hl2 + (multiplier * atr)
+            lower = hl2 - (multiplier * atr)
+            return upper, lower # Simplified for brevity, full logic requires trend state
+
+        @staticmethod
+        def atr(df, period=14):
+            high_low = df['High'] - df['Low']
+            high_close = np.abs(df['High'] - df['Close'].shift())
+            low_close = np.abs(df['Low'] - df['Close'].shift())
+            ranges = pd.concat([high_low, high_close, low_close], axis=1)
+            true_range = np.max(ranges, axis=1)
+            return true_range.rolling(period).mean()
+
+    class BacktestEngine:
+        def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
+            self.ticker = ticker
+            self.start_date = start_date
+            self.end_date = end_date
+            self.timeframe = timeframe
+            self.initial_capital = initial_capital
+            self.df = pd.DataFrame()
+
+        def fetch_data(self):
+            # Uses existing fetch_alpaca_history logic but ensures max depth
+            self.df = fetch_alpaca_history(self.ticker, self.timeframe, self.start_date, self.end_date)
+            return not self.df.empty
+
+        def add_technical_indicators(self):
+            if self.df.empty: return
+            self.df['RSI'] = TechnicalIndicators.rsi(self.df['Close'])
+            self.df['MACD'], self.df['MACD_Signal'] = TechnicalIndicators.macd(self.df['Close'])
+            self.df['BB_Upper'], self.df['BB_Lower'] = TechnicalIndicators.bollinger_bands(self.df['Close'])
+            self.df['ATR'] = TechnicalIndicators.atr(self.df)
+            self.df['SMA200'] = self.df['Close'].rolling(window=200).mean()
+
+        def add_gex_levels(self, sensitivity=1.5):
+            if self.df.empty: return
+            # Synthetic GEX Logic
+            self.df['Returns'] = self.df['Close'].pct_change()
+            self.df['Roll_Vol'] = self.df['Returns'].rolling(window=20).std() * np.sqrt(252)
+            self.df['ZeroGamma'] = self.df['Close'].rolling(window=20).mean()
+            
+            # Dynamic Walls based on Volatility and Sensitivity
+            vol_mult = sensitivity * (1 + self.df['Roll_Vol'])
+            self.df['CallWall'] = self.df['ZeroGamma'] + (self.df['ATR'] * vol_mult)
+            self.df['PutWall'] = self.df['ZeroGamma'] - (self.df['ATR'] * vol_mult)
+
+        def run_hybrid_strategy(self, long_trigger, short_trigger, risk_reward, risk_per_trade):
+            trades = []
+            balance = self.initial_capital
+            equity_curve = [balance]
+            position = None
+
+            for i in range(len(self.df)):
+                if i < 200: continue # Warmup
+                curr = self.df.iloc[i]
+                prev = self.df.iloc[i-1]
+                
+                # Exit Logic
+                if position:
+                    exit_res = None
+                    if position['type'] == 'long':
+                        if curr['Low'] <= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
+                        elif curr['High'] >= position['tp']: exit_res, exit_price = 'WIN', position['tp']
+                    else:
+                        if curr['High'] >= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
+                        elif curr['Low'] <= position['tp']: exit_res, exit_price = 'WIN', position['tp']
+                    
+                    if exit_res:
+                        pnl = (exit_price - position['entry']) * position['size'] if position['type'] == 'long' else (position['entry'] - exit_price) * position['size']
+                        balance += pnl
+                        trades.append({'time': curr['datetime'], 'type': f'EXIT {exit_res}', 'price': exit_price, 'pnl': pnl, 'balance': balance})
+                        position = None
+                    equity_curve.append(balance)
+                    continue
+
+                # Entry Logic (Hybrid GEX)
+                signal = None
+                # Long
+                if long_trigger == "Bounce Put Wall" and prev['Low'] <= prev['PutWall'] and curr['Close'] > prev['PutWall']: signal = 'long'
+                elif long_trigger == "Breakout 0-Gamma" and prev['Close'] < prev['ZeroGamma'] and curr['Close'] > prev['ZeroGamma']: signal = 'long'
+                elif long_trigger == "Breakout Call Wall" and prev['Close'] < prev['CallWall'] and curr['Close'] > prev['CallWall']: signal = 'long'
+                
+                # Short
+                if short_trigger == "Bounce Call Wall" and prev['High'] >= prev['CallWall'] and curr['Close'] < prev['CallWall']: signal = 'short'
+                elif short_trigger == "Breakdown 0-Gamma" and prev['Close'] > prev['ZeroGamma'] and curr['Close'] < prev['ZeroGamma']: signal = 'short'
+                elif short_trigger == "Breakdown Put Wall" and prev['Close'] > prev['PutWall'] and curr['Close'] < prev['PutWall']: signal = 'short'
+
+                if signal:
+                    risk_amt = balance * (risk_per_trade / 100)
+                    sl_dist = curr['ATR'] * 2
+                    
+                    if signal == 'long':
+                        sl = curr['Close'] - sl_dist
+                        tp = curr['Close'] + (sl_dist * risk_reward)
+                        size = risk_amt / (curr['Close'] - sl) if (curr['Close'] - sl) > 0 else 0
+                        if size > 0:
+                            position = {'type': 'long', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                    else:
+                        sl = curr['Close'] + sl_dist
+                        tp = curr['Close'] - (sl_dist * risk_reward)
+                        size = risk_amt / (sl - curr['Close']) if (sl - curr['Close']) > 0 else 0
+                        if size > 0:
+                            position = {'type': 'short', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                
+                equity_curve.append(balance)
+                
+            return trades, equity_curve
+
+        def run_technical_strategy(self, rsi_period, rsi_overbought, rsi_oversold, risk_reward, risk_per_trade):
+            trades = []
+            balance = self.initial_capital
+            equity_curve = [balance]
+            position = None
+            
+            # Recalculate RSI with custom period if needed
+            self.df['RSI_Strat'] = TechnicalIndicators.rsi(self.df['Close'], rsi_period)
+
+            for i in range(len(self.df)):
+                if i < 200: continue
+                curr = self.df.iloc[i]
+                prev = self.df.iloc[i-1]
+                
+                # Exit Logic (Same as Hybrid)
+                if position:
+                    exit_res = None
+                    if position['type'] == 'long':
+                        if curr['Low'] <= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
+                        elif curr['High'] >= position['tp']: exit_res, exit_price = 'WIN', position['tp']
+                    else:
+                        if curr['High'] >= position['sl']: exit_res, exit_price = 'LOSS', position['sl']
+                        elif curr['Low'] <= position['tp']: exit_res, exit_price = 'WIN', position['tp']
+                    
+                    if exit_res:
+                        pnl = (exit_price - position['entry']) * position['size'] if position['type'] == 'long' else (position['entry'] - exit_price) * position['size']
+                        balance += pnl
+                        trades.append({'time': curr['datetime'], 'type': f'EXIT {exit_res}', 'price': exit_price, 'pnl': pnl, 'balance': balance})
+                        position = None
+                    equity_curve.append(balance)
+                    continue
+
+                # Entry Logic (Technical)
+                signal = None
+                if prev['RSI_Strat'] < rsi_oversold and curr['RSI_Strat'] > rsi_oversold: signal = 'long'
+                elif prev['RSI_Strat'] > rsi_overbought and curr['RSI_Strat'] < rsi_overbought: signal = 'short'
+
+                if signal:
+                    risk_amt = balance * (risk_per_trade / 100)
+                    sl_dist = curr['ATR'] * 2
+                    
+                    if signal == 'long':
+                        sl = curr['Close'] - sl_dist
+                        tp = curr['Close'] + (sl_dist * risk_reward)
+                        size = risk_amt / (curr['Close'] - sl) if (curr['Close'] - sl) > 0 else 0
+                        if size > 0:
+                            position = {'type': 'long', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                    else:
+                        sl = curr['Close'] + sl_dist
+                        tp = curr['Close'] - (sl_dist * risk_reward)
+                        size = risk_amt / (sl - curr['Close']) if (sl - curr['Close']) > 0 else 0
+                        if size > 0:
+                            position = {'type': 'short', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                
+                equity_curve.append(balance)
+                
+            return trades, equity_curve
+
+    class Visualizer:
+        @staticmethod
+        def plot_tradingview_clone(df, trades, engine_type="Hybrid"):
+            fig = go.Figure()
+            
+            # Candlestick
+            fig.add_trace(go.Candlestick(x=df['datetime'],
+                            open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+                            name='Price'))
+            
+            # Indicators based on Engine
+            if engine_type == "Hybrid":
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['ZeroGamma'], name='Zero Gamma', line=dict(color='orange', width=1)))
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['CallWall'], name='Call Wall', line=dict(color='green', dash='dash')))
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['PutWall'], name='Put Wall', line=dict(color='red', dash='dash')))
+            else:
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Upper'], name='BB Upper', line=dict(color='gray', width=1)))
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Lower'], name='BB Lower', line=dict(color='gray', width=1)))
+                fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA200'], name='SMA 200', line=dict(color='blue', width=2)))
+
+            # Signals
+            buy_signals = [t for t in trades if 'ENTRY LONG' in t['type']]
+            sell_signals = [t for t in trades if 'ENTRY SHORT' in t['type']]
+            
+            if buy_signals:
+                fig.add_trace(go.Scatter(
+                    x=[t['time'] for t in buy_signals], 
+                    y=[t['price'] for t in buy_signals],
+                    mode='markers', marker=dict(symbol='triangle-up', size=12, color='green'), name='Buy Signal'
+                ))
+            if sell_signals:
+                fig.add_trace(go.Scatter(
+                    x=[t['time'] for t in sell_signals], 
+                    y=[t['price'] for t in sell_signals],
+                    mode='markers', marker=dict(symbol='triangle-down', size=12, color='red'), name='Sell Signal'
+                ))
+
+            fig.update_layout(
+                title=f"TradingView Clone - {engine_type} Strategy",
+                template="plotly_dark",
+                xaxis_rangeslider_visible=False,
+                height=600,
+                yaxis_title="Price",
+                xaxis_title="Date"
+            )
+            return fig
 
     engine = BacktestEngine(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), timeframe, initial_capital)
 
