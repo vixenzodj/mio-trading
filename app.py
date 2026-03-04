@@ -1789,11 +1789,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
                 equity_curve.append(balance)
                 
-            return trades, equity_curventry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance})
-                
-                equity_curve.append(balance)
-                
             return trades, equity_curve
 
     class Visualizer:
