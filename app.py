@@ -1466,22 +1466,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         else:
             st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
-                        win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
-                        total_pnl = df_res['pnl'].sum()
-                        pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
-                        
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Profitto Netto", f"${total_pnl:.2f}")
-                        m2.metric("Win Rate", f"{win_rate:.1f}%")
-                        m3.metric("Profit Factor", f"{pf:.2f}")
-                        m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
-                        
-                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True)
-                        st.line_chart(equity)
-                        st.dataframe(df_res)
-                    else:
-                        st.warning("Nessuna operazione generata.")
-        else:
-            st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
+
 
 
