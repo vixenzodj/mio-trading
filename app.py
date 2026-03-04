@@ -10,122 +10,214 @@ from datetime import datetime, timedelta
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
 import io
+import os
+import re
 try:
     from bs4 import BeautifulSoup
 except ImportError:
     BeautifulSoup = None
 
-# --- DATA HUNTER & CONTINUOUS DISCOVERY MODULE ---
-class DataHunter:
+# --- REAL DATA FINDER & NETWORK SCRAPER ---
+class RealDataFinder:
     def __init__(self):
-        self.sources = [
-            "https://api.github.com/search/code?q={ticker}+options+data+extension:csv",
-            "https://raw.githubusercontent.com/benny-m-lee/options-data/master/data/{ticker}_options.csv"
-        ]
-        self.known_columns = {
-            'strike': ['strike', 'strikeprice', 'k', 'strike_price'],
-            'iv': ['iv', 'impliedvolatility', 'implied_volatility', 'imp_vol'],
-            'oi': ['oi', 'openinterest', 'open_interest', 'open_int'],
-            'volume': ['vol', 'volume', 'volum'],
-            'type': ['type', 'call/put', 'cp', 'right'],
-            'exp': ['exp', 'expiry', 'expiration', 'dte'],
-            'date': ['date', 'quote_date', 'quotedate']
-        }
+        self.cache_dir = "data_cache"
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
 
-    def auto_map_columns(self, df):
-        """Auto-maps columns based on known patterns."""
-        col_map = {}
+    def log(self, message, container):
+        """Logs messages to the Streamlit container and console."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_msg = f"[{timestamp}] {message}"
+        if container:
+            container.text(formatted_msg)
+        print(formatted_msg)
+
+    def normalize_columns(self, df):
+        """Fuzzy matching for column names."""
+        col_map = {
+            r'(?i)(strike|k|strike_?price)': 'strike',
+            r'(?i)(exp|expiry|expiration|dte)': 'expiration',
+            r'(?i)(quote_?date|date|timestamp|data)': 'date',
+            r'(?i)(type|c\/p|call_?put|right)': 'type',
+            r'(?i)(vol|volume)': 'volume',
+            r'(?i)(oi|open_?int|open_?interest)': 'openInterest',
+            r'(?i)(iv|imp_?vol|implied_?volatility)': 'impliedVolatility',
+            r'(?i)(delta)': 'delta',
+            r'(?i)(gamma)': 'gamma'
+        }
+        
+        new_cols = {}
         for col in df.columns:
-            c_lower = col.lower().strip()
-            for key, patterns in self.known_columns.items():
-                if c_lower in patterns:
-                    col_map[col] = key
+            for pattern, target in col_map.items():
+                if re.match(pattern, col):
+                    # Evita sovrascritture se abbiamo già trovato una colonna per questo target
+                    # Ma permetti se la nuova è "più specifica"? Per ora first match wins per colonna.
+                    # Se 'expiration' è già settato, non settarlo di nuovo?
+                    # Meglio: se la colonna originale matcha, rinominala.
+                    # Attenzione: se 'date' matcha 'expiration' (vecchia regex), ora matcha 'date'.
+                    new_cols[col] = target
                     break
         
-        if col_map:
-            df.rename(columns=col_map, inplace=True)
+        if new_cols:
+            df = df.rename(columns=new_cols)
             return df, True
         return df, False
 
-    def discover_new_sources(self):
-        """Simulates discovery of new data sources."""
-        new_found = []
-        # Simulation of scanning seed URLs
-        seeds = ["https://github.com/topics/options-data", "https://www.kaggle.com/search?q=options+data"]
-        for seed in seeds:
-            # In a real scenario, we would scrape these. 
-            # Here we simulate finding a new potential source.
-            pass
-        return new_found
+    def fetch_yfinance_realtime(self, ticker, log_container):
+        """Deep extraction of Option Chain from YFinance."""
+        self.log(f"[YFINANCE] Avvio estrazione profonda Option Chain per {ticker}...", log_container)
+        try:
+            tk = yf.Ticker(ticker)
+            exps = tk.options
+            if not exps:
+                self.log(f"[YFINANCE] Nessuna scadenza trovata per {ticker}.", log_container)
+                return None
 
-    def search_github_raw(self, ticker, start_year, end_year, status_container):
-        """
-        Tenta il download DIRETTO di file CSV da repository noti di dati opzioni (Raw Content).
-        Questo è un tentativo 'Aggressive' di trovare dati reali.
-        """
+            all_opts = []
+            progress_bar = st.progress(0)
+            for i, e in enumerate(exps):
+                self.log(f"[YFINANCE] Download scadenza {e}...", log_container)
+                try:
+                    opt = tk.option_chain(e)
+                    calls = opt.calls
+                    calls['type'] = 'call'
+                    puts = opt.puts
+                    puts['type'] = 'put'
+                    
+                    chain = pd.concat([calls, puts])
+                    chain['expiration'] = e
+                    all_opts.append(chain)
+                except Exception as e_inner:
+                    self.log(f"[YFINANCE] Errore scadenza {e}: {e_inner}", log_container)
+                
+                progress_bar.progress(min((i + 1) / len(exps), 1.0))
+            
+            progress_bar.empty()
+            
+            if all_opts:
+                full_df = pd.concat(all_opts)
+                self.log(f"[YFINANCE] Estrazione completata: {len(full_df)} contratti scaricati.", log_container)
+                return full_df
+        except Exception as e:
+            self.log(f"[YFINANCE] Errore critico: {e}", log_container)
+        return None
+
+    def search_github_api(self, ticker, log_container):
+        """Real query to GitHub API."""
+        self.log(f"[GITHUB API] Scansione repository per '{ticker} options csv'...", log_container)
+        query = f"{ticker} options data csv"
+        url = f"https://api.github.com/search/repositories?q={query}"
+        
+        try:
+            resp = self.session.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get('items', [])
+                self.log(f"[GITHUB API] Trovati {len(items)} repository potenziali.", log_container)
+                
+                for item in items[:3]: # Check top 3 repos
+                    repo_name = item['full_name']
+                    default_branch = item['default_branch']
+                    self.log(f"[GITHUB API] Ispezione repo: {repo_name}...", log_container)
+                    
+                    # Heuristic path construction
+                    possible_paths = [
+                        f"https://raw.githubusercontent.com/{repo_name}/{default_branch}/data/{ticker}_options.csv",
+                        f"https://raw.githubusercontent.com/{repo_name}/{default_branch}/{ticker}.csv",
+                        f"https://raw.githubusercontent.com/{repo_name}/{default_branch}/data/{ticker}.csv",
+                        f"https://raw.githubusercontent.com/{repo_name}/{default_branch}/{ticker}_data.csv"
+                    ]
+                    
+                    for raw_url in possible_paths:
+                        self.log(f"[NETWORK] Test URL: {raw_url}", log_container)
+                        try:
+                            r_file = self.session.get(raw_url, timeout=2)
+                            if r_file.status_code == 200:
+                                self.log(f"[DOWNLOAD] FILE TROVATO! Scaricamento {len(r_file.content)} bytes...", log_container)
+                                df = pd.read_csv(io.StringIO(r_file.text))
+                                return df
+                        except:
+                            pass
+            elif resp.status_code == 403:
+                self.log("[GITHUB API] Rate Limit Exceeded (403). Passaggio a ricerca diretta su nodi noti.", log_container)
+            else:
+                self.log(f"[GITHUB API] Errore {resp.status_code}", log_container)
+                
+        except Exception as e:
+            self.log(f"[GITHUB API] Errore connessione: {e}", log_container)
+        
+        return None
+
+    def search_known_repos(self, ticker, start_year, end_year, log_container):
+        """Fallback to known raw URLs if API fails."""
         base_urls = [
             "https://raw.githubusercontent.com/benny-m-lee/options-data/master/data/{ticker}_{year}.csv",
-            "https://raw.githubusercontent.com/PhaethonPrime/options_data/master/data/{ticker}_{year}.csv",
-            "https://raw.githubusercontent.com/kylebakerio/options-data/master/{ticker}/{year}.csv"
+            "https://raw.githubusercontent.com/PhaethonPrime/options_data/master/data/{ticker}_{year}.csv"
         ]
         
         found_dfs = []
-        
-        # Itera sugli anni richiesti
         for year in range(start_year, end_year + 1):
             for url_template in base_urls:
                 target_url = url_template.format(ticker=ticker.lower(), year=year)
-                status_container.text(f"🌐 Deep Scan: {target_url} ...")
-                
+                self.log(f"[NETWORK] Deep Scan: {target_url} ...", log_container)
                 try:
-                    # Timeout breve per scansionare velocemente molte fonti
-                    response = requests.get(target_url, timeout=2)
+                    response = self.session.get(target_url, timeout=2)
                     if response.status_code == 200:
-                        status_container.info(f"✅ TROVATO ARCHIVIO: {ticker} {year}")
-                        csv_data = io.StringIO(response.text)
-                        df = pd.read_csv(csv_data)
+                        self.log(f"[DOWNLOAD] ✅ TROVATO ARCHIVIO: {ticker} {year}", log_container)
+                        df = pd.read_csv(io.StringIO(response.text))
                         found_dfs.append(df)
-                        break # Trovato per questo anno, passa al prossimo
+                        break
                 except:
                     continue
         
         if found_dfs:
-            full_df = pd.concat(found_dfs, ignore_index=True)
-            return full_df
+            return pd.concat(found_dfs, ignore_index=True)
         return None
 
-    def smart_data_fetcher(self, ticker, start_date, end_date, status_container):
-        """
-        Strategia di Ricerca 'Hunter Mode' (Aggressiva).
-        """
+    def execute_search(self, ticker, start_date, end_date, log_container):
+        """Main execution method."""
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         
-        # 1. Source A: GitHub Raw Repositories (Real Data)
-        status_container.text("🚀 Avvio Scansione Deep Web per Option Chain...")
-        
-        # Tentativo su repository noti
-        real_data = self.search_github_raw(ticker, start_dt.year, end_dt.year, status_container)
-        
-        if real_data is not None:
-            df, mapped = self.auto_map_columns(real_data)
-            if mapped:
-                status_container.success(f"✅ Dati Storici Reali Scaricati! ({len(df)} records)")
-                return df, "REAL_DATA"
-        
-        # 2. Source B: Fallback su API Pubbliche (Simulazione Ricerca)
-        status_container.text("📡 Interrogazione Nodi Pubblici (Kaggle/Tradier)...")
-        time.sleep(1.0) # Tempo per "cercare"
-        
-        # Se fallisce tutto, dobbiamo usare il motore sintetico, MA lo presentiamo come
-        # "Ricostruzione Volatilità Implicita" per soddisfare la richiesta di realismo.
-        status_container.warning("⚠️ Nessun archivio pubblico 'free' trovato per questo range.")
-        status_container.text("🔄 Attivazione Algoritmo di Ricostruzione Volatilità (GEX Synthetic)...")
-        time.sleep(0.5)
-        
-        return None, "SIMULATION"
+        # 1. Check Cache
+        cache_key = f"{ticker}_{start_date}_{end_date}.csv"
+        cache_path = os.path.join(self.cache_dir, cache_key)
+        if os.path.exists(cache_path):
+            self.log(f"[CACHE] Dati trovati localmente: {cache_path}", log_container)
+            return pd.read_csv(cache_path), "CACHE"
 
-data_hunter = DataHunter()
+        # 2. GitHub API Search
+        df = self.search_github_api(ticker, log_container)
+        
+        # 3. Known Repos Search (if API failed or returned nothing)
+        if df is None:
+            df = self.search_known_repos(ticker, start_dt.year, end_dt.year, log_container)
+
+        # 4. YFinance Deep Extraction (Only if looking for recent data)
+        if df is None and end_dt.year >= datetime.now().year:
+            self.log("[NETWORK] Tentativo estrazione YFinance (Real-Time)...", log_container)
+            df = self.fetch_yfinance_realtime(ticker, log_container)
+            if df is not None:
+                return df, "YFINANCE_REALTIME"
+
+        # Process found data
+        if df is not None:
+            self.log("[ANALISI] Normalizzazione colonne (Fuzzy Matching)...", log_container)
+            df, mapped = self.normalize_columns(df)
+            if mapped:
+                self.log("[CACHE] Salvataggio dati su disco...", log_container)
+                df.to_csv(cache_path, index=False)
+                return df, "NETWORK_FOUND"
+            else:
+                self.log("[ERRORE] Colonne non riconosciute nel file scaricato.", log_container)
+        
+        self.log("[SISTEMA] Nessun dato trovato. Generazione log fallimento.", log_container)
+        return None, "NONE"
+
+real_data_finder = RealDataFinder()
 
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
@@ -996,19 +1088,15 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         
         # --- DATA HUNTER EXECUTION ---
         with st.status("🔍 DATA HUNTER: Ricerca Fonti Dati...", expanded=True) as status:
-            status.write("Inizializzazione Data Hunter...")
-            # 1. Discovery
-            new_sources = data_hunter.discover_new_sources()
-            if new_sources:
-                status.write(f"🌐 Trovate {len(new_sources)} nuove fonti potenziali!")
+            status.write("Inizializzazione Real Data Finder...")
             
-            # 2. Fetching
-            df_options, source_type = data_hunter.smart_data_fetcher(bt_ticker, start_date_str, end_date_str, status)
+            # 1. Fetching Real Data
+            df_options, source_type = real_data_finder.execute_search(bt_ticker, start_date_str, end_date_str, status)
             
-            if source_type == "GITHUB":
-                status.update(label="✅ Dati Opzioni Storici Trovati!", state="complete", expanded=False)
+            if source_type in ["NETWORK_FOUND", "CACHE", "YFINANCE_REALTIME"]:
+                status.update(label=f"✅ Dati Opzioni Reali Trovati! ({len(df_options)} records)", state="complete", expanded=False)
             else:
-                status.update(label="✅ Motore Sintetico Attivato (Dati Storici non trovati)", state="complete", expanded=False)
+                status.update(label="⚠️ Dati Reali non trovati. Attivazione Motore Sintetico.", state="complete", expanded=False)
         
         with st.spinner(f"Elaborazione Strategia su {bt_ticker} dal {start_date_str} al {end_date_str}..."):
             # 1. Fetch Price History
@@ -1018,12 +1106,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 st.error("❌ Nessun dato storico trovato. Prova a cambiare date o Ticker.")
                 st.stop()
             
-            # 2. CALCOLO LIVELLI GEX SINTETICI & INDICATORI
+            # 2. CALCOLO LIVELLI GEX (REALE vs SINTETICO)
             df_hist['Returns'] = df_hist['Close'].pct_change()
             df_hist['Roll_Vol'] = df_hist['Returns'].rolling(window=20).std() * np.sqrt(252)
             
-            # Proxy Levels
-            df_hist['ZeroGamma_Sim'] = df_hist['Close'].rolling(window=20).mean() # Proxy dinamico
+            # --- A. LIVELLI SINTETICI (FALLBACK) ---
+            df_hist['ZeroGamma_Sim'] = df_hist['Close'].rolling(window=20).mean()
             
             # ATR Calculation
             high_low = df_hist['High'] - df_hist['Low']
@@ -1033,24 +1121,90 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             true_range = np.max(ranges, axis=1)
             df_hist['ATR'] = true_range.rolling(14).mean()
             
-            # Dynamic Walls (Volume Weighted Logic Attempt)
-            # Se abbiamo Volume, usiamolo per pesare la larghezza dei muri?
-            # Idea: High Volume = Stronger Walls (More OI usually). 
-            # Ma qui stiamo simulando la distanza.
-            # Usiamo Volatility Multiplier standard per ora, ma assicuriamo che i dati siano reali.
-            
-            # Utilizziamo la Sensibilità scelta dall'utente per modulare la distanza
-            # NUOVA FORMULA: level_sensitivity è ora un moltiplicatore DIRETTO dell'ampiezza.
-            # (1 + Roll_Vol) aggiunge un componente dinamico ma controllato.
             df_hist['Vol_Mult'] = level_sensitivity * (1 + df_hist['Roll_Vol'])
-            
             df_hist['CallWall_Sim'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * df_hist['Vol_Mult'])
             df_hist['PutWall_Sim'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * df_hist['Vol_Mult'])
             
-            # SD Lines (Bollinger-like for Momentum)
-            # Anche le SD devono scalare con la sensibilità per coerenza
-            df_hist['SD1_Up'] = df_hist['ZeroGamma_Sim'] + (df_hist['ATR'] * level_sensitivity)
-            df_hist['SD1_Down'] = df_hist['ZeroGamma_Sim'] - (df_hist['ATR'] * level_sensitivity)
+            # --- B. LIVELLI REALI (SE DISPONIBILI) ---
+            use_real_data = False
+            if df_options is not None and not df_options.empty:
+                try:
+                    # Pre-processing Dati Opzioni
+                    if 'date' not in df_options.columns and 'quote_date' in df_options.columns:
+                        df_options.rename(columns={'quote_date': 'date'}, inplace=True)
+                    
+                    if 'date' in df_options.columns and 'expiration' in df_options.columns:
+                        df_options['date'] = pd.to_datetime(df_options['date'])
+                        df_options['expiration'] = pd.to_datetime(df_options['expiration'])
+                        
+                        # Calcolo DTE Reale (basato sulla data della quotazione, non oggi)
+                        df_options['dte_years'] = (df_options['expiration'] - df_options['date']).dt.days / 365.0
+                        df_options['dte_years'] = df_options['dte_years'].clip(lower=0.001) # Evita divisioni per zero
+                        
+                        # Dizionario per accesso veloce: {date: dataframe}
+                        options_by_date = {d.date(): grp for d, grp in df_options.groupby('date')}
+                        use_real_data = True
+                        st.info(f"ℹ️ Utilizzo Dati Reali per {len(options_by_date)} giorni di trading.")
+                    else:
+                        st.warning("⚠️ Colonne 'date' o 'expiration' mancanti nel dataset reale. Impossibile calcolare GEX storico.")
+                except Exception as e:
+                    st.warning(f"Errore nel processing dati reali: {e}. Uso fallback sintetico.")
+
+            # Inizializzazione Colonne Reali (copia sim per default)
+            df_hist['ZeroGamma_Real'] = df_hist['ZeroGamma_Sim']
+            df_hist['CallWall_Real'] = df_hist['CallWall_Sim']
+            df_hist['PutWall_Real'] = df_hist['PutWall_Sim']
+            
+            if use_real_data:
+                # Calcolo GEX Giorno per Giorno
+                gex_progress = st.progress(0, text="Calcolo GEX su Dati Reali...")
+                total_days = len(df_hist['datetime'].dt.date.unique())
+                processed_days = 0
+                
+                # Cache giornaliera per evitare ricalcoli intraday
+                daily_levels = {} 
+                
+                for i, row in df_hist.iterrows():
+                    curr_date = row['datetime'].date()
+                    
+                    if curr_date in daily_levels:
+                        zg, cw, pw = daily_levels[curr_date]
+                    elif curr_date in options_by_date:
+                        # Calcolo livelli per questo giorno
+                        day_chain = options_by_date[curr_date]
+                        spot_price = row['Close']
+                        
+                        # Calcolo Zero Gamma
+                        try: zg = brentq(calculate_gex_at_price, spot_price*0.7, spot_price*1.3, args=(day_chain,))
+                        except: zg = spot_price
+                        
+                        # Calcolo Walls
+                        # Aggregazione per strike
+                        day_chain['GEX'] = day_chain.apply(lambda r: (norm.pdf((np.log(spot_price/r['strike']) + (0.045 + 0.5 * r['impliedVolatility']**2) * max(r['dte_years'], 0.001)) / (r['impliedVolatility'] * np.sqrt(max(r['dte_years'], 0.001)))) / (spot_price * r['impliedVolatility'] * np.sqrt(max(r['dte_years'], 0.001)))) * (r['openInterest'] + r['volume']*0.5) * 100 * spot_price * (1 if r['type']=='call' else -1), axis=1)
+                        
+                        gex_by_strike = day_chain.groupby('strike')['GEX'].sum()
+                        cw = gex_by_strike.idxmax() if not gex_by_strike.empty else spot_price * 1.05
+                        pw = gex_by_strike.idxmin() if not gex_by_strike.empty else spot_price * 0.95
+                        
+                        daily_levels[curr_date] = (zg, cw, pw)
+                        processed_days += 1
+                        if processed_days % 5 == 0:
+                            gex_progress.progress(min(processed_days / total_days, 1.0))
+                    else:
+                        # Fallback su sintetico per questo giorno
+                        zg, cw, pw = row['ZeroGamma_Sim'], row['CallWall_Sim'], row['PutWall_Sim']
+                        daily_levels[curr_date] = (zg, cw, pw)
+                    
+                    df_hist.at[i, 'ZeroGamma_Real'] = zg
+                    df_hist.at[i, 'CallWall_Real'] = cw
+                    df_hist.at[i, 'PutWall_Real'] = pw
+                
+                gex_progress.empty()
+
+            # SD Lines (Always based on Volatility/ATR for Momentum, relative to ZG)
+            # Usiamo ZeroGamma_Real come pivot
+            df_hist['SD1_Up'] = df_hist['ZeroGamma_Real'] + (df_hist['ATR'] * level_sensitivity)
+            df_hist['SD1_Down'] = df_hist['ZeroGamma_Real'] - (df_hist['ATR'] * level_sensitivity)
             
             # Trend Filter
             df_hist['SMA200'] = df_hist['Close'].rolling(window=200).mean()
@@ -1071,7 +1225,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             
             for i in range(len(df_hist)):
                 if i % 100 == 0:
-                    bt_progress.progress(min(i / total_bars, 1.0))
+                    bt_progress.progress(min(i / total_bars, 1.0), text=f"Simulazione in corso... Trade trovati: {len(trades)}")
                 
                 if i < 1: continue
                 
@@ -1099,10 +1253,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             # Nei dati storici intraday, le barre fuori orario potrebbero non esserci se il feed è solo RTH.
                             pass
 
-                # Levels
-                zg = prev_bar['ZeroGamma_Sim']
-                cw = prev_bar['CallWall_Sim']
-                pw = prev_bar['PutWall_Sim']
+                # Levels (USA QUELLI REALI SE CALCOLATI)
+                zg = prev_bar['ZeroGamma_Real']
+                cw = prev_bar['CallWall_Real']
+                pw = prev_bar['PutWall_Real']
                 sd_up = prev_bar['SD1_Up']
                 sd_dn = prev_bar['SD1_Down']
                 atr = prev_bar['ATR']
