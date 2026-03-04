@@ -787,13 +787,30 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     
     # Common Inputs
     c1, c2, c3, c4 = st.columns(4)
-    with c1: ticker = st.text_input("Ticker", value="SPY")
+    with c1: 
+        # Ticker Selection with Predefined List + Custom
+        PREDEFINED_TICKERS = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "TSLA", "NVDA", "AMD", "AMZN", "GOOGL", "META", "NFLX"]
+        ticker_select = st.selectbox("Seleziona Ticker", ["Seleziona..."] + PREDEFINED_TICKERS + ["Inserisci Manualmente"])
+        
+        if ticker_select == "Inserisci Manualmente":
+            ticker = st.text_input("Inserisci Simbolo Ticker", value="SPY").upper()
+        elif ticker_select != "Seleziona...":
+            ticker = ticker_select
+        else:
+            ticker = "SPY" # Default
+
     with c2: timeframe = st.selectbox("Timeframe", ["1D", "1H", "15Min", "5Min"], index=0)
     with c3: 
-        start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=365*2))
+        start_date = st.date_input("Data Inizio", value=datetime.now() - timedelta(days=365*2))
     with c4: 
-        end_date = st.date_input("End Date", value=datetime.now())
-        initial_capital = st.number_input("Capital", value=10000)
+        end_date = st.date_input("Data Fine", value=datetime.now())
+        initial_capital = st.number_input("Capitale Iniziale ($)", value=10000)
+
+    # Session State for Data Verification
+    if 'backtest_data' not in st.session_state:
+        st.session_state.backtest_data = None
+    if 'backtest_ticker' not in st.session_state:
+        st.session_state.backtest_ticker = None
 
     # --- DATA FETCHING ENHANCED ---
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
@@ -817,7 +834,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         # 2. Fallback to yfinance if Alpaca failed or returned empty
         if df.empty:
-            st.warning(f"⚠️ Alpaca data empty or failed for {ticker}. Falling back to Yahoo Finance (slower but deeper history).")
+            st.warning(f"⚠️ Dati Alpaca non disponibili per {ticker}. Tentativo con Yahoo Finance (storico più profondo).")
             try:
                 # Convert timeframe to yfinance format
                 tf_yf = "1d"
@@ -851,9 +868,33 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     # Filter by date just in case
                     df['datetime'] = pd.to_datetime(df['datetime'])
             except Exception as e:
-                st.error(f"Yahoo Finance fetch failed: {e}")
+                st.error(f"Errore Yahoo Finance: {e}")
                 
         return df
+
+    # Data Verification Step
+    st.markdown("---")
+    if st.button("🔍 Verifica Disponibilità Dati Storici"):
+        with st.spinner(f"Ricerca dati storici per {ticker} dal {start_date} al {end_date}..."):
+            df_check = fetch_data_smart(ticker, timeframe, start_date, end_date)
+            
+            if not df_check.empty:
+                # Check actual date range
+                min_date = df_check['datetime'].min().date()
+                max_date = df_check['datetime'].max().date()
+                count = len(df_check)
+                
+                st.success(f"✅ Dati Trovati! {count} candele disponibili.")
+                st.info(f"📅 Range Disponibile: {min_date} -> {max_date}")
+                
+                if min_date > start_date:
+                    st.warning(f"⚠️ Attenzione: I dati iniziano dal {min_date}, successivi alla data richiesta {start_date}.")
+                
+                st.session_state.backtest_data = df_check
+                st.session_state.backtest_ticker = ticker
+            else:
+                st.error(f"❌ Nessun dato trovato per {ticker} nel range selezionato. Prova a cambiare date o ticker.")
+                st.session_state.backtest_data = None
 
     # --- BACKTESTING ENGINE & VISUALIZER ---
     class TechnicalIndicators:
@@ -1164,27 +1205,41 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     engine = BacktestEngine(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), timeframe, initial_capital)
 
+    # Use verified data if available
+    if st.session_state.backtest_data is not None and st.session_state.backtest_ticker == ticker:
+        engine.df = st.session_state.backtest_data.copy()
+        data_ready = True
+    else:
+        data_ready = False
+
     if "MOTORE A" in engine_choice:
-        st.subheader("🧬 GEX Hybrid Strategy Configuration")
+        st.subheader("🧬 Configurazione Strategia Ibrida GEX")
         col1, col2 = st.columns(2)
         with col1:
-            long_trigger = st.selectbox("Long Trigger", ["Bounce Put Wall", "Breakout 0-Gamma", "Breakout Call Wall", "None"])
+            long_trigger = st.selectbox("Trigger Long", ["Rimbalzo Put Wall", "Breakout 0-Gamma", "Breakout Call Wall", "Nessuno"])
+            # Map Italian to English for logic
+            long_trigger_map = {"Rimbalzo Put Wall": "Bounce Put Wall", "Breakout 0-Gamma": "Breakout 0-Gamma", "Breakout Call Wall": "Breakout Call Wall", "Nessuno": "None"}
+            long_trigger_en = long_trigger_map[long_trigger]
+
         with col2:
-            short_trigger = st.selectbox("Short Trigger", ["Bounce Call Wall", "Breakdown 0-Gamma", "Breakdown Put Wall", "None"])
+            short_trigger = st.selectbox("Trigger Short", ["Rimbalzo Call Wall", "Breakdown 0-Gamma", "Breakdown Put Wall", "Nessuno"])
+            short_trigger_map = {"Rimbalzo Call Wall": "Bounce Call Wall", "Breakdown 0-Gamma": "Breakdown 0-Gamma", "Breakdown Put Wall": "Breakdown Put Wall", "Nessuno": "None"}
+            short_trigger_en = short_trigger_map[short_trigger]
         
-        sensitivity = st.slider("GEX Sensitivity", 0.5, 3.0, 1.5, 0.1)
-        rr = st.slider("Risk:Reward", 1.0, 5.0, 2.0, 0.5)
-        risk_pct = st.slider("Risk per Trade (%)", 0.5, 5.0, 1.0, 0.1)
+        sensitivity = st.slider("Sensibilità GEX", 0.5, 3.0, 1.5, 0.1)
+        rr = st.slider("Rischio:Rendimento", 1.0, 5.0, 2.0, 0.5)
+        risk_pct = st.slider("Rischio per Trade (%)", 0.5, 5.0, 1.0, 0.1)
         
-        if st.button("🚀 Run GEX Simulation"):
-            with st.spinner("Downloading Data & Calculating GEX Walls..."):
-                if engine.fetch_data():
+        if data_ready:
+            if st.button("🚀 Avvia Simulazione GEX"):
+                with st.spinner("Calcolo Livelli GEX e Simulazione..."):
+                    # Data already in engine.df
                     engine.add_technical_indicators() # Need ATR
                     engine.add_gex_levels(sensitivity)
-                    trades, equity = engine.run_hybrid_strategy(long_trigger, short_trigger, rr, risk_pct)
+                    trades, equity = engine.run_hybrid_strategy(long_trigger_en, short_trigger_en, rr, risk_pct)
                     
                     # Results
-                    st.success(f"Simulation Complete. Total Trades: {len(trades)}")
+                    st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
                     
                     # Metrics
                     if trades:
@@ -1194,25 +1249,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
                         
                         m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Net Profit", f"${total_pnl:.2f}")
+                        m1.metric("Profitto Netto", f"${total_pnl:.2f}")
                         m2.metric("Win Rate", f"{win_rate:.1f}%")
                         m3.metric("Profit Factor", f"{pf:.2f}")
-                        m4.metric("Final Balance", f"${equity[-1]:.2f}")
+                        m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
                         
                         # Charts
                         st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Hybrid"), use_container_width=True)
                         st.line_chart(equity)
                         st.dataframe(df_res)
                     else:
-                        st.warning("No trades generated with current settings.")
-                else:
-                    st.error("Failed to fetch data.")
+                        st.warning("Nessuna operazione generata con le impostazioni correnti.")
+        else:
+            st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
 
     else: # MOTORE B
-        st.subheader("📈 Technical Strategy Hub Configuration")
+        st.subheader("📈 Configurazione Hub Strategie Tecniche")
         
         # Strategy Selection
-        strategy_type = st.selectbox("Select Strategy Type", 
+        strategy_type = st.selectbox("Seleziona Tipo Strategia", 
                                      ["RSI Mean Reversion", "MACD Crossover", "Bollinger Breakout", "Golden/Death Cross", "Stochastic Oscillator"])
         
         # Dynamic Parameters
@@ -1220,25 +1275,26 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         col1, col2, col3 = st.columns(3)
         
         if strategy_type == "RSI Mean Reversion":
-            with col1: params['period'] = st.number_input("RSI Period", 14)
-            with col2: params['ob'] = st.number_input("Overbought", 70)
-            with col3: params['os'] = st.number_input("Oversold", 30)
+            with col1: params['period'] = st.number_input("Periodo RSI", 14)
+            with col2: params['ob'] = st.number_input("Ipercomprato", 70)
+            with col3: params['os'] = st.number_input("Ipervenduto", 30)
         elif strategy_type == "Stochastic Oscillator":
-            with col1: params['k_period'] = st.number_input("K Period", 14)
-            with col2: params['ob'] = st.number_input("Overbought", 80)
-            with col3: params['os'] = st.number_input("Oversold", 20)
+            with col1: params['k_period'] = st.number_input("Periodo K", 14)
+            with col2: params['ob'] = st.number_input("Ipercomprato", 80)
+            with col3: params['os'] = st.number_input("Ipervenduto", 20)
         
-        rr = st.slider("Risk:Reward", 1.0, 5.0, 2.0, 0.5)
-        risk_pct = st.slider("Risk per Trade (%)", 0.5, 5.0, 1.0, 0.1)
+        rr = st.slider("Rischio:Rendimento", 1.0, 5.0, 2.0, 0.5)
+        risk_pct = st.slider("Rischio per Trade (%)", 0.5, 5.0, 1.0, 0.1)
         
-        if st.button("🚀 Run Technical Backtest"):
-            with st.spinner("Downloading Deep History & Calculating Indicators..."):
-                if engine.fetch_data():
+        if data_ready:
+            if st.button("🚀 Avvia Backtest Tecnico"):
+                with st.spinner("Calcolo Indicatori e Simulazione..."):
+                    # Data already in engine.df
                     engine.add_technical_indicators()
                     trades, equity = engine.run_technical_strategy(strategy_type, params, rr, risk_pct)
                     
                     # Results
-                    st.success(f"Simulation Complete. Total Trades: {len(trades)}")
+                    st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
                     
                     if trades:
                         df_res = pd.DataFrame(trades)
@@ -1247,17 +1303,17 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
                         
                         m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Net Profit", f"${total_pnl:.2f}")
+                        m1.metric("Profitto Netto", f"${total_pnl:.2f}")
                         m2.metric("Win Rate", f"{win_rate:.1f}%")
                         m3.metric("Profit Factor", f"{pf:.2f}")
-                        m4.metric("Final Balance", f"${equity[-1]:.2f}")
+                        m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
                         
                         st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True)
                         st.line_chart(equity)
                         st.dataframe(df_res)
                     else:
-                        st.warning("No trades generated.")
-                else:
-                    st.error("Failed to fetch data.")
+                        st.warning("Nessuna operazione generata.")
+        else:
+            st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
 
 
