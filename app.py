@@ -1564,7 +1564,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
             return trades, equity_curve
 
-        def run_technical_strategy(self, strategy_type, params, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard"):
+        def run_technical_strategy(self, strategy_type, params, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard", sl_atr_mult=1.5):
             trades = []
             balance = self.initial_capital
             equity_curve = [balance]
@@ -1762,9 +1762,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     if prev['TSF'] < curr['TSF'] and prev['Close'] > curr['TSF']: signal = 'long'
                     elif prev['TSF'] > curr['TSF'] and prev['Close'] < curr['TSF']: signal = 'short'
 
+
                 if signal:
                     entry_price = curr['Close']
-                    sl_dist = curr['ATR'] * 1.5
+                    sl_dist = curr['ATR'] * sl_atr_mult
                     
                     if entry_mode == "Retest":
                         entry_price = (curr['High'] + curr['Low']) / 2
@@ -1784,6 +1785,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         size = risk_amt / (sl - entry_price) if (sl - entry_price) > 0 else 0
                         if size > 0:
                             position = {'type': 'short', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance})
+                
+                equity_curve.append(balance)
+                
+            return trades, equity_curventry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
                             trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance})
                 
                 equity_curve.append(balance)
@@ -2009,22 +2015,22 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
                 # Default ranges if not specified
                 if strategy_type == "RSI Mean Reversion":
-                    opt_config = {'period': [7, 14, 21], 'ob': [65, 70, 75, 80], 'os': [20, 25, 30, 35]}
+                    opt_config = {'period': list(range(10, 26, 2)), 'ob': list(range(65, 86, 5)), 'os': list(range(15, 36, 5))}
                     def recalc(df, p): df['RSI'] = TechnicalIndicators.rsi(df['Close'], p['period'])
                     recalc_logic = recalc
                     
                 elif strategy_type == "Stochastic Oscillator":
-                    opt_config = {'k_period': [10, 14, 21], 'ob': [75, 80, 85, 90], 'os': [10, 15, 20, 25]}
+                    opt_config = {'k_period': list(range(10, 26, 2)), 'ob': list(range(70, 91, 5)), 'os': list(range(10, 31, 5))}
                     def recalc(df, p): df['Stoch_K'], df['Stoch_D'] = TechnicalIndicators.stochastic(df, p['k_period'])
                     recalc_logic = recalc
                     
                 elif strategy_type == "CCI Momentum":
-                    opt_config = {'period': [14, 20, 50]}
+                    opt_config = {'period': [14, 20, 30, 50]}
                     def recalc(df, p): df['CCI'] = TechnicalIndicators.cci(df, p['period'])
                     recalc_logic = recalc
 
                 elif strategy_type == "Williams %R Reversal":
-                    opt_config = {'period': [10, 14, 20]}
+                    opt_config = {'period': list(range(10, 26, 2))}
                     def recalc(df, p): df['WilliamsR'] = TechnicalIndicators.williams_r(df, p['period'])
                     recalc_logic = recalc
 
@@ -2053,12 +2059,29 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     opt_config = {'dummy': [1]} # No params to optimize
                 
                 # Global Ranges
-                rr_ranges = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
-                time_windows = [
-                    (None, None), # Full Day
-                    (dt_time(9, 30), dt_time(12, 0)), # Morning
-                    (dt_time(13, 0), dt_time(16, 0))  # Afternoon
-                ] if use_schedule else [(None, None)]
+                rr_ranges = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+                sl_mult_ranges = [1.0, 1.5, 2.0, 2.5, 3.0]
+                
+                # Time Windows Generation (Hourly Slices)
+                time_windows = [(None, None)]
+                if use_schedule:
+                    time_windows = []
+                    # Full Session
+                    time_windows.append((dt_time(9, 30), dt_time(16, 0)))
+                    # Hourly slices from 14:00 to 21:00 (approx US session in EU time or just generic)
+                    # Let's use generic 9:30 to 16:00 slicing
+                    start_h = 9
+                    end_h = 16
+                    for h in range(start_h, end_h):
+                        t_s = dt_time(h, 30) if h == 9 else dt_time(h, 0)
+                        t_e = dt_time(h+1, 0)
+                        if t_e <= dt_time(16, 0):
+                            time_windows.append((t_s, t_e))
+                        # 2 hour blocks
+                        t_e_2 = dt_time(min(h+2, 16), 0)
+                        if t_e_2 > t_s and t_e_2 <= dt_time(16, 0):
+                             time_windows.append((t_s, t_e_2))
+
                 
                 # Generate Combinations
                 import itertools
@@ -2066,7 +2089,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 values = [opt_config[k] for k in keys]
                 param_combos = list(itertools.product(*values))
                 
-                total_steps = len(param_combos) * len(rr_ranges) * len(time_windows)
+                total_steps = len(param_combos) * len(rr_ranges) * len(sl_mult_ranges) * len(time_windows)
                 step = 0
                 
                 best_result = {
@@ -2074,7 +2097,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     'net_profit': -float('inf'),
                     'params': {},
                     'time': (None, None),
-                    'rr': 0
+                    'rr': 0,
+                    'sl_mult': 0
                 }
                 
                 # Ensure base indicators exist
@@ -2092,34 +2116,36 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             continue # Skip invalid params
                         
                     for rr_val in rr_ranges:
-                        for t_start, t_end in time_windows:
-                            step += 1
-                            if step % 10 == 0 or step == total_steps:
-                                progress_bar.progress(step / total_steps)
-                                status_text.text(f"Analisi combinazione {step}/{total_steps}... Miglior WR: {best_result['win_rate']:.1f}%")
-                            
-                            # Run Backtest (Silent)
-                            trades, _ = engine.run_technical_strategy(
-                                strategy_type, curr_params, rr_val, risk_pct, t_start, t_end, entry_mode
-                            )
-                            
-                            if not trades: continue
-                            
-                            # Metrics
-                            df_res = pd.DataFrame(trades)
-                            wr = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
-                            net_profit = df_res['pnl'].sum()
-                            
-                            # Filter & Select (Strict WR > 50%)
-                            if wr > 50.0:
-                                if net_profit > best_result['net_profit']:
-                                    best_result = {
-                                        'win_rate': wr,
-                                        'net_profit': net_profit,
-                                        'params': curr_params,
-                                        'time': (t_start, t_end),
-                                        'rr': rr_val
-                                    }
+                        for sl_mult in sl_mult_ranges:
+                            for t_start, t_end in time_windows:
+                                step += 1
+                                if step % 50 == 0 or step == total_steps:
+                                    progress_bar.progress(min(step / total_steps, 1.0))
+                                    status_text.text(f"Analisi combinazione {step}/{total_steps}... Miglior WR: {best_result['win_rate']:.1f}%")
+                                
+                                # Run Backtest (Silent)
+                                trades, _ = engine.run_technical_strategy(
+                                    strategy_type, curr_params, rr_val, risk_pct, t_start, t_end, entry_mode, sl_mult
+                                )
+                                
+                                if not trades: continue
+                                
+                                # Metrics
+                                df_res = pd.DataFrame(trades)
+                                wr = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
+                                net_profit = df_res['pnl'].sum()
+                                
+                                # Filter & Select (Strict WR > 50%)
+                                if wr > 50.0:
+                                    if net_profit > best_result['net_profit']:
+                                        best_result = {
+                                            'win_rate': wr,
+                                            'net_profit': net_profit,
+                                            'params': curr_params,
+                                            'time': (t_start, t_end),
+                                            'rr': rr_val,
+                                            'sl_mult': sl_mult
+                                        }
                 
                 progress_bar.empty()
                 status_text.empty()
@@ -2127,7 +2153,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 if best_result['win_rate'] > 0:
                     st.success(f"🏆 Ottimizzazione Completata! WR: {best_result['win_rate']:.1f}% | Profit: ${best_result['net_profit']:.2f}")
                     st.write(f"Parametri Vincenti: {best_result['params']}")
-                    st.write(f"Risk:Reward: {best_result['rr']} | Orario: {best_result['time']}")
+                    st.write(f"Risk:Reward: {best_result['rr']} | SL Multiplier: {best_result['sl_mult']}x | Orario: {best_result['time']}")
                     
                     # Update Session State & Rerun
                     # We set keys that match typical UI inputs or generic ones
@@ -2138,7 +2164,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     # Force update if UI uses different keys (heuristic)
                     if 'period' in best_result['params']: st.session_state['period_rsi'] = best_result['params']['period']
                     
-                    time.sleep(2) # Give user time to read
+                    time.sleep(3) # Give user time to read
                     st.rerun()
                 else:
                     st.error("Nessuna combinazione trovata con Win Rate > 50%.")
