@@ -1999,57 +1999,149 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         st.warning("Nessuna operazione generata con le impostazioni correnti.")
             
             if c_opt.button("🧠 Ottimizza Strategia (AI)"):
-                with st.spinner("L'AI sta cercando i parametri migliori..."):
-                    engine.add_technical_indicators()
+                status_text = st.empty()
+                progress_bar = st.progress(0)
+                
+                # 1. Define Optimization Ranges & Recalculation Logic
+                # Structure: {ParamName: [Values]}
+                opt_config = {}
+                recalc_logic = None
+                
+                # Default ranges if not specified
+                if strategy_type == "RSI Mean Reversion":
+                    opt_config = {'period': [7, 14, 21], 'ob': [65, 70, 75, 80], 'os': [20, 25, 30, 35]}
+                    def recalc(df, p): df['RSI'] = TechnicalIndicators.rsi(df['Close'], p['period'])
+                    recalc_logic = recalc
                     
-                    # Define ranges based on strategy
-                    ranges = {}
-                    if strategy_type == "RSI Mean Reversion":
-                        ranges = {'period': [10, 14, 20], 'ob': [65, 70, 75, 80], 'os': [20, 25, 30, 35]}
-                    elif strategy_type == "Stochastic Oscillator":
-                        ranges = {'k_period': [10, 14, 20], 'ob': [75, 80, 85], 'os': [15, 20, 25]}
-                    elif strategy_type == "CCI Momentum":
-                        ranges = {'period': [14, 20, 50]}
-                    elif strategy_type == "Williams %R Reversal":
-                        ranges = {'period': [10, 14, 20]}
-                    elif strategy_type == "Bollinger Breakout":
-                        ranges = {'period': [20], 'std_dev': [2, 2.5]}
-                    elif strategy_type == "MACD Crossover":
-                        ranges = {'fast': [12], 'slow': [26], 'signal': [9]}
-                    elif strategy_type == "HMA Trend":
-                        ranges = {'period': [20]} # Placeholder
-                    elif strategy_type == "TEMA Crossover":
-                        ranges = {'period': [20]}
-                    # ... Add more default ranges or let user know
+                elif strategy_type == "Stochastic Oscillator":
+                    opt_config = {'k_period': [10, 14, 21], 'ob': [75, 80, 85, 90], 'os': [10, 15, 20, 25]}
+                    def recalc(df, p): df['Stoch_K'], df['Stoch_D'] = TechnicalIndicators.stochastic(df, p['k_period'])
+                    recalc_logic = recalc
                     
-                    time_ranges = None
-                    if use_schedule:
-                        time_ranges = {
-                            'start_times': [dt_time(9, 30), dt_time(10, 0)],
-                            'end_times': [dt_time(15, 30), dt_time(16, 0)]
-                        }
+                elif strategy_type == "CCI Momentum":
+                    opt_config = {'period': [14, 20, 50]}
+                    def recalc(df, p): df['CCI'] = TechnicalIndicators.cci(df, p['period'])
+                    recalc_logic = recalc
+
+                elif strategy_type == "Williams %R Reversal":
+                    opt_config = {'period': [10, 14, 20]}
+                    def recalc(df, p): df['WilliamsR'] = TechnicalIndicators.williams_r(df, p['period'])
+                    recalc_logic = recalc
+
+                elif strategy_type == "Bollinger Breakout":
+                    opt_config = {'period': [20, 30], 'std_dev': [2.0, 2.5, 3.0]}
+                    def recalc(df, p): df['BB_Upper'], df['BB_Lower'] = TechnicalIndicators.bollinger_bands(df['Close'], p['period'], p['std_dev'])
+                    recalc_logic = recalc
+
+                elif strategy_type == "MACD Crossover":
+                    opt_config = {'fast': [12, 10], 'slow': [26, 20], 'signal': [9, 7]}
+                    def recalc(df, p): df['MACD'], df['MACD_Signal'] = TechnicalIndicators.macd(df['Close'], p['fast'], p['slow'], p['signal'])
+                    recalc_logic = recalc
+                
+                elif strategy_type == "HMA Trend":
+                    opt_config = {'period': [15, 20, 25, 50]}
+                    def recalc(df, p): df['HMA20'] = TechnicalIndicators.hma(df['Close'], p['period']) # Overwrite HMA20 col
+                    recalc_logic = recalc
+                
+                elif strategy_type == "TEMA Crossover":
+                    opt_config = {'period': [15, 20, 25]}
+                    def recalc(df, p): df['TEMA20'] = TechnicalIndicators.tema(df['Close'], p['period'])
+                    recalc_logic = recalc
+                
+                # Fallback for others (add more as needed)
+                elif not opt_config:
+                    opt_config = {'dummy': [1]} # No params to optimize
+                
+                # Global Ranges
+                rr_ranges = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
+                time_windows = [
+                    (None, None), # Full Day
+                    (dt_time(9, 30), dt_time(12, 0)), # Morning
+                    (dt_time(13, 0), dt_time(16, 0))  # Afternoon
+                ] if use_schedule else [(None, None)]
+                
+                # Generate Combinations
+                import itertools
+                keys = list(opt_config.keys())
+                values = [opt_config[k] for k in keys]
+                param_combos = list(itertools.product(*values))
+                
+                total_steps = len(param_combos) * len(rr_ranges) * len(time_windows)
+                step = 0
+                
+                best_result = {
+                    'win_rate': 0,
+                    'net_profit': -float('inf'),
+                    'params': {},
+                    'time': (None, None),
+                    'rr': 0
+                }
+                
+                # Ensure base indicators exist
+                engine.add_technical_indicators()
+                
+                # Optimization Loop
+                for p_vals in param_combos:
+                    curr_params = dict(zip(keys, p_vals))
                     
-                    if not ranges:
-                         # Default dummy range for strategies without specific params in this simple UI
-                         ranges = {'dummy': [1]} 
-                         # Note: In a real app, we'd map every strategy. 
-                         # For now, we just want to avoid the "No ranges" error if possible, 
-                         # but optimize_strategy expects keys to match params used in run_technical_strategy.
-                         # Since run_technical_strategy uses hardcoded params for some new strategies (like HMA20), 
-                         # optimization won't do much unless we parameterize them.
-                         # I will leave it as is, but add a message.
-                         pass
+                    # Recalculate Indicators if needed (Deep Search)
+                    if recalc_logic:
+                        try:
+                            recalc_logic(engine.df, curr_params)
+                        except Exception as e:
+                            continue # Skip invalid params
+                        
+                    for rr_val in rr_ranges:
+                        for t_start, t_end in time_windows:
+                            step += 1
+                            if step % 10 == 0 or step == total_steps:
+                                progress_bar.progress(step / total_steps)
+                                status_text.text(f"Analisi combinazione {step}/{total_steps}... Miglior WR: {best_result['win_rate']:.1f}%")
+                            
+                            # Run Backtest (Silent)
+                            trades, _ = engine.run_technical_strategy(
+                                strategy_type, curr_params, rr_val, risk_pct, t_start, t_end, entry_mode
+                            )
+                            
+                            if not trades: continue
+                            
+                            # Metrics
+                            df_res = pd.DataFrame(trades)
+                            wr = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
+                            net_profit = df_res['pnl'].sum()
+                            
+                            # Filter & Select (Strict WR > 50%)
+                            if wr > 50.0:
+                                if net_profit > best_result['net_profit']:
+                                    best_result = {
+                                        'win_rate': wr,
+                                        'net_profit': net_profit,
+                                        'params': curr_params,
+                                        'time': (t_start, t_end),
+                                        'rr': rr_val
+                                    }
+                
+                progress_bar.empty()
+                status_text.empty()
+                
+                if best_result['win_rate'] > 0:
+                    st.success(f"🏆 Ottimizzazione Completata! WR: {best_result['win_rate']:.1f}% | Profit: ${best_result['net_profit']:.2f}")
+                    st.write(f"Parametri Vincenti: {best_result['params']}")
+                    st.write(f"Risk:Reward: {best_result['rr']} | Orario: {best_result['time']}")
                     
-                    if ranges:
-                        best_p, best_t, best_wr, all_res = engine.optimize_strategy(strategy_type, ranges, rr, risk_pct, time_ranges)
-                        st.success(f"Ottimizzazione Completata! Miglior Win Rate: {best_wr:.1f}%")
-                        st.json(best_p)
-                        if best_t['start']:
-                            st.write(f"Miglior Orario: {best_t['start']} - {best_t['end']}")
-                        with st.expander("Dettagli Ottimizzazione"):
-                            st.dataframe(pd.DataFrame(all_res).sort_values('win_rate', ascending=False))
-                    else:
-                        st.info("Ottimizzazione non disponibile per questa strategia (nessun parametro variabile).")
+                    # Update Session State & Rerun
+                    # We set keys that match typical UI inputs or generic ones
+                    for k, v in best_result['params'].items():
+                        st.session_state[k] = v 
+                    
+                    st.session_state['rr'] = best_result['rr'] # Assuming UI might use this key
+                    # Force update if UI uses different keys (heuristic)
+                    if 'period' in best_result['params']: st.session_state['period_rsi'] = best_result['params']['period']
+                    
+                    time.sleep(2) # Give user time to read
+                    st.rerun()
+                else:
+                    st.error("Nessuna combinazione trovata con Win Rate > 50%.")
 
         else:
             st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
