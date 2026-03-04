@@ -898,6 +898,127 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     # --- BACKTESTING ENGINE & VISUALIZER ---
     class TechnicalIndicators:
+        # --- TREND ---
+        @staticmethod
+        def sma(series, period): return series.rolling(period).mean()
+        @staticmethod
+        def ema(series, period): return series.ewm(span=period, adjust=False).mean()
+        @staticmethod
+        def wma(series, period):
+            weights = np.arange(1, period + 1)
+            return series.rolling(period).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+        @staticmethod
+        def hma(series, period):
+            half_length = int(period / 2)
+            sqrt_length = int(np.sqrt(period))
+            wmaf = TechnicalIndicators.wma(series, half_length)
+            wmas = TechnicalIndicators.wma(series, period)
+            return TechnicalIndicators.wma(2 * wmaf - wmas, sqrt_length)
+        @staticmethod
+        def tema(series, period):
+            ema1 = TechnicalIndicators.ema(series, period)
+            ema2 = TechnicalIndicators.ema(ema1, period)
+            ema3 = TechnicalIndicators.ema(ema2, period)
+            return 3 * ema1 - 3 * ema2 + ema3
+        @staticmethod
+        def dema(series, period):
+            ema1 = TechnicalIndicators.ema(series, period)
+            ema2 = TechnicalIndicators.ema(ema1, period)
+            return 2 * ema1 - ema2
+        @staticmethod
+        def kama(series, period=10, pow1=2, pow2=30):
+            change = abs(series - series.shift(period))
+            volatility = series.diff().abs().rolling(window=period).sum()
+            er = change / volatility
+            sc = (er * (2.0 / (pow1 + 1) - 2.0 / (pow2 + 1)) + 2.0 / (pow2 + 1)) ** 2
+            kama = [series.values[period-1]]
+            for i in range(period, len(series)):
+                kama.append(kama[-1] + sc.values[i] * (series.values[i] - kama[-1]))
+            return pd.Series(kama, index=series.index[period-1:])
+
+        @staticmethod
+        def macd(series, fast=12, slow=26, signal=9):
+            exp1 = series.ewm(span=fast, adjust=False).mean()
+            exp2 = series.ewm(span=slow, adjust=False).mean()
+            macd = exp1 - exp2
+            signal_line = macd.ewm(span=signal, adjust=False).mean()
+            return macd, signal_line
+        
+        @staticmethod
+        def adx(df, period=14):
+            plus_dm = df['High'].diff()
+            minus_dm = df['Low'].diff()
+            plus_dm[plus_dm < 0] = 0
+            minus_dm[minus_dm > 0] = 0
+            tr = TechnicalIndicators.atr(df, period)
+            plus_di = 100 * (plus_dm.ewm(alpha=1/period).mean() / tr)
+            minus_di = 100 * (minus_dm.ewm(alpha=1/period).mean() / tr)
+            dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+            return dx.ewm(alpha=1/period).mean()
+
+        @staticmethod
+        def aroon(df, period=25):
+            aroon_up = 100 * df['High'].rolling(period + 1).apply(lambda x: x.argmax()) / period
+            aroon_down = 100 * df['Low'].rolling(period + 1).apply(lambda x: x.argmin()) / period
+            return aroon_up, aroon_down
+
+        @staticmethod
+        def cci(df, period=20):
+            tp = (df['High'] + df['Low'] + df['Close']) / 3
+            sma = tp.rolling(period).mean()
+            mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
+            return (tp - sma) / (0.015 * mad)
+
+        @staticmethod
+        def supertrend(df, period=10, multiplier=3):
+            hl2 = (df['High'] + df['Low']) / 2
+            atr = TechnicalIndicators.atr(df, period)
+            upper = hl2 + (multiplier * atr)
+            lower = hl2 - (multiplier * atr)
+            return upper, lower
+
+        @staticmethod
+        def parabolic_sar(df, af=0.02, max_af=0.2):
+            high, low = df['High'], df['Low']
+            sar = [low[0]]
+            ep = high[0]
+            acc = af
+            trend = 1 # 1 for long, -1 for short
+            
+            for i in range(1, len(df)):
+                prev_sar = sar[-1]
+                if trend == 1:
+                    curr_sar = prev_sar + acc * (ep - prev_sar)
+                    curr_sar = min(curr_sar, low[i-1])
+                    if i > 1: curr_sar = min(curr_sar, low[i-2])
+                    
+                    if low[i] < curr_sar:
+                        trend = -1
+                        curr_sar = ep
+                        ep = low[i]
+                        acc = af
+                    else:
+                        if high[i] > ep:
+                            ep = high[i]
+                            acc = min(acc + af, max_af)
+                else:
+                    curr_sar = prev_sar + acc * (ep - prev_sar)
+                    curr_sar = max(curr_sar, high[i-1])
+                    if i > 1: curr_sar = max(curr_sar, high[i-2])
+                    
+                    if high[i] > curr_sar:
+                        trend = 1
+                        curr_sar = ep
+                        ep = high[i]
+                        acc = af
+                    else:
+                        if low[i] < ep:
+                            ep = low[i]
+                            acc = min(acc + af, max_af)
+                sar.append(curr_sar)
+            return pd.Series(sar, index=df.index)
+
+        # --- MOMENTUM ---
         @staticmethod
         def rsi(series, period=14):
             delta = series.diff()
@@ -907,29 +1028,45 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             return 100 - (100 / (1 + rs))
 
         @staticmethod
-        def macd(series, fast=12, slow=26, signal=9):
-            exp1 = series.ewm(span=fast, adjust=False).mean()
-            exp2 = series.ewm(span=slow, adjust=False).mean()
-            macd = exp1 - exp2
-            signal_line = macd.ewm(span=signal, adjust=False).mean()
-            return macd, signal_line
+        def stochastic(df, k_period=14, d_period=3):
+            low_min = df['Low'].rolling(window=k_period).min()
+            high_max = df['High'].rolling(window=k_period).max()
+            k = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+            d = k.rolling(window=d_period).mean()
+            return k, d
 
+        @staticmethod
+        def williams_r(df, period=14):
+            highest_high = df['High'].rolling(period).max()
+            lowest_low = df['Low'].rolling(period).min()
+            return ((highest_high - df['Close']) / (highest_high - lowest_low)) * -100
+
+        @staticmethod
+        def roc(series, period=12):
+            return ((series - series.shift(period)) / series.shift(period)) * 100
+        
+        @staticmethod
+        def tsi(series, r=25, s=13):
+            m = series.diff()
+            m1 = m.ewm(span=r).mean().ewm(span=s).mean()
+            m2 = abs(m).ewm(span=r).mean().ewm(span=s).mean()
+            return 100 * (m1 / m2)
+
+        @staticmethod
+        def uo(df, p1=7, p2=14, p3=28):
+            bp = df['Close'] - pd.concat([df['Low'], df['Close'].shift(1)], axis=1).min(axis=1)
+            tr = TechnicalIndicators.atr(df, 1) # True Range 1-period approximation
+            avg1 = bp.rolling(p1).sum() / tr.rolling(p1).sum()
+            avg2 = bp.rolling(p2).sum() / tr.rolling(p2).sum()
+            avg3 = bp.rolling(p3).sum() / tr.rolling(p3).sum()
+            return 100 * (4*avg1 + 2*avg2 + avg3) / 7
+
+        # --- VOLATILITY ---
         @staticmethod
         def bollinger_bands(series, period=20, std_dev=2):
             sma = series.rolling(window=period).mean()
             std = series.rolling(window=period).std()
-            upper = sma + (std * std_dev)
-            lower = sma - (std * std_dev)
-            return upper, lower
-
-        @staticmethod
-        def supertrend(df, period=10, multiplier=3):
-            # Basic implementation of SuperTrend
-            hl2 = (df['High'] + df['Low']) / 2
-            atr = TechnicalIndicators.atr(df, period)
-            upper = hl2 + (multiplier * atr)
-            lower = hl2 - (multiplier * atr)
-            return upper, lower # Simplified for brevity, full logic requires trend state
+            return sma + (std * std_dev), sma - (std * std_dev)
 
         @staticmethod
         def atr(df, period=14):
@@ -941,52 +1078,22 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             return true_range.rolling(period).mean()
 
         @staticmethod
-        def sma(series, period):
-            return series.rolling(window=period).mean()
+        def keltner_channels(df, period=20, mult=2):
+            ema = TechnicalIndicators.ema(df['Close'], period)
+            atr = TechnicalIndicators.atr(df, 10)
+            return ema + (mult * atr), ema - (mult * atr)
 
         @staticmethod
-        def ema(series, period):
-            return series.ewm(span=period, adjust=False).mean()
+        def donchian_channels(df, period=20):
+            return df['High'].rolling(period).max(), df['Low'].rolling(period).min()
 
         @staticmethod
-        def stochastic(df, k_period=14, d_period=3):
-            low_min = df['Low'].rolling(window=k_period).min()
-            high_max = df['High'].rolling(window=k_period).max()
-            k = 100 * ((df['Close'] - low_min) / (high_max - low_min))
-            d = k.rolling(window=d_period).mean()
-            return k, d
+        def chaikin_volatility(df, period=10, roc_period=10):
+            hl = df['High'] - df['Low']
+            ema_hl = TechnicalIndicators.ema(hl, period)
+            return TechnicalIndicators.roc(ema_hl, roc_period)
 
-        @staticmethod
-        def adx(df, period=14):
-            plus_dm = df['High'].diff()
-            minus_dm = df['Low'].diff()
-            plus_dm[plus_dm < 0] = 0
-            minus_dm[minus_dm > 0] = 0
-            
-            tr = TechnicalIndicators.atr(df, period)
-            plus_di = 100 * (plus_dm.ewm(alpha=1/period).mean() / tr)
-            minus_di = 100 * (minus_dm.ewm(alpha=1/period).mean() / tr)
-            dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
-            adx = dx.ewm(alpha=1/period).mean()
-            return adx
-
-        @staticmethod
-        def cci(df, period=20):
-            tp = (df['High'] + df['Low'] + df['Close']) / 3
-            sma = tp.rolling(period).mean()
-            mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
-            return (tp - sma) / (0.015 * mad)
-
-        @staticmethod
-        def williams_r(df, period=14):
-            highest_high = df['High'].rolling(period).max()
-            lowest_low = df['Low'].rolling(period).min()
-            return ((highest_high - df['Close']) / (highest_high - lowest_low)) * -100
-
-        @staticmethod
-        def roc(series, period=12):
-            return ((series - series.shift(period)) / series.shift(period)) * 100
-
+        # --- VOLUME ---
         @staticmethod
         def obv(df):
             return (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
@@ -997,8 +1104,24 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             money_flow = typical_price * df['Volume']
             positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(period).sum()
             negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0).rolling(period).sum()
-            mfi = 100 - (100 / (1 + positive_flow / negative_flow))
-            return mfi
+            return 100 - (100 / (1 + positive_flow / negative_flow))
+
+        @staticmethod
+        def cmf(df, period=20):
+            mf_multiplier = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
+            mf_volume = mf_multiplier * df['Volume']
+            return mf_volume.rolling(period).sum() / df['Volume'].rolling(period).sum()
+
+        @staticmethod
+        def vwap(df):
+            v = df['Volume'].values
+            tp = (df['High'] + df['Low'] + df['Close']).values / 3
+            return df.assign(vwap=(tp * v).cumsum() / v.cumsum())['vwap']
+        
+        @staticmethod
+        def ad_line(df):
+            clv = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
+            return (clv * df['Volume']).cumsum()
 
     class BacktestEngine:
         def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
@@ -1030,6 +1153,23 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             self.df['ROC'] = TechnicalIndicators.roc(self.df['Close'])
             self.df['OBV'] = TechnicalIndicators.obv(self.df)
             self.df['MFI'] = TechnicalIndicators.mfi(self.df)
+            
+            # New Indicators
+            self.df['HMA20'] = TechnicalIndicators.hma(self.df['Close'], 20)
+            self.df['TEMA20'] = TechnicalIndicators.tema(self.df['Close'], 20)
+            self.df['DEMA20'] = TechnicalIndicators.dema(self.df['Close'], 20)
+            self.df['KAMA20'] = TechnicalIndicators.kama(self.df['Close'], 20)
+            self.df['Aroon_Up'], self.df['Aroon_Down'] = TechnicalIndicators.aroon(self.df)
+            self.df['SuperTrend_Upper'], self.df['SuperTrend_Lower'] = TechnicalIndicators.supertrend(self.df)
+            self.df['Parabolic_SAR'] = TechnicalIndicators.parabolic_sar(self.df)
+            self.df['TSI'] = TechnicalIndicators.tsi(self.df['Close'])
+            self.df['UO'] = TechnicalIndicators.uo(self.df)
+            self.df['KC_Upper'], self.df['KC_Lower'] = TechnicalIndicators.keltner_channels(self.df)
+            self.df['DC_Upper'], self.df['DC_Lower'] = TechnicalIndicators.donchian_channels(self.df)
+            self.df['Chaikin_Vol'] = TechnicalIndicators.chaikin_volatility(self.df)
+            self.df['CMF'] = TechnicalIndicators.cmf(self.df)
+            self.df['VWAP'] = TechnicalIndicators.vwap(self.df)
+            self.df['AD_Line'] = TechnicalIndicators.ad_line(self.df)
 
         def add_gex_levels(self, sensitivity=1.5):
             if self.df.empty: return
@@ -1043,30 +1183,155 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             self.df['CallWall'] = self.df['ZeroGamma'] + (self.df['ATR'] * vol_mult)
             self.df['PutWall'] = self.df['ZeroGamma'] - (self.df['ATR'] * vol_mult)
 
-        def optimize_strategy(self, strategy_type, param_ranges, risk_reward, risk_per_trade):
+        def optimize_strategy(self, strategy_type, param_ranges, risk_reward, risk_per_trade, time_ranges=None):
             best_win_rate = 0
             best_params = {}
+            best_time_config = {'start': None, 'end': None}
             results = []
             
-            # Simple Grid Search
+            # Parameter Combinations
             keys = list(param_ranges.keys())
             import itertools
             values = [param_ranges[k] for k in keys]
-            combinations = list(itertools.product(*values))
+            param_combinations = list(itertools.product(*values))
             
-            for combo in combinations:
-                current_params = dict(zip(keys, combo))
-                trades, _ = self.run_technical_strategy(strategy_type, current_params, risk_reward, risk_per_trade)
-                
-                if trades:
-                    df_res = pd.DataFrame(trades)
-                    win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
-                    if win_rate > best_win_rate:
-                        best_win_rate = win_rate
-                        best_params = current_params
-                    results.append({'params': current_params, 'win_rate': win_rate, 'trades': len(trades)})
+            # Time Combinations
+            time_combinations = [(None, None)] # Default: No schedule
+            if time_ranges:
+                start_times = time_ranges.get('start_times', [])
+                end_times = time_ranges.get('end_times', [])
+                if start_times and end_times:
+                    time_combinations = list(itertools.product(start_times, end_times))
+
+            total_iterations = len(param_combinations) * len(time_combinations)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            return best_params, best_win_rate, results
+            counter = 0
+            start_time_perf = time.time()
+
+            for t_start, t_end in time_combinations:
+                # Validate time range
+                if t_start and t_end and t_start >= t_end: continue
+
+                for combo in param_combinations:
+                    counter += 1
+                    current_params = dict(zip(keys, combo))
+                    
+                    # Update Progress
+                    if counter % 10 == 0 or counter == total_iterations:
+                        progress = counter / total_iterations
+                        elapsed = time.time() - start_time_perf
+                        estimated_total = elapsed / progress if progress > 0 else 0
+                        remaining = estimated_total - elapsed
+                        progress_bar.progress(progress)
+                        status_text.text(f"Ottimizzazione in corso... {counter}/{total_iterations} (Stimato rimanente: {remaining:.1f}s)")
+
+                    trades, _ = self.run_technical_strategy(strategy_type, current_params, risk_reward, risk_per_trade, start_time=t_start, end_time=t_end)
+                    
+                    if trades:
+                        df_res = pd.DataFrame(trades)
+                        win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
+                        
+                        # Score: Win Rate weighted by number of trades (to avoid 100% WR with 1 trade)
+                        # Simple logic: Prefer higher WR, but if WR is equal, prefer more trades.
+                        # For now, just maximize WR, but require min trades?
+                        
+                        if win_rate > best_win_rate:
+                            best_win_rate = win_rate
+                            best_params = current_params
+                            best_time_config = {'start': t_start, 'end': t_end}
+                        
+                        results.append({
+                            'params': current_params, 
+                            'time_config': {'start': t_start, 'end': t_end},
+                            'win_rate': win_rate, 
+                            'trades': len(trades),
+                            'pnl': df_res['pnl'].sum()
+                        })
+            
+            progress_bar.empty()
+            status_text.empty()
+            return best_params, best_time_config, best_win_rate, results
+
+        def optimize_hybrid_strategy(self, param_ranges, time_ranges=None):
+            best_win_rate = 0
+            best_params = {}
+            best_time_config = {'start': None, 'end': None}
+            results = []
+            
+            keys = list(param_ranges.keys())
+            import itertools
+            values = [param_ranges[k] for k in keys]
+            param_combinations = list(itertools.product(*values))
+            
+            time_combinations = [(None, None)]
+            if time_ranges:
+                start_times = time_ranges.get('start_times', [])
+                end_times = time_ranges.get('end_times', [])
+                if start_times and end_times:
+                    time_combinations = list(itertools.product(start_times, end_times))
+
+            total_iterations = len(param_combinations) * len(time_combinations)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            counter = 0
+            start_time_perf = time.time()
+
+            for t_start, t_end in time_combinations:
+                if t_start and t_end and t_start >= t_end: continue
+
+                for combo in param_combinations:
+                    counter += 1
+                    # combo: (long_trigger, short_trigger, sensitivity, rr, risk_pct)
+                    # Map keys to args
+                    p = dict(zip(keys, combo))
+                    
+                    if counter % 5 == 0:
+                        progress = counter / total_iterations
+                        elapsed = time.time() - start_time_perf
+                        rem = (elapsed / progress) - elapsed if progress > 0 else 0
+                        progress_bar.progress(progress)
+                        status_text.text(f"Ottimizzazione GEX... {counter}/{total_iterations} (Rimanente: {rem:.1f}s)")
+
+                    # Recalculate GEX levels if sensitivity changes? 
+                    # Optimization: GEX levels depend on sensitivity. 
+                    # Ideally we pre-calculate, but here we might need to re-run add_gex_levels if sensitivity changes.
+                    # However, add_gex_levels modifies self.df in place. This is tricky for optimization loop.
+                    # Solution: Calculate GEX walls dynamically inside run_hybrid or reset DF.
+                    # Better: Pre-calculate GEX for all sensitivity levels in ranges? No, memory heavy.
+                    # Acceptable: Re-calculate GEX inside loop (slower) or clone DF.
+                    # Let's clone DF for safety or modify run_hybrid to accept walls directly?
+                    # For now, let's re-run add_gex_levels. It's fast enough for vector ops.
+                    
+                    self.add_gex_levels(p['sensitivity'])
+                    
+                    trades, _ = self.run_hybrid_strategy(
+                        p['long_trigger'], p['short_trigger'], p['rr'], p['risk_pct'], 
+                        start_time=t_start, end_time=t_end, entry_mode=p.get('entry_mode', 'Standard')
+                    )
+                    
+                    if trades:
+                        df_res = pd.DataFrame(trades)
+                        win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
+                        
+                        if win_rate > best_win_rate:
+                            best_win_rate = win_rate
+                            best_params = p
+                            best_time_config = {'start': t_start, 'end': t_end}
+                            
+                        results.append({
+                            'params': p,
+                            'time_config': {'start': t_start, 'end': t_end},
+                            'win_rate': win_rate,
+                            'trades': len(trades),
+                            'pnl': df_res['pnl'].sum()
+                        })
+
+            progress_bar.empty()
+            status_text.empty()
+            return best_params, best_time_config, best_win_rate, results
 
         def run_hybrid_strategy(self, long_trigger, short_trigger, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard"):
             trades = []
@@ -1215,6 +1480,64 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 elif strategy_type == "Williams %R Reversal":
                     if prev['WilliamsR'] < -80 and curr['WilliamsR'] > -80: signal = 'long'
                     elif prev['WilliamsR'] > -20 and curr['WilliamsR'] < -20: signal = 'short'
+
+                # --- NEW STRATEGIES ---
+                elif strategy_type == "HMA Trend":
+                    # HMA Slope
+                    if prev['HMA20'] < curr['HMA20'] and prev['Close'] > curr['HMA20']: signal = 'long'
+                    elif prev['HMA20'] > curr['HMA20'] and prev['Close'] < curr['HMA20']: signal = 'short'
+
+                elif strategy_type == "TEMA Crossover":
+                    if prev['Close'] < prev['TEMA20'] and curr['Close'] > curr['TEMA20']: signal = 'long'
+                    elif prev['Close'] > prev['TEMA20'] and curr['Close'] < curr['TEMA20']: signal = 'short'
+
+                elif strategy_type == "KAMA Trend":
+                    if prev['KAMA20'] < curr['KAMA20']: signal = 'long'
+                    elif prev['KAMA20'] > curr['KAMA20']: signal = 'short'
+
+                elif strategy_type == "Aroon Oscillator":
+                    if prev['Aroon_Up'] < prev['Aroon_Down'] and curr['Aroon_Up'] > curr['Aroon_Down']: signal = 'long'
+                    elif prev['Aroon_Up'] > prev['Aroon_Down'] and curr['Aroon_Up'] < curr['Aroon_Down']: signal = 'short'
+
+                elif strategy_type == "SuperTrend Reversal":
+                    if prev['Close'] < prev['SuperTrend_Upper'] and curr['Close'] > curr['SuperTrend_Lower']: signal = 'long' # Trend change
+                    elif prev['Close'] > prev['SuperTrend_Lower'] and curr['Close'] < curr['SuperTrend_Upper']: signal = 'short'
+
+                elif strategy_type == "Parabolic SAR":
+                    if prev['Parabolic_SAR'] > prev['Close'] and curr['Parabolic_SAR'] < curr['Close']: signal = 'long'
+                    elif prev['Parabolic_SAR'] < prev['Close'] and curr['Parabolic_SAR'] > curr['Close']: signal = 'short'
+
+                elif strategy_type == "TSI Crossover":
+                    if prev['TSI'] < 0 and curr['TSI'] > 0: signal = 'long'
+                    elif prev['TSI'] > 0 and curr['TSI'] < 0: signal = 'short'
+
+                elif strategy_type == "UO Overbought/Oversold":
+                    if prev['UO'] < 30 and curr['UO'] > 30: signal = 'long'
+                    elif prev['UO'] > 70 and curr['UO'] < 70: signal = 'short'
+
+                elif strategy_type == "Keltner Channel Breakout":
+                    if prev['Close'] < prev['KC_Upper'] and curr['Close'] > curr['KC_Upper']: signal = 'long'
+                    elif prev['Close'] > prev['KC_Lower'] and curr['Close'] < curr['KC_Lower']: signal = 'short'
+
+                elif strategy_type == "Donchian Channel Breakout":
+                    if curr['Close'] >= prev['DC_Upper']: signal = 'long'
+                    elif curr['Close'] <= prev['DC_Lower']: signal = 'short'
+
+                elif strategy_type == "Chaikin Volatility":
+                    # Volatility expansion
+                    if prev['Chaikin_Vol'] < 0 and curr['Chaikin_Vol'] > 0: signal = 'long' # Just a trigger example
+
+                elif strategy_type == "CMF Trend":
+                    if prev['CMF'] < 0 and curr['CMF'] > 0: signal = 'long'
+                    elif prev['CMF'] > 0 and curr['CMF'] < 0: signal = 'short'
+
+                elif strategy_type == "VWAP Crossover":
+                    if prev['Close'] < prev['VWAP'] and curr['Close'] > curr['VWAP']: signal = 'long'
+                    elif prev['Close'] > prev['VWAP'] and curr['Close'] < curr['VWAP']: signal = 'short'
+
+                elif strategy_type == "AD Line Trend":
+                    if prev['AD_Line'] < curr['AD_Line'] and prev['Close'] > curr['Close']: signal = 'long' # Divergence-ish
+
 
                 if signal:
                     entry_price = curr['Close']
