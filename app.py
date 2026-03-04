@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 from scipy.optimize import brentq
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
 
@@ -970,6 +970,36 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             adx = dx.ewm(alpha=1/period).mean()
             return adx
 
+        @staticmethod
+        def cci(df, period=20):
+            tp = (df['High'] + df['Low'] + df['Close']) / 3
+            sma = tp.rolling(period).mean()
+            mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
+            return (tp - sma) / (0.015 * mad)
+
+        @staticmethod
+        def williams_r(df, period=14):
+            highest_high = df['High'].rolling(period).max()
+            lowest_low = df['Low'].rolling(period).min()
+            return ((highest_high - df['Close']) / (highest_high - lowest_low)) * -100
+
+        @staticmethod
+        def roc(series, period=12):
+            return ((series - series.shift(period)) / series.shift(period)) * 100
+
+        @staticmethod
+        def obv(df):
+            return (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
+
+        @staticmethod
+        def mfi(df, period=14):
+            typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+            money_flow = typical_price * df['Volume']
+            positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(period).sum()
+            negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0).rolling(period).sum()
+            mfi = 100 - (100 / (1 + positive_flow / negative_flow))
+            return mfi
+
     class BacktestEngine:
         def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
             self.ticker = ticker
@@ -995,6 +1025,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             self.df['EMA20'] = TechnicalIndicators.ema(self.df['Close'], 20)
             self.df['Stoch_K'], self.df['Stoch_D'] = TechnicalIndicators.stochastic(self.df)
             self.df['ADX'] = TechnicalIndicators.adx(self.df)
+            self.df['CCI'] = TechnicalIndicators.cci(self.df)
+            self.df['WilliamsR'] = TechnicalIndicators.williams_r(self.df)
+            self.df['ROC'] = TechnicalIndicators.roc(self.df['Close'])
+            self.df['OBV'] = TechnicalIndicators.obv(self.df)
+            self.df['MFI'] = TechnicalIndicators.mfi(self.df)
 
         def add_gex_levels(self, sensitivity=1.5):
             if self.df.empty: return
@@ -1008,7 +1043,32 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             self.df['CallWall'] = self.df['ZeroGamma'] + (self.df['ATR'] * vol_mult)
             self.df['PutWall'] = self.df['ZeroGamma'] - (self.df['ATR'] * vol_mult)
 
-        def run_hybrid_strategy(self, long_trigger, short_trigger, risk_reward, risk_per_trade):
+        def optimize_strategy(self, strategy_type, param_ranges, risk_reward, risk_per_trade):
+            best_win_rate = 0
+            best_params = {}
+            results = []
+            
+            # Simple Grid Search
+            keys = list(param_ranges.keys())
+            import itertools
+            values = [param_ranges[k] for k in keys]
+            combinations = list(itertools.product(*values))
+            
+            for combo in combinations:
+                current_params = dict(zip(keys, combo))
+                trades, _ = self.run_technical_strategy(strategy_type, current_params, risk_reward, risk_per_trade)
+                
+                if trades:
+                    df_res = pd.DataFrame(trades)
+                    win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
+                    if win_rate > best_win_rate:
+                        best_win_rate = win_rate
+                        best_params = current_params
+                    results.append({'params': current_params, 'win_rate': win_rate, 'trades': len(trades)})
+            
+            return best_params, best_win_rate, results
+
+        def run_hybrid_strategy(self, long_trigger, short_trigger, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard"):
             trades = []
             balance = self.initial_capital
             equity_curve = [balance]
@@ -1019,6 +1079,13 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 curr = self.df.iloc[i]
                 prev = self.df.iloc[i-1]
                 
+                # Schedule Check
+                if start_time and end_time:
+                    curr_time = curr['datetime'].time()
+                    if not (start_time <= curr_time <= end_time):
+                        equity_curve.append(balance)
+                        continue
+
                 # Exit Logic
                 if position:
                     exit_res = None
@@ -1050,29 +1117,34 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 elif short_trigger == "Breakdown Put Wall" and prev['Close'] > prev['PutWall'] and curr['Close'] < prev['PutWall']: signal = 'short'
 
                 if signal:
+                    entry_price = curr['Close']
+                    sl_dist = curr['ATR'] * 1.5
+                    
+                    if entry_mode == "Retest":
+                        entry_price = (curr['High'] + curr['Low']) / 2
+                    
                     risk_amt = balance * (risk_per_trade / 100)
-                    sl_dist = curr['ATR'] * 2
                     
                     if signal == 'long':
-                        sl = curr['Close'] - sl_dist
-                        tp = curr['Close'] + (sl_dist * risk_reward)
-                        size = risk_amt / (curr['Close'] - sl) if (curr['Close'] - sl) > 0 else 0
+                        sl = entry_price - sl_dist
+                        tp = entry_price + (sl_dist * risk_reward)
+                        size = risk_amt / (entry_price - sl) if (entry_price - sl) > 0 else 0
                         if size > 0:
-                            position = {'type': 'long', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                            position = {'type': 'long', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': entry_price, 'pnl': 0, 'balance': balance})
                     else:
-                        sl = curr['Close'] + sl_dist
-                        tp = curr['Close'] - (sl_dist * risk_reward)
-                        size = risk_amt / (sl - curr['Close']) if (sl - curr['Close']) > 0 else 0
+                        sl = entry_price + sl_dist
+                        tp = entry_price - (sl_dist * risk_reward)
+                        size = risk_amt / (sl - entry_price) if (sl - entry_price) > 0 else 0
                         if size > 0:
-                            position = {'type': 'short', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                            position = {'type': 'short', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance})
                 
                 equity_curve.append(balance)
                 
             return trades, equity_curve
 
-        def run_technical_strategy(self, strategy_type, params, risk_reward, risk_per_trade):
+        def run_technical_strategy(self, strategy_type, params, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard"):
             trades = []
             balance = self.initial_capital
             equity_curve = [balance]
@@ -1083,6 +1155,13 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 curr = self.df.iloc[i]
                 prev = self.df.iloc[i-1]
                 
+                # Schedule Check
+                if start_time and end_time:
+                    curr_time = curr['datetime'].time()
+                    if not (start_time <= curr_time <= end_time):
+                        equity_curve.append(balance)
+                        continue
+
                 # Exit Logic
                 if position:
                     exit_res = None
@@ -1129,24 +1208,37 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     if prev['Stoch_K'] < params['os'] and curr['Stoch_K'] > params['os']: signal = 'long'
                     elif prev['Stoch_K'] > params['ob'] and curr['Stoch_K'] < params['ob']: signal = 'short'
 
+                elif strategy_type == "CCI Momentum":
+                    if prev['CCI'] < -100 and curr['CCI'] > -100: signal = 'long'
+                    elif prev['CCI'] > 100 and curr['CCI'] < 100: signal = 'short'
+
+                elif strategy_type == "Williams %R Reversal":
+                    if prev['WilliamsR'] < -80 and curr['WilliamsR'] > -80: signal = 'long'
+                    elif prev['WilliamsR'] > -20 and curr['WilliamsR'] < -20: signal = 'short'
+
                 if signal:
+                    entry_price = curr['Close']
+                    sl_dist = curr['ATR'] * 1.5
+                    
+                    if entry_mode == "Retest":
+                        entry_price = (curr['High'] + curr['Low']) / 2
+                    
                     risk_amt = balance * (risk_per_trade / 100)
-                    sl_dist = curr['ATR'] * 2
                     
                     if signal == 'long':
-                        sl = curr['Close'] - sl_dist
-                        tp = curr['Close'] + (sl_dist * risk_reward)
-                        size = risk_amt / (curr['Close'] - sl) if (curr['Close'] - sl) > 0 else 0
+                        sl = entry_price - sl_dist
+                        tp = entry_price + (sl_dist * risk_reward)
+                        size = risk_amt / (entry_price - sl) if (entry_price - sl) > 0 else 0
                         if size > 0:
-                            position = {'type': 'long', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                            position = {'type': 'long', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': entry_price, 'pnl': 0, 'balance': balance})
                     else:
-                        sl = curr['Close'] + sl_dist
-                        tp = curr['Close'] - (sl_dist * risk_reward)
-                        size = risk_amt / (sl - curr['Close']) if (sl - curr['Close']) > 0 else 0
+                        sl = entry_price + sl_dist
+                        tp = entry_price - (sl_dist * risk_reward)
+                        size = risk_amt / (sl - entry_price) if (sl - entry_price) > 0 else 0
                         if size > 0:
-                            position = {'type': 'short', 'entry': curr['Close'], 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': curr['Close'], 'pnl': 0, 'balance': balance})
+                            position = {'type': 'short', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance})
                 
                 equity_curve.append(balance)
                 
@@ -1214,6 +1306,16 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     if "MOTORE A" in engine_choice:
         st.subheader("🧬 Configurazione Strategia Ibrida GEX")
+        
+        # Schedule & Entry Mode
+        with st.expander("⚙️ Opzioni Avanzate (Orari & Ingresso)"):
+            c1, c2, c3 = st.columns(3)
+            with c1: use_schedule = st.checkbox("Abilita Orari di Trading")
+            with c2: start_t = st.time_input("Inizio Sessione", dt_time(9, 30))
+            with c3: end_t = st.time_input("Fine Sessione", dt_time(16, 0))
+            
+            entry_mode = st.selectbox("Modalità di Ingresso", ["Standard", "Breakout (Close)", "Retest"])
+            
         col1, col2 = st.columns(2)
         with col1:
             long_trigger = st.selectbox("Trigger Long", ["Rimbalzo Put Wall", "Breakout 0-Gamma", "Breakout Call Wall", "Nessuno"])
@@ -1236,7 +1338,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     # Data already in engine.df
                     engine.add_technical_indicators() # Need ATR
                     engine.add_gex_levels(sensitivity)
-                    trades, equity = engine.run_hybrid_strategy(long_trigger_en, short_trigger_en, rr, risk_pct)
+                    
+                    s_time = start_t if use_schedule else None
+                    e_time = end_t if use_schedule else None
+                    
+                    trades, equity = engine.run_hybrid_strategy(long_trigger_en, short_trigger_en, rr, risk_pct, s_time, e_time, entry_mode)
                     
                     # Results
                     st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
@@ -1266,9 +1372,18 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     else: # MOTORE B
         st.subheader("📈 Configurazione Hub Strategie Tecniche")
         
+        # Schedule & Entry Mode
+        with st.expander("⚙️ Opzioni Avanzate (Orari & Ingresso)"):
+            c1, c2, c3 = st.columns(3)
+            with c1: use_schedule = st.checkbox("Abilita Orari di Trading")
+            with c2: start_t = st.time_input("Inizio Sessione", dt_time(9, 30))
+            with c3: end_t = st.time_input("Fine Sessione", dt_time(16, 0))
+            
+            entry_mode = st.selectbox("Modalità di Ingresso", ["Standard", "Breakout (Close)", "Retest"])
+        
         # Strategy Selection
         strategy_type = st.selectbox("Seleziona Tipo Strategia", 
-                                     ["RSI Mean Reversion", "MACD Crossover", "Bollinger Breakout", "Golden/Death Cross", "Stochastic Oscillator"])
+                                     ["RSI Mean Reversion", "MACD Crossover", "Bollinger Breakout", "Golden/Death Cross", "Stochastic Oscillator", "CCI Momentum", "Williams %R Reversal"])
         
         # Dynamic Parameters
         params = {}
@@ -1282,22 +1397,75 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             with col1: params['k_period'] = st.number_input("Periodo K", 14)
             with col2: params['ob'] = st.number_input("Ipercomprato", 80)
             with col3: params['os'] = st.number_input("Ipervenduto", 20)
+        elif strategy_type == "CCI Momentum":
+             with col1: params['period'] = st.number_input("Periodo CCI", 20)
+        elif strategy_type == "Williams %R Reversal":
+             with col1: params['period'] = st.number_input("Periodo Williams %R", 14)
         
         rr = st.slider("Rischio:Rendimento", 1.0, 5.0, 2.0, 0.5)
         risk_pct = st.slider("Rischio per Trade (%)", 0.5, 5.0, 1.0, 0.1)
         
         if data_ready:
-            if st.button("🚀 Avvia Backtest Tecnico"):
+            c_run, c_opt = st.columns([2, 1])
+            
+            if c_run.button("🚀 Avvia Backtest Tecnico"):
                 with st.spinner("Calcolo Indicatori e Simulazione..."):
                     # Data already in engine.df
                     engine.add_technical_indicators()
-                    trades, equity = engine.run_technical_strategy(strategy_type, params, rr, risk_pct)
+                    
+                    s_time = start_t if use_schedule else None
+                    e_time = end_t if use_schedule else None
+                    
+                    trades, equity = engine.run_technical_strategy(strategy_type, params, rr, risk_pct, s_time, e_time, entry_mode)
                     
                     # Results
                     st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
                     
                     if trades:
                         df_res = pd.DataFrame(trades)
+                        win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
+                        total_pnl = df_res['pnl'].sum()
+                        pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
+                        
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Profitto Netto", f"${total_pnl:.2f}")
+                        m2.metric("Win Rate", f"{win_rate:.1f}%")
+                        m3.metric("Profit Factor", f"{pf:.2f}")
+                        m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
+                        
+                        # Charts
+                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True)
+                        st.line_chart(equity)
+                        st.dataframe(df_res)
+                    else:
+                        st.warning("Nessuna operazione generata con le impostazioni correnti.")
+            
+            if c_opt.button("🧠 Ottimizza Strategia (AI)"):
+                with st.spinner("L'AI sta cercando i parametri migliori..."):
+                    engine.add_technical_indicators()
+                    
+                    # Define ranges based on strategy
+                    ranges = {}
+                    if strategy_type == "RSI Mean Reversion":
+                        ranges = {'period': [10, 14, 20], 'ob': [65, 70, 75, 80], 'os': [20, 25, 30, 35]}
+                    elif strategy_type == "Stochastic Oscillator":
+                        ranges = {'k_period': [10, 14, 20], 'ob': [75, 80, 85], 'os': [15, 20, 25]}
+                    elif strategy_type == "CCI Momentum":
+                        ranges = {'period': [14, 20, 50]}
+                    elif strategy_type == "Williams %R Reversal":
+                        ranges = {'period': [10, 14, 20]}
+                    
+                    if ranges:
+                        best_p, best_wr, all_res = engine.optimize_strategy(strategy_type, ranges, rr, risk_pct)
+                        st.success(f"Ottimizzazione Completata! Miglior Win Rate: {best_wr:.1f}%")
+                        st.json(best_p)
+                        with st.expander("Dettagli Ottimizzazione"):
+                            st.dataframe(pd.DataFrame(all_res).sort_values('win_rate', ascending=False))
+                    else:
+                        st.info("Ottimizzazione non disponibile per questa strategia (nessun parametro variabile).")
+
+        else:
+            st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
                         win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
                         total_pnl = df_res['pnl'].sum()
                         pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
