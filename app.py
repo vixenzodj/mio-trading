@@ -2130,17 +2130,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                 wr = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
                                 net_profit = df_res['pnl'].sum()
                                 
-                                # Filter & Select (Strict WR > 50%)
-                                if wr > 50.0:
-                                    if net_profit > best_result['net_profit']:
-                                        best_result = {
-                                            'win_rate': wr,
-                                            'net_profit': net_profit,
-                                            'params': curr_params,
-                                            'time': (t_start, t_end),
-                                            'rr': rr_val,
-                                            'sl_mult': sl_mult
-                                        }
+                                # Filter & Select (Best WR, or Best Profit if WRs are equal)
+                                if wr > best_result['win_rate']:
+                                    best_result = {
+                                        'win_rate': wr,
+                                        'net_profit': net_profit,
+                                        'params': curr_params,
+                                        'time': (t_start, t_end),
+                                        'rr': rr_val,
+                                        'sl_mult': sl_mult
+                                    }
+                                elif wr == best_result['win_rate'] and net_profit > best_result['net_profit']:
+                                    best_result = {
+                                        'win_rate': wr,
+                                        'net_profit': net_profit,
+                                        'params': curr_params,
+                                        'time': (t_start, t_end),
+                                        'rr': rr_val,
+                                        'sl_mult': sl_mult
+                                    }
                 
                 progress_bar.empty()
                 status_text.empty()
@@ -2162,7 +2170,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     time.sleep(3) # Give user time to read
                     st.rerun()
                 else:
-                    st.error("Nessuna combinazione trovata con Win Rate > 50%.")
+                    st.error("Nessuna combinazione valida trovata (nessun trade generato).")
 
         else:
             st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
