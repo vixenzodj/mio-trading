@@ -2023,6 +2023,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
                 # --- FAST OPTIMIZATION LOGIC ---
                 # 1. Prepare Data (Downsample if needed)
+                engine.add_technical_indicators() # Ensure ATR and other base indicators are present
                 opt_df = engine.df.copy()
                 if len(opt_df) > 10000:
                     status_text.text(f"⚠️ Dati troppo estesi ({len(opt_df)} candele). Ottimizzazione sugli ultimi 5000 periodi per velocità.")
