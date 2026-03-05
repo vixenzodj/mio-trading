@@ -1922,11 +1922,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # Schedule & Entry Mode
         with st.expander("⚙️ Opzioni Avanzate (Orari & Ingresso)"):
             c1, c2, c3 = st.columns(3)
-            with c1: use_schedule = st.checkbox("Abilita Orari di Trading")
-            with c2: start_t = st.time_input("Inizio Sessione", dt_time(9, 30))
-            with c3: end_t = st.time_input("Fine Sessione", dt_time(16, 0))
+            with c1: use_schedule = st.checkbox("Abilita Orari di Trading", value=st.session_state.get('use_schedule', False))
+            with c2: start_t = st.time_input("Inizio Sessione", value=st.session_state.get('start_time', dt_time(9, 30)))
+            with c3: end_t = st.time_input("Fine Sessione", value=st.session_state.get('end_time', dt_time(16, 0)))
             
-            entry_mode = st.selectbox("Modalità di Ingresso", ["Standard", "Breakout (Close)", "Retest"])
+            entry_mode = st.selectbox("Modalità di Ingresso", ["Standard", "Breakout (Close)", "Retest"], index=["Standard", "Breakout (Close)", "Retest"].index(st.session_state.get('entry_mode', "Standard")))
         
         # Strategy Selection
         strategies_list = [
@@ -1942,32 +1942,50 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             "WMA Trend", "TRIMA Crossover", "CMO Reversal", "Momentum Breakout", "BOP Trend",
             "TRIX Crossover", "StochRSI Reversal", "TSF Trend"
         ]
-        strategy_type = st.selectbox("Seleziona Tipo Strategia", strategies_list)
+        # Restore strategy selection if exists
+        saved_strat_idx = 0
+        if st.session_state.get('strategy_type') in strategies_list:
+            saved_strat_idx = strategies_list.index(st.session_state.get('strategy_type'))
+            
+        strategy_type = st.selectbox("Seleziona Tipo Strategia", strategies_list, index=saved_strat_idx)
         
-        # Dynamic Parameters
+        # Dynamic Parameters with Session State Persistence
         params = {}
         col1, col2, col3 = st.columns(3)
         
         if strategy_type == "RSI Mean Reversion":
-            with col1: params['period'] = st.number_input("Periodo RSI", 14)
-            with col2: params['ob'] = st.number_input("Ipercomprato", 70)
-            with col3: params['os'] = st.number_input("Ipervenduto", 30)
+            with col1: params['period'] = st.number_input("Periodo RSI", value=int(st.session_state.get('period_rsi', 14)))
+            with col2: params['ob'] = st.number_input("Ipercomprato", value=int(st.session_state.get('ob_rsi', 70)))
+            with col3: params['os'] = st.number_input("Ipervenduto", value=int(st.session_state.get('os_rsi', 30)))
         elif strategy_type == "Stochastic Oscillator":
-            with col1: params['k_period'] = st.number_input("Periodo K", 14)
-            with col2: params['ob'] = st.number_input("Ipercomprato", 80)
-            with col3: params['os'] = st.number_input("Ipervenduto", 20)
+            with col1: params['k_period'] = st.number_input("Periodo K", value=int(st.session_state.get('k_stoch', 14)))
+            with col2: params['ob'] = st.number_input("Ipercomprato", value=int(st.session_state.get('ob_stoch', 80)))
+            with col3: params['os'] = st.number_input("Ipervenduto", value=int(st.session_state.get('os_stoch', 20)))
         elif strategy_type == "CCI Momentum":
-             with col1: params['period'] = st.number_input("Periodo CCI", 20)
+             with col1: params['period'] = st.number_input("Periodo CCI", value=int(st.session_state.get('period_cci', 20)))
         elif strategy_type == "Williams %R Reversal":
-             with col1: params['period'] = st.number_input("Periodo Williams %R", 14)
+             with col1: params['period'] = st.number_input("Periodo Williams %R", value=int(st.session_state.get('period_williams', 14)))
+        elif strategy_type == "Bollinger Breakout":
+            with col1: params['period'] = st.number_input("Periodo BB", value=int(st.session_state.get('period_bb', 20)))
+            with col2: params['std_dev'] = st.number_input("Dev. Std", value=float(st.session_state.get('std_bb', 2.0)))
         
-        rr = st.slider("Rischio:Rendimento", 1.0, 5.0, 2.0, 0.5)
-        risk_pct = st.slider("Rischio per Trade (%)", 0.5, 5.0, 1.0, 0.1)
+        # Generic fallback for others to avoid errors if params needed
+        if not params:
+             # Add generic period if strategy might need it (heuristic)
+             if "period" not in params: params['period'] = 14
+        
+        rr = st.slider("Rischio:Rendimento", 1.0, 5.0, float(st.session_state.get('rr', 2.0)), 0.5)
+        risk_pct = st.slider("Rischio per Trade (%)", 0.5, 5.0, float(st.session_state.get('risk_pct', 1.0)), 0.1)
         
         if data_ready:
             c_run, c_opt = st.columns([2, 1])
             
-            if c_run.button("🚀 Avvia Backtest Tecnico"):
+            # Check Auto-Run Flag
+            auto_run = st.session_state.get('run_backtest_auto', False)
+            
+            if c_run.button("🚀 Avvia Backtest Tecnico") or auto_run:
+                if auto_run: st.session_state['run_backtest_auto'] = False # Reset flag
+                
                 with st.spinner("Calcolo Indicatori e Simulazione..."):
                     # Data already in engine.df
                     engine.add_technical_indicators()
@@ -2003,174 +2021,180 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 status_text = st.empty()
                 progress_bar = st.progress(0)
                 
-                # 1. Define Optimization Ranges & Recalculation Logic
-                # Structure: {ParamName: [Values]}
+                # --- FAST OPTIMIZATION LOGIC ---
+                # 1. Prepare Data (Downsample if needed)
+                opt_df = engine.df.copy()
+                if len(opt_df) > 10000:
+                    status_text.text(f"⚠️ Dati troppo estesi ({len(opt_df)} candele). Ottimizzazione sugli ultimi 5000 periodi per velocità.")
+                    opt_df = opt_df.iloc[-5000:].reset_index(drop=True)
+                
+                # 2. Define Ranges
                 opt_config = {}
-                recalc_logic = None
+                recalc_func = None
                 
-                # Default ranges if not specified
                 if strategy_type == "RSI Mean Reversion":
-                    opt_config = {'period': list(range(10, 26, 2)), 'ob': list(range(65, 86, 5)), 'os': list(range(15, 36, 5))}
-                    def recalc(df, p): df['RSI'] = TechnicalIndicators.rsi(df['Close'], p['period'])
-                    recalc_logic = recalc
-                    
+                    opt_config = {'period': range(10, 22, 2), 'ob': range(65, 85, 5), 'os': range(20, 40, 5)}
+                    def r_func(d, p): d['RSI'] = TechnicalIndicators.rsi(d['Close'], p['period'])
+                    recalc_func = r_func
                 elif strategy_type == "Stochastic Oscillator":
-                    opt_config = {'k_period': list(range(10, 26, 2)), 'ob': list(range(70, 91, 5)), 'os': list(range(10, 31, 5))}
-                    def recalc(df, p): df['Stoch_K'], df['Stoch_D'] = TechnicalIndicators.stochastic(df, p['k_period'])
-                    recalc_logic = recalc
-                    
-                elif strategy_type == "CCI Momentum":
-                    opt_config = {'period': [14, 20, 30, 50]}
-                    def recalc(df, p): df['CCI'] = TechnicalIndicators.cci(df, p['period'])
-                    recalc_logic = recalc
-
-                elif strategy_type == "Williams %R Reversal":
-                    opt_config = {'period': list(range(10, 26, 2))}
-                    def recalc(df, p): df['WilliamsR'] = TechnicalIndicators.williams_r(df, p['period'])
-                    recalc_logic = recalc
-
+                    opt_config = {'k_period': range(10, 20, 2), 'ob': range(75, 95, 5), 'os': range(5, 25, 5)}
+                    def r_func(d, p): d['Stoch_K'], d['Stoch_D'] = TechnicalIndicators.stochastic(d, p['k_period'])
+                    recalc_func = r_func
                 elif strategy_type == "Bollinger Breakout":
-                    opt_config = {'period': [20, 30], 'std_dev': [2.0, 2.5, 3.0]}
-                    def recalc(df, p): df['BB_Upper'], df['BB_Lower'] = TechnicalIndicators.bollinger_bands(df['Close'], p['period'], p['std_dev'])
-                    recalc_logic = recalc
-
-                elif strategy_type == "MACD Crossover":
-                    opt_config = {'fast': [12, 10], 'slow': [26, 20], 'signal': [9, 7]}
-                    def recalc(df, p): df['MACD'], df['MACD_Signal'] = TechnicalIndicators.macd(df['Close'], p['fast'], p['slow'], p['signal'])
-                    recalc_logic = recalc
+                    opt_config = {'period': [20, 30], 'std_dev': [2.0, 2.5]}
+                    def r_func(d, p): d['BB_Upper'], d['BB_Lower'] = TechnicalIndicators.bollinger_bands(d['Close'], p['period'], p['std_dev'])
+                    recalc_func = r_func
+                else:
+                    # Generic fallback
+                    opt_config = {'dummy': [1]}
                 
-                elif strategy_type == "HMA Trend":
-                    opt_config = {'period': [15, 20, 25, 50]}
-                    def recalc(df, p): df['HMA20'] = TechnicalIndicators.hma(df['Close'], p['period']) # Overwrite HMA20 col
-                    recalc_logic = recalc
+                rr_ranges = [1.5, 2.0, 2.5, 3.0]
                 
-                elif strategy_type == "TEMA Crossover":
-                    opt_config = {'period': [15, 20, 25]}
-                    def recalc(df, p): df['TEMA20'] = TechnicalIndicators.tema(df['Close'], p['period'])
-                    recalc_logic = recalc
-                
-                # Fallback for others (add more as needed)
-                elif not opt_config:
-                    opt_config = {'dummy': [1]} # No params to optimize
-                
-                # Global Ranges
-                rr_ranges = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
-                sl_mult_ranges = [1.0, 1.5, 2.0, 2.5, 3.0]
-                
-                # Time Windows Generation (Hourly Slices)
-                time_windows = [(None, None)]
-                if use_schedule:
-                    time_windows = []
-                    # Full Session
-                    time_windows.append((dt_time(9, 30), dt_time(16, 0)))
-                    # Hourly slices from 14:00 to 21:00 (approx US session in EU time or just generic)
-                    # Let's use generic 9:30 to 16:00 slicing
-                    start_h = 9
-                    end_h = 16
-                    for h in range(start_h, end_h):
-                        t_s = dt_time(h, 30) if h == 9 else dt_time(h, 0)
-                        t_e = dt_time(h+1, 0)
-                        if t_e <= dt_time(16, 0):
-                            time_windows.append((t_s, t_e))
-                        # 2 hour blocks
-                        t_e_2 = dt_time(min(h+2, 16), 0)
-                        if t_e_2 > t_s and t_e_2 <= dt_time(16, 0):
-                             time_windows.append((t_s, t_e_2))
-
-                
-                # Generate Combinations
+                # 3. Generate Combinations
                 import itertools
                 keys = list(opt_config.keys())
                 values = [opt_config[k] for k in keys]
                 param_combos = list(itertools.product(*values))
                 
-                total_steps = len(param_combos) * len(rr_ranges) * len(sl_mult_ranges) * len(time_windows)
+                total_steps = len(param_combos) * len(rr_ranges)
                 step = 0
+                best_res = {'wr': 0, 'pnl': -float('inf'), 'params': {}, 'rr': 0}
                 
-                best_result = {
-                    'win_rate': 0,
-                    'net_profit': -float('inf'),
-                    'params': {},
-                    'time': (None, None),
-                    'rr': 0,
-                    'sl_mult': 0
-                }
-                
-                # Ensure base indicators exist
-                engine.add_technical_indicators()
-                
-                # Optimization Loop
+                # 4. Fast Loop
                 for p_vals in param_combos:
-                    curr_params = dict(zip(keys, p_vals))
+                    curr_p = dict(zip(keys, p_vals))
                     
-                    # Recalculate Indicators if needed (Deep Search)
-                    if recalc_logic:
-                        try:
-                            recalc_logic(engine.df, curr_params)
-                        except Exception as e:
-                            continue # Skip invalid params
+                    # Recalculate Indicators (Vectorized)
+                    if recalc_func:
+                        try: recalc_func(opt_df, curr_p)
+                        except: continue
+                    else:
+                        engine.add_technical_indicators() # Ensure base exists
                         
+                    # Generate Signals (Vectorized)
+                    # This is a simplified signal generation for common strategies to speed up scanning
+                    # For complex ones, we might fallback to iteration, but here we try vector
+                    sigs = pd.Series(0, index=opt_df.index)
+                    
+                    try:
+                        if strategy_type == "RSI Mean Reversion":
+                            rsi_arr = opt_df['RSI'].values
+                            # Long: prev < os and curr > os
+                            sigs = np.where((rsi_arr[:-1] < curr_p['os']) & (rsi_arr[1:] > curr_p['os']), 1, 
+                                   np.where((rsi_arr[:-1] > curr_p['ob']) & (rsi_arr[1:] < curr_p['ob']), -1, 0))
+                            # Pad the first element lost by slicing
+                            sigs = np.insert(sigs, 0, 0)
+                            
+                        elif strategy_type == "Stochastic Oscillator":
+                            k_arr = opt_df['Stoch_K'].values
+                            sigs = np.where((k_arr[:-1] < curr_p['os']) & (k_arr[1:] > curr_p['os']), 1,
+                                   np.where((k_arr[:-1] > curr_p['ob']) & (k_arr[1:] < curr_p['ob']), -1, 0))
+                            sigs = np.insert(sigs, 0, 0)
+                            
+                        elif strategy_type == "Bollinger Breakout":
+                            c = opt_df['Close'].values
+                            l = opt_df['BB_Lower'].values
+                            u = opt_df['BB_Upper'].values
+                            sigs = np.where((c[:-1] < l[:-1]) & (c[1:] > l[1:]), 1,
+                                   np.where((c[:-1] > u[:-1]) & (c[1:] < u[1:]), -1, 0))
+                            sigs = np.insert(sigs, 0, 0)
+                            
+                        else:
+                            # Fallback: Use the engine's logic but on the smaller DF (slower but compatible)
+                            # We skip this for now to ensure speed for the main requested strategies
+                            pass
+                            
+                    except Exception as e:
+                        continue
+
+                    # Get Entry Indices
+                    entry_idxs = np.where(sigs != 0)[0]
+                    if len(entry_idxs) == 0: continue
+                    
+                    # 5. Fast Trade Outcome Loop
+                    # We assume fixed RR and ATR based SL
+                    atr_arr = opt_df['ATR'].values
+                    close_arr = opt_df['Close'].values
+                    high_arr = opt_df['High'].values
+                    low_arr = opt_df['Low'].values
+                    times = opt_df['datetime'].values
+                    
                     for rr_val in rr_ranges:
-                        for sl_mult in sl_mult_ranges:
-                            for t_start, t_end in time_windows:
-                                step += 1
-                                if step % 50 == 0 or step == total_steps:
-                                    progress_bar.progress(min(step / total_steps, 1.0))
-                                    status_text.text(f"Analisi combinazione {step}/{total_steps}... Miglior WR: {best_result['win_rate']:.1f}%")
-                                
-                                # Run Backtest (Silent)
-                                trades, _ = engine.run_technical_strategy(
-                                    strategy_type, curr_params, rr_val, risk_pct, t_start, t_end, entry_mode, sl_mult
-                                )
-                                
-                                if not trades: continue
-                                
-                                # Metrics
-                                df_res = pd.DataFrame(trades)
-                                wr = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
-                                net_profit = df_res['pnl'].sum()
-                                
-                                # Filter & Select (Best WR, or Best Profit if WRs are equal)
-                                if wr > best_result['win_rate']:
-                                    best_result = {
-                                        'win_rate': wr,
-                                        'net_profit': net_profit,
-                                        'params': curr_params,
-                                        'time': (t_start, t_end),
-                                        'rr': rr_val,
-                                        'sl_mult': sl_mult
-                                    }
-                                elif wr == best_result['win_rate'] and net_profit > best_result['net_profit']:
-                                    best_result = {
-                                        'win_rate': wr,
-                                        'net_profit': net_profit,
-                                        'params': curr_params,
-                                        'time': (t_start, t_end),
-                                        'rr': rr_val,
-                                        'sl_mult': sl_mult
-                                    }
-                
+                        step += 1
+                        if step % 20 == 0:
+                            progress_bar.progress(min(step/total_steps, 1.0))
+                            status_text.text(f"Scansione AI... WR: {best_res['wr']:.1f}%")
+                            
+                        wins = 0
+                        losses = 0
+                        pnl = 0
+                        
+                        for idx in entry_idxs:
+                            if idx >= len(opt_df) - 1: continue
+                            
+                            entry_price = close_arr[idx]
+                            direction = sigs[idx] # 1 or -1
+                            atr = atr_arr[idx]
+                            if np.isnan(atr): continue
+                            
+                            sl_dist = atr * 1.5
+                            
+                            if direction == 1: # Long
+                                sl = entry_price - sl_dist
+                                tp = entry_price + (sl_dist * rr_val)
+                                # Look forward max 50 bars
+                                for fwd in range(idx+1, min(idx+51, len(opt_df))):
+                                    if low_arr[fwd] <= sl:
+                                        losses += 1
+                                        pnl -= sl_dist
+                                        break
+                                    elif high_arr[fwd] >= tp:
+                                        wins += 1
+                                        pnl += (sl_dist * rr_val)
+                                        break
+                            else: # Short
+                                sl = entry_price + sl_dist
+                                tp = entry_price - (sl_dist * rr_val)
+                                for fwd in range(idx+1, min(idx+51, len(opt_df))):
+                                    if high_arr[fwd] >= sl:
+                                        losses += 1
+                                        pnl -= sl_dist
+                                        break
+                                    elif low_arr[fwd] <= tp:
+                                        wins += 1
+                                        pnl += (sl_dist * rr_val)
+                                        break
+                        
+                        total_trades = wins + losses
+                        if total_trades > 0:
+                            wr = (wins / total_trades) * 100
+                            
+                            # Selection Logic: Max WR, then Max PnL
+                            if wr > best_res['wr']:
+                                best_res = {'wr': wr, 'pnl': pnl, 'params': curr_p, 'rr': rr_val}
+                            elif wr == best_res['wr'] and pnl > best_res['pnl']:
+                                best_res = {'wr': wr, 'pnl': pnl, 'params': curr_p, 'rr': rr_val}
+
                 progress_bar.empty()
                 status_text.empty()
                 
-                if best_result['win_rate'] > 0:
-                    st.success(f"🏆 Ottimizzazione Completata! WR: {best_result['win_rate']:.1f}% | Profit: ${best_result['net_profit']:.2f}")
-                    st.write(f"Parametri Vincenti: {best_result['params']}")
-                    st.write(f"Risk:Reward: {best_result['rr']} | SL Multiplier: {best_result['sl_mult']}x | Orario: {best_result['time']}")
+                if best_res['wr'] > 0:
+                    st.success(f"🏆 Ottimizzazione Completata! WR: {best_res['wr']:.1f}%")
                     
-                    # Update Session State & Rerun
-                    # We set keys that match typical UI inputs or generic ones
-                    for k, v in best_result['params'].items():
-                        st.session_state[k] = v 
+                    # Save to Session State
+                    for k, v in best_res['params'].items():
+                        if k == 'period': st.session_state['period_rsi'] = v; st.session_state['period_cci'] = v; st.session_state['period_williams'] = v; st.session_state['period_bb'] = v
+                        if k == 'ob': st.session_state['ob_rsi'] = v; st.session_state['ob_stoch'] = v
+                        if k == 'os': st.session_state['os_rsi'] = v; st.session_state['os_stoch'] = v
+                        if k == 'k_period': st.session_state['k_stoch'] = v
+                        if k == 'std_dev': st.session_state['std_bb'] = v
+                        
+                    st.session_state['rr'] = best_res['rr']
+                    st.session_state['run_backtest_auto'] = True
                     
-                    st.session_state['rr'] = best_result['rr'] # Assuming UI might use this key
-                    # Force update if UI uses different keys (heuristic)
-                    if 'period' in best_result['params']: st.session_state['period_rsi'] = best_result['params']['period']
-                    
-                    time.sleep(3) # Give user time to read
                     st.rerun()
                 else:
-                    st.error("Nessuna combinazione valida trovata (nessun trade generato).")
+                    st.error("Nessun risultato valido trovato.")
 
         else:
             st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
