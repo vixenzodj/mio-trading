@@ -822,6 +822,217 @@ elif menu == "🔥 SCANNER HOT TICKERS":
 elif menu == "🔙 BACKTESTING STRATEGIA":
     st.title("🛠️ Professional Backtesting Suite")
     
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🛡️ Risk & Robustness")
+    friction_pct = st.sidebar.slider("Execution Friction (%)", 0.00, 0.50, 0.00, 0.01)
+
+    def apply_friction_post_process(trades_list, initial_capital, friction_pct):
+        if not trades_list or friction_pct == 0.0:
+            return trades_list, [initial_capital] + [t.get('balance', initial_capital) for t in trades_list if 'balance' in t]
+            
+        new_trades = []
+        equity_curve = [initial_capital]
+        balance = initial_capital
+        
+        # Check format
+        is_agnostic = 'Entry Price' in trades_list[0] if trades_list else False
+        
+        if is_agnostic:
+            for t in trades_list:
+                t_copy = dict(t)
+                entry = t_copy['Entry Price']
+                exit_p = t_copy['Exit Price']
+                
+                if t_copy['Type'] == 'long':
+                    size = t_copy['pnl'] / (exit_p - entry) if (exit_p - entry) != 0 else 0
+                    new_entry = entry * (1 + friction_pct / 100)
+                    new_exit = exit_p * (1 - friction_pct / 100)
+                    new_pnl = (new_exit - new_entry) * size
+                else:
+                    size = t_copy['pnl'] / (entry - exit_p) if (entry - exit_p) != 0 else 0
+                    new_entry = entry * (1 - friction_pct / 100)
+                    new_exit = exit_p * (1 + friction_pct / 100)
+                    new_pnl = (new_entry - new_exit) * size
+                    
+                t_copy['Entry Price'] = new_entry
+                t_copy['Exit Price'] = new_exit
+                t_copy['pnl'] = new_pnl
+                if size > 0:
+                    t_copy['Return %'] = (new_pnl / (new_entry * size)) * 100
+                    
+                balance += new_pnl
+                t_copy['balance'] = balance
+                new_trades.append(t_copy)
+                equity_curve.append(balance)
+        else:
+            # Hybrid format (events)
+            current_position = None
+            for t in trades_list:
+                t_copy = dict(t)
+                if 'ENTRY' in t_copy.get('type', ''):
+                    entry_price = t_copy['price']
+                    is_long = 'LONG' in t_copy['type']
+                    new_entry = entry_price * (1 + friction_pct / 100) if is_long else entry_price * (1 - friction_pct / 100)
+                    current_position = {
+                        'type': 'long' if is_long else 'short',
+                        'orig_entry': entry_price,
+                        'new_entry': new_entry
+                    }
+                    t_copy['price'] = new_entry
+                    t_copy['balance'] = balance
+                    new_trades.append(t_copy)
+                elif 'EXIT' in t_copy.get('type', '') and current_position:
+                    exit_price = t_copy['price']
+                    orig_pnl = t_copy['pnl']
+                    orig_entry = current_position['orig_entry']
+                    
+                    if current_position['type'] == 'long':
+                        new_exit = exit_price * (1 - friction_pct / 100)
+                        size = orig_pnl / (exit_price - orig_entry) if (exit_price - orig_entry) != 0 else 0
+                        new_pnl = (new_exit - current_position['new_entry']) * size
+                    else:
+                        new_exit = exit_price * (1 + friction_pct / 100)
+                        size = orig_pnl / (orig_entry - exit_price) if (orig_entry - exit_price) != 0 else 0
+                        new_pnl = (current_position['new_entry'] - new_exit) * size
+                    
+                    t_copy['price'] = new_exit
+                    t_copy['pnl'] = new_pnl
+                    balance += new_pnl
+                    t_copy['balance'] = balance
+                    new_trades.append(t_copy)
+                    equity_curve.append(balance)
+                    current_position = None
+                else:
+                    new_trades.append(t_copy)
+                    
+        return new_trades, equity_curve
+
+    def calculate_advanced_metrics(trades_list):
+        if not trades_list:
+            return 0, 0, 0, 0
+            
+        df_res = pd.DataFrame(trades_list)
+        
+        if 'pnl' in df_res.columns:
+            if 'type' in df_res.columns:
+                exits = df_res[df_res['type'].str.contains('EXIT', na=False)]
+            else:
+                exits = df_res
+                
+            if exits.empty:
+                return 0, 0, 0, 0
+                
+            wins = exits[exits['pnl'] > 0]['pnl']
+            losses = exits[exits['pnl'] < 0]['pnl']
+            
+            total_trades = len(exits)
+            win_rate = len(wins) / total_trades
+            loss_rate = 1 - win_rate
+            avg_win = wins.mean() if not wins.empty else 0
+            avg_loss = abs(losses.mean()) if not losses.empty else 0
+            expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
+            
+            gross_profit = wins.sum()
+            gross_loss = abs(losses.sum())
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+            
+            if 'balance' in df_res.columns:
+                equity_curve = df_res['balance'].tolist()
+                peak = equity_curve[0]
+                max_dd = 0
+                for eq in equity_curve:
+                    if eq > peak:
+                        peak = eq
+                    dd = (peak - eq) / peak if peak > 0 else 0
+                    if dd > max_dd:
+                        max_dd = dd
+            else:
+                max_dd = 0
+                
+            if 'Return %' in exits.columns:
+                returns = exits['Return %'] / 100
+            else:
+                # Approximate return
+                returns = exits['pnl'] / (exits['balance'] - exits['pnl'])
+                
+            sharpe = (returns.mean() / returns.std()) * np.sqrt(252) if len(returns) > 1 and returns.std() != 0 else 0
+            
+            return expectancy, profit_factor, max_dd * 100, sharpe
+        return 0, 0, 0, 0
+
+    def run_monte_carlo(trades_list, initial_capital, simulations=1000):
+        import plotly.graph_objects as go
+        import numpy as np
+        import pandas as pd
+        
+        if not trades_list:
+            return None
+            
+        df_res = pd.DataFrame(trades_list)
+        if 'type' in df_res.columns:
+            pnls = df_res[df_res['type'].str.contains('EXIT', na=False)]['pnl'].values
+        else:
+            pnls = df_res['pnl'].values
+            
+        n_trades = len(pnls)
+        if n_trades == 0:
+            return None
+            
+        # Vectorized Monte Carlo: Shuffle trades 1000 times
+        # Generate random indices for fast row-wise shuffling
+        random_indices = np.argsort(np.random.rand(simulations, n_trades), axis=1)
+        shuffled_pnls = pnls[random_indices]
+        
+        # Calculate equity curves
+        equity_curves = np.cumsum(shuffled_pnls, axis=1) + initial_capital
+        
+        # Prepend initial capital to the beginning of each curve
+        starting_capital = np.full((simulations, 1), initial_capital)
+        equity_curves = np.hstack((starting_capital, equity_curves))
+        
+        # Calculate median curve
+        median_curve = np.median(equity_curves, axis=0)
+        
+        # Visualization with Plotly
+        fig = go.Figure()
+        
+        # Performance optimization: Plot all 1000 lines as a single trace separated by NaNs
+        # This prevents Plotly from crashing the browser when rendering 1000 individual traces
+        x_base = np.arange(n_trades + 1)
+        x_all = np.tile(np.append(x_base, np.nan), simulations)
+        y_all = np.hstack((equity_curves, np.full((simulations, 1), np.nan))).flatten()
+        
+        # Add all simulated paths (Gray, low opacity)
+        fig.add_trace(go.Scatter(
+            x=x_all,
+            y=y_all,
+            mode='lines',
+            line=dict(color='gray', width=1),
+            opacity=0.1,
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Add Median Curve (Gold, bold)
+        fig.add_trace(go.Scatter(
+            x=x_base,
+            y=median_curve,
+            mode='lines',
+            line=dict(color='gold', width=3),
+            name='Median (50th Percentile)'
+        ))
+        
+        fig.update_layout(
+            title='🔬 Monte Carlo Robustness Analysis',
+            xaxis_title='Trade Number',
+            yaxis_title='Equity ($)',
+            template='plotly_dark',
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        
+        return fig
+    
     # Engine Selection
     engine_choice = st.radio("Seleziona Motore di Backtesting:", 
                              ["🧬 MOTORE A: GEX & Options Hybrid Simulator", 
@@ -2939,27 +3150,71 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     # Results
                     st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
                     
-                    # Metrics
-                    if trades:
-                        df_res = pd.DataFrame(trades)
-                        win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
-                        total_pnl = df_res['pnl'].sum()
-                        pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
+                    st.subheader("Professional Risk Dashboard")
+                    
+                    if not trades:
+                        st.warning("No trades were executed. Cannot display risk metrics.")
+                    else:
+                        # Apply Friction
+                        adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
                         
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Profitto Netto", f"${total_pnl:.2f}")
-                        m2.metric("Win Rate", f"{win_rate:.1f}%")
-                        m3.metric("Profit Factor", f"{pf:.2f}")
-                        m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
+                        # Calculate Metrics
+                        metrics = calculate_advanced_metrics(adjusted_trades)
                         
+                        # Metric Cards
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            expectancy = metrics['expectancy']
+                            st.metric(
+                                label="Mathematical Expectancy",
+                                value=f"${expectancy:.2f}",
+                                delta="Positive" if expectancy > 0 else "Negative",
+                                delta_color="normal" if expectancy > 0 else "inverse"
+                            )
+                            
+                        with col2:
+                            profit_factor = metrics['profit_factor']
+                            st.metric(
+                                label="Profit Factor",
+                                value=f"{profit_factor:.2f}",
+                                delta="Good" if profit_factor > 1.5 else "Needs Improvement",
+                                delta_color="normal" if profit_factor > 1.5 else "inverse"
+                            )
+                            
+                        with col3:
+                            max_dd = metrics['max_drawdown']
+                            st.metric(
+                                label="Max Drawdown",
+                                value=f"{max_dd:.2f}%",
+                                delta="High Risk" if max_dd < -20 else "Acceptable",
+                                delta_color="inverse" if max_dd < -20 else "normal"
+                            )
+                            
+                        with col4:
+                            win_rate = metrics['win_rate']
+                            st.metric(
+                                label="Win Rate",
+                                value=f"{win_rate:.2f}%",
+                                delta="Profitable" if win_rate > 50 else "Unprofitable",
+                                delta_color="normal" if win_rate > 50 else "inverse"
+                            )
+                            
                         # Charts
-                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Hybrid"), use_container_width=True, config={'scrollZoom': True, 'modeBarButtonsToAdd': ['drawline']})
-                        st.line_chart(equity)
+                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, adjusted_trades, "Hybrid"), use_container_width=True, config={'scrollZoom': True, 'modeBarButtonsToAdd': ['drawline']})
+                        st.line_chart(adjusted_equity)
+                        
+                        # Monte Carlo Expander
+                        with st.expander('🔍 Analisi di Robustezza e Stress Test', expanded=True):
+                            mc_fig = run_monte_carlo(adjusted_trades, initial_capital)
+                            if mc_fig:
+                                st.plotly_chart(mc_fig, use_container_width=True)
+                            else:
+                                st.warning("Not enough data for Monte Carlo simulation.")
                         
                         st.subheader("📝 Dettaglio Operazioni (Explainability)")
+                        df_res = pd.DataFrame(adjusted_trades)
                         st.data_editor(df_res, use_container_width=True, hide_index=True)
-                    else:
-                        st.warning("Nessuna operazione generata con le impostazioni correnti.")
         else:
             st.info("⚠️ Esegui prima la 'Verifica Disponibilità Dati Storici' per abilitare la simulazione.")
 
@@ -3056,26 +3311,71 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         max_date = engine.df['datetime'].max()
                         st.caption(f"📅 Range Effettivo Processato: {min_date} -> {max_date} ({len(engine.df)} candele)")
                     
-                    if trades:
-                        df_res = pd.DataFrame(trades)
-                        win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
-                        total_pnl = df_res['pnl'].sum()
-                        pf = df_res[df_res['pnl'] > 0]['pnl'].sum() / abs(df_res[df_res['pnl'] < 0]['pnl'].sum()) if len(df_res[df_res['pnl'] < 0]) > 0 else float('inf')
+                    st.subheader("Professional Risk Dashboard")
+                    
+                    if not trades:
+                        st.warning("No trades were executed. Cannot display risk metrics.")
+                    else:
+                        # Apply Friction
+                        adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
                         
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Profitto Netto", f"${total_pnl:.2f}")
-                        m2.metric("Win Rate", f"{win_rate:.1f}%")
-                        m3.metric("Profit Factor", f"{pf:.2f}")
-                        m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
+                        # Calculate Metrics
+                        metrics = calculate_advanced_metrics(adjusted_trades)
                         
+                        # Metric Cards
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            expectancy = metrics['expectancy']
+                            st.metric(
+                                label="Mathematical Expectancy",
+                                value=f"${expectancy:.2f}",
+                                delta="Positive" if expectancy > 0 else "Negative",
+                                delta_color="normal" if expectancy > 0 else "inverse"
+                            )
+                            
+                        with col2:
+                            profit_factor = metrics['profit_factor']
+                            st.metric(
+                                label="Profit Factor",
+                                value=f"{profit_factor:.2f}",
+                                delta="Good" if profit_factor > 1.5 else "Needs Improvement",
+                                delta_color="normal" if profit_factor > 1.5 else "inverse"
+                            )
+                            
+                        with col3:
+                            max_dd = metrics['max_drawdown']
+                            st.metric(
+                                label="Max Drawdown",
+                                value=f"{max_dd:.2f}%",
+                                delta="High Risk" if max_dd < -20 else "Acceptable",
+                                delta_color="inverse" if max_dd < -20 else "normal"
+                            )
+                            
+                        with col4:
+                            win_rate = metrics['win_rate']
+                            st.metric(
+                                label="Win Rate",
+                                value=f"{win_rate:.2f}%",
+                                delta="Profitable" if win_rate > 50 else "Unprofitable",
+                                delta_color="normal" if win_rate > 50 else "inverse"
+                            )
+                            
                         # Charts
-                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True, config={'scrollZoom': True, 'modeBarButtonsToAdd': ['drawline']})
-                        st.line_chart(equity)
+                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, adjusted_trades, "Technical", strategy_type), use_container_width=True, config={'scrollZoom': True, 'modeBarButtonsToAdd': ['drawline']})
+                        st.line_chart(adjusted_equity)
+                        
+                        # Monte Carlo Expander
+                        with st.expander('🔍 Analisi di Robustezza e Stress Test', expanded=True):
+                            mc_fig = run_monte_carlo(adjusted_trades, initial_capital)
+                            if mc_fig:
+                                st.plotly_chart(mc_fig, use_container_width=True)
+                            else:
+                                st.warning("Not enough data for Monte Carlo simulation.")
                         
                         st.subheader("📝 Dettaglio Operazioni (Explainability)")
+                        df_res = pd.DataFrame(adjusted_trades)
                         st.data_editor(df_res, use_container_width=True, hide_index=True)
-                    else:
-                        st.warning("Nessuna operazione generata con le impostazioni correnti.")
             
             if c_opt.button("🧠 Ottimizza Strategia (AI)"):
                 status_text = st.empty()
