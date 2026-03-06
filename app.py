@@ -1414,10 +1414,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 macd, signal_line = TechnicalIndicators.macd(df['Close'], fast, slow, sig)
                 if cache is not None: cache[key] = (macd, signal_line)
 
-            prev_macd, curr_macd = macd.shift(1), macd
-            prev_sig, curr_sig = signal_line.shift(1), signal_line
-            long_sig = (prev_macd < prev_sig) & (curr_macd > curr_sig)
-            short_sig = (prev_macd > prev_sig) & (curr_macd < curr_sig)
+            long_sig = (macd.shift(1) < signal_line.shift(1)) & (macd > signal_line)
+            short_sig = (macd.shift(1) > signal_line.shift(1)) & (macd < signal_line)
             return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
@@ -1440,10 +1438,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         @staticmethod
         def golden_death_cross(df, params, cache=None):
-            prev_sma50, curr_sma50 = df['SMA50'].shift(1), df['SMA50']
-            prev_sma200, curr_sma200 = df['SMA200'].shift(1), df['SMA200']
-            long_sig = (prev_sma50 < prev_sma200) & (curr_sma50 > curr_sma200)
-            short_sig = (prev_sma50 > prev_sma200) & (curr_sma50 < curr_sma200)
+            fast_p = params.get('fast', 50)
+            slow_p = params.get('slow', 200)
+            
+            key_fast = ('SMA', fast_p)
+            if cache is not None and key_fast in cache:
+                fast_ma = cache[key_fast]
+            else:
+                fast_ma = TechnicalIndicators.sma(df['Close'], fast_p)
+                if cache is not None: cache[key_fast] = fast_ma
+                
+            key_slow = ('SMA', slow_p)
+            if cache is not None and key_slow in cache:
+                slow_ma = cache[key_slow]
+            else:
+                slow_ma = TechnicalIndicators.sma(df['Close'], slow_p)
+                if cache is not None: cache[key_slow] = slow_ma
+
+            long_sig = (fast_ma.shift(1) < slow_ma.shift(1)) & (fast_ma > slow_ma)
+            short_sig = (fast_ma.shift(1) > slow_ma.shift(1)) & (fast_ma < slow_ma)
             return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
@@ -1504,10 +1517,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 hma = TechnicalIndicators.hma(df['Close'], p)
                 if cache is not None: cache[key] = hma
                 
-            prev_hma, curr_hma = hma.shift(1), hma
-            prev_close, curr_close = df['Close'].shift(1), df['Close']
-            long_sig = (prev_hma < curr_hma) & (prev_close > curr_hma)
-            short_sig = (prev_hma > curr_hma) & (prev_close < curr_hma)
+            long_sig = (hma.shift(1) > hma.shift(2)) & (df['Close'].shift(1) < hma.shift(1)) & (df['Close'] > hma)
+            short_sig = (hma.shift(1) < hma.shift(2)) & (df['Close'].shift(1) > hma.shift(1)) & (df['Close'] < hma)
             return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
@@ -1520,10 +1531,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 tema = TechnicalIndicators.tema(df['Close'], p)
                 if cache is not None: cache[key] = tema
                 
-            prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_tema, curr_tema = tema.shift(1), tema
-            long_sig = (prev_close < prev_tema) & (curr_close > curr_tema)
-            short_sig = (prev_close > prev_tema) & (curr_close < curr_tema)
+            long_sig = (df['Close'].shift(1) < tema.shift(1)) & (df['Close'] > tema)
+            short_sig = (df['Close'].shift(1) > tema.shift(1)) & (df['Close'] < tema)
             return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
@@ -2113,6 +2122,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                 long_sig = long_sig.fillna(False).values
                             if isinstance(short_sig, pd.Series):
                                 short_sig = short_sig.fillna(False).values
+                                
+                            print(f'Testing {strategy_type} with {params} -> Raw signals: {np.sum(long_sig | short_sig)}')
                                 
                             signals[long_sig] = 1
                             signals[short_sig] = -1
