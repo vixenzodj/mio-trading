@@ -11,6 +11,48 @@ from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
 
+# --- STRATEGY PARAMETER GRID ---
+STRATEGY_PARAM_GRID = {
+    "RSI Mean Reversion": {'period': range(10, 22, 2), 'ob': range(65, 85, 5), 'os': range(20, 40, 5)},
+    "MACD Crossover": {'fast': range(8, 16, 2), 'slow': range(20, 32, 2), 'signal': range(7, 12, 1)},
+    "Bollinger Breakout": {'period': range(15, 30, 5), 'std_dev': [1.5, 2.0, 2.5]},
+    "Golden/Death Cross": {'fast': range(40, 60, 10), 'slow': range(150, 250, 50)},
+    "Stochastic Oscillator": {'k_period': range(10, 20, 2), 'ob': range(75, 95, 5), 'os': range(5, 25, 5)},
+    "CCI Momentum": {'period': range(10, 30, 5)},
+    "Williams %R Reversal": {'period': range(10, 30, 5)},
+    "HMA Trend": {'period': range(10, 40, 5)},
+    "TEMA Crossover": {'period': range(10, 40, 5)},
+    "KAMA Trend": {'period': range(10, 40, 5)},
+    "Aroon Oscillator": {'period': range(15, 35, 5)},
+    "SuperTrend Reversal": {'period': range(7, 15, 2)},
+    "Parabolic SAR": {},
+    "TSI Crossover": {},
+    "UO Overbought/Oversold": {},
+    "Keltner Channel Breakout": {},
+    "Donchian Channel Breakout": {},
+    "Chaikin Volatility": {},
+    "CMF Trend": {},
+    "VWAP Crossover": {},
+    "AD Line Trend": {},
+    "Vortex Crossover": {},
+    "Choppiness Index Breakout": {},
+    "KST Crossover": {},
+    "Coppock Curve": {},
+    "Ichimoku Cloud Breakout": {},
+    "Awesome Oscillator": {},
+    "PPO Crossover": {},
+    "Mass Index Reversal": {},
+    "Ulcer Index Safety": {},
+    "WMA Trend": {'period': range(10, 40, 5)},
+    "TRIMA Crossover": {'period': range(10, 40, 5)},
+    "CMO Reversal": {},
+    "Momentum Breakout": {'period': range(5, 20, 5)},
+    "BOP Trend": {},
+    "TRIX Crossover": {},
+    "StochRSI Reversal": {},
+    "TSF Trend": {}
+}
+
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
@@ -120,7 +162,7 @@ def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
         col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
         df.rename(columns=col_map, inplace=True)
         df['datetime'] = pd.to_datetime(df['datetime'])
-        df.dropna(inplace=True)
+        df.ffill().bfill(inplace=True)
         return df
     except Exception as e:
         st.error(f"Errore Yahoo Finance: {e}")
@@ -887,7 +929,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             df.sort_values('datetime', inplace=True)
             
             # Drop initial NaNs if any
-            df.dropna(inplace=True)
+            df.ffill().bfill(inplace=True)
             
             # Reset index
             df.reset_index(drop=True, inplace=True)
@@ -2011,8 +2053,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             if not cols.empty:
                 self.df[cols] = self.df[cols].astype('float32')
             
-            # Data Integrity: Use fillna instead of dropna to keep full dataframe length
-            self.df.fillna(0, inplace=True)
+            # Data Integrity: Use ffill().bfill() instead of dropna to keep full dataframe length
+            self.df.ffill().bfill(inplace=True)
             self.df.reset_index(drop=True, inplace=True)
 
         def add_gex_levels(self, sensitivity=1.5):
@@ -2925,11 +2967,16 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         elif strategy_type == "Bollinger Breakout":
             with col1: params['period'] = st.number_input("Periodo BB", value=int(st.session_state.get('period_bb', 20)))
             with col2: params['std_dev'] = st.number_input("Dev. Std", value=float(st.session_state.get('std_bb', 2.0)))
-        
-        # Generic fallback for others to avoid errors if params needed
-        if not params:
-             # Add generic period if strategy might need it (heuristic)
-             if "period" not in params: params['period'] = 14
+        elif strategy_type == "MACD Crossover":
+            with col1: params['fast'] = st.number_input("Fast Period", value=int(st.session_state.get('fast_macd', 12)))
+            with col2: params['slow'] = st.number_input("Slow Period", value=int(st.session_state.get('slow_macd', 26)))
+            with col3: params['signal'] = st.number_input("Signal Period", value=int(st.session_state.get('signal_macd', 9)))
+        elif strategy_type == "Golden/Death Cross":
+            with col1: params['fast'] = st.number_input("Fast MA", value=int(st.session_state.get('fast_gd', 50)))
+            with col2: params['slow'] = st.number_input("Slow MA", value=int(st.session_state.get('slow_gd', 200)))
+        else:
+            # Generic fallback for others to avoid errors if params needed
+            with col1: params['period'] = st.number_input("Periodo", value=int(st.session_state.get('period_generic', 14)))
         
         rr = st.slider("Rischio:Rendimento", 1.0, 5.0, float(st.session_state.get('rr', 2.0)), 0.5)
         risk_pct = st.slider("Rischio per Trade (%)", 0.5, 5.0, float(st.session_state.get('risk_pct', 1.0)), 0.1)
@@ -2994,24 +3041,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
                 
                 # 2. Define Ranges
-                opt_config = {}
-                recalc_func = None
-                
-                if strategy_type == "RSI Mean Reversion":
-                    opt_config = {'period': range(10, 22, 2), 'ob': range(65, 85, 5), 'os': range(20, 40, 5)}
-                    def r_func(d, p): d['RSI'] = TechnicalIndicators.rsi(d['Close'], p['period'])
-                    recalc_func = r_func
-                elif strategy_type == "Stochastic Oscillator":
-                    opt_config = {'k_period': range(10, 20, 2), 'ob': range(75, 95, 5), 'os': range(5, 25, 5)}
-                    def r_func(d, p): d['Stoch_K'], d['Stoch_D'] = TechnicalIndicators.stochastic(d, p['k_period'])
-                    recalc_func = r_func
-                elif strategy_type == "Bollinger Breakout":
-                    opt_config = {'period': [20, 30], 'std_dev': [2.0, 2.5]}
-                    def r_func(d, p): d['BB_Upper'], d['BB_Lower'] = TechnicalIndicators.bollinger_bands(d['Close'], p['period'], p['std_dev'])
-                    recalc_func = r_func
-                else:
-                    # Generic fallback
-                    opt_config = {'dummy': [1]}
+                opt_config = STRATEGY_PARAM_GRID.get(strategy_type, {})
                 
                 rr_ranges = [1.5, 2.0, 2.5, 3.0]
                 
@@ -3019,56 +3049,27 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 import itertools
                 keys = list(opt_config.keys())
                 values = [opt_config[k] for k in keys]
-                param_combos = list(itertools.product(*values))
+                param_combos = list(itertools.product(*values)) if values else [()]
                 
                 total_steps = len(param_combos) * len(rr_ranges)
                 step = 0
                 best_res = {'wr': 0, 'pnl': -float('inf'), 'params': {}, 'rr': 0}
                 
                 # 4. Fast Loop
+                opt_cache = {}
                 for p_vals in param_combos:
                     curr_p = dict(zip(keys, p_vals))
                     
-                    # Recalculate Indicators (Vectorized)
-                    if recalc_func:
-                        try: recalc_func(opt_df, curr_p)
-                        except: continue
-                    else:
-                        engine.add_technical_indicators() # Ensure base exists
-                        
                     # Generate Signals (Vectorized)
-                    # This is a simplified signal generation for common strategies to speed up scanning
-                    # For complex ones, we might fallback to iteration, but here we try vector
                     sigs = pd.Series(0, index=opt_df.index)
                     
                     try:
-                        if strategy_type == "RSI Mean Reversion":
-                            rsi_arr = opt_df['RSI'].values
-                            # Long: prev < os and curr > os
-                            sigs = np.where((rsi_arr[:-1] < curr_p['os']) & (rsi_arr[1:] > curr_p['os']), 1, 
-                                   np.where((rsi_arr[:-1] > curr_p['ob']) & (rsi_arr[1:] < curr_p['ob']), -1, 0))
-                            # Pad the first element lost by slicing
-                            sigs = np.insert(sigs, 0, 0)
-                            
-                        elif strategy_type == "Stochastic Oscillator":
-                            k_arr = opt_df['Stoch_K'].values
-                            sigs = np.where((k_arr[:-1] < curr_p['os']) & (k_arr[1:] > curr_p['os']), 1,
-                                   np.where((k_arr[:-1] > curr_p['ob']) & (k_arr[1:] < curr_p['ob']), -1, 0))
-                            sigs = np.insert(sigs, 0, 0)
-                            
-                        elif strategy_type == "Bollinger Breakout":
-                            c = opt_df['Close'].values
-                            l = opt_df['BB_Lower'].values
-                            u = opt_df['BB_Upper'].values
-                            sigs = np.where((c[:-1] < l[:-1]) & (c[1:] > l[1:]), 1,
-                                   np.where((c[:-1] > u[:-1]) & (c[1:] < u[1:]), -1, 0))
-                            sigs = np.insert(sigs, 0, 0)
-                            
-                        else:
-                            # Fallback: Use the engine's logic but on the smaller DF (slower but compatible)
-                            # We skip this for now to ensure speed for the main requested strategies
-                            pass
-                            
+                        signal_func = StrategyLib.get_signal_func(strategy_type)
+                        if signal_func:
+                            long_sig, short_sig = signal_func(opt_df, curr_p, cache=opt_cache)
+                            long_sig = long_sig.fillna(False)
+                            short_sig = short_sig.fillna(False)
+                            sigs = np.where(long_sig, 1, np.where(short_sig, -1, 0))
                     except Exception as e:
                         continue
 
@@ -3148,12 +3149,31 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     
                     # Save to Session State
                     for k, v in best_res['params'].items():
-                        if k == 'period': st.session_state['period_rsi'] = v; st.session_state['period_cci'] = v; st.session_state['period_williams'] = v; st.session_state['period_bb'] = v
-                        if k == 'ob': st.session_state['ob_rsi'] = v; st.session_state['ob_stoch'] = v
-                        if k == 'os': st.session_state['os_rsi'] = v; st.session_state['os_stoch'] = v
-                        if k == 'k_period': st.session_state['k_stoch'] = v
-                        if k == 'std_dev': st.session_state['std_bb'] = v
-                        
+                        if strategy_type == "RSI Mean Reversion":
+                            if k == 'period': st.session_state['period_rsi'] = v
+                            elif k == 'ob': st.session_state['ob_rsi'] = v
+                            elif k == 'os': st.session_state['os_rsi'] = v
+                        elif strategy_type == "Stochastic Oscillator":
+                            if k == 'k_period': st.session_state['k_stoch'] = v
+                            elif k == 'ob': st.session_state['ob_stoch'] = v
+                            elif k == 'os': st.session_state['os_stoch'] = v
+                        elif strategy_type == "CCI Momentum":
+                            if k == 'period': st.session_state['period_cci'] = v
+                        elif strategy_type == "Williams %R Reversal":
+                            if k == 'period': st.session_state['period_williams'] = v
+                        elif strategy_type == "Bollinger Breakout":
+                            if k == 'period': st.session_state['period_bb'] = v
+                            elif k == 'std_dev': st.session_state['std_bb'] = v
+                        elif strategy_type == "MACD Crossover":
+                            if k == 'fast': st.session_state['fast_macd'] = v
+                            elif k == 'slow': st.session_state['slow_macd'] = v
+                            elif k == 'signal': st.session_state['signal_macd'] = v
+                        elif strategy_type == "Golden/Death Cross":
+                            if k == 'fast': st.session_state['fast_gd'] = v
+                            elif k == 'slow': st.session_state['slow_gd'] = v
+                        else:
+                            if k == 'period': st.session_state['period_generic'] = v
+                            
                     st.session_state['rr'] = best_res['rr']
                     st.session_state['run_backtest_auto'] = True
                     
