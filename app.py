@@ -907,8 +907,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     
         return new_trades, equity_curve
 
-    def calculate_advanced_metrics(total_trades):
-        if not total_trades:
+    def calculate_advanced_metrics(trades_list):
+        if not trades_list:
             return {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0}
             
         df_res = pd.DataFrame(trades_list)
