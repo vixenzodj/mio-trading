@@ -1788,6 +1788,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             if 'ATR' not in self.df.columns:
                 self.add_technical_indicators()
 
+            # CRITICAL FIX: Drop any remaining NaNs to prevent optimizer failure
+            self.df.dropna(inplace=True)
+            self.df.reset_index(drop=True, inplace=True)
+
             # Work with a copy to avoid side effects, convert to float32 for memory/speed
             # We use numpy arrays directly for the optimization loop
             opens = self.df['Open'].values.astype(np.float32)
@@ -1799,9 +1803,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             n_candles = len(closes)
 
             # 2. Parameter & Time Setup
-            keys = list(param_ranges.keys())
-            values = [param_ranges[k] for k in keys]
-            param_combinations = list(itertools.product(*values))
+            keys = list(param_ranges.keys()) if param_ranges else []
+            values = [param_ranges[k] for k in keys] if keys else []
+            param_combinations = list(itertools.product(*values)) if values else [()]
 
             time_combinations = [(None, None)]
             if time_ranges:
@@ -1845,7 +1849,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
                 for params_tuple in param_combinations:
                     counter += 1
-                    params = dict(zip(keys, params_tuple))
+                    params = dict(zip(keys, params_tuple)) if keys else {}
 
                     # Update UI periodically
                     if counter % 10 == 0 or counter == total_iterations:
@@ -1862,14 +1866,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         # Use StrategyLib for signal generation
                         signal_func = StrategyLib.get_signal_func(strategy_type)
                         if signal_func:
-                            # Pass cache to support dynamic calculation
-                            # Some strategies might not accept cache, so we handle TypeError if needed?
-                            # But we control StrategyLib, so we can ensure they accept **kwargs or cache.
-                            # For now, updated strategies accept cache. Others might fail if we pass it?
-                            # Let's inspect StrategyLib.
-                            # The ones I updated accept cache. The others I didn't update (in this tool call) don't.
-                            # So I should inspect the signature or update ALL to accept **kwargs.
-                            # Or simpler: just try passing cache, if fails, pass without.
                             import inspect
                             sig_params = inspect.signature(signal_func).parameters
                             if 'cache' in sig_params:
@@ -1877,6 +1873,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             else:
                                 long_sig, short_sig = signal_func(self.df, params)
                             
+                            # Handle potential NaNs in signals
+                            if isinstance(long_sig, pd.Series):
+                                long_sig = long_sig.fillna(False).values
+                            if isinstance(short_sig, pd.Series):
+                                short_sig = short_sig.fillna(False).values
+                                
                             signals[long_sig] = 1
                             signals[short_sig] = -1
                         else:
@@ -2278,7 +2280,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     'pnl': pnl,
                     'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
                     'Type': 'long' if direction == 1 else 'short',
-                    'Status': exit_type
+                    'Status': exit_type,
+                    'type': 'ENTRY LONG' if direction == 1 else 'ENTRY SHORT',
+                    'time': entry_time,
+                    'price': entry_price
                 })
                 
                 if exit_idx < n_candles:
