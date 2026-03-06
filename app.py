@@ -1399,7 +1399,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             os, ob = params.get('os', 30), params.get('ob', 70)
             long_sig = (prev < os) & (curr > os)
             short_sig = (prev > ob) & (curr < ob)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def macd_crossover(df, params, cache=None):
@@ -1418,7 +1418,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_sig, curr_sig = signal_line.shift(1), signal_line
             long_sig = (prev_macd < prev_sig) & (curr_macd > curr_sig)
             short_sig = (prev_macd > prev_sig) & (curr_macd < curr_sig)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def bollinger_breakout(df, params, cache=None):
@@ -1436,7 +1436,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_lower, prev_upper = lower.shift(1), upper.shift(1)
             long_sig = (prev_close < prev_lower) & (curr_close > prev_lower)
             short_sig = (prev_close > prev_upper) & (curr_close < prev_upper)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def golden_death_cross(df, params, cache=None):
@@ -1444,7 +1444,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_sma200, curr_sma200 = df['SMA200'].shift(1), df['SMA200']
             long_sig = (prev_sma50 < prev_sma200) & (curr_sma50 > curr_sma200)
             short_sig = (prev_sma50 > prev_sma200) & (curr_sma50 < curr_sma200)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def stochastic_oscillator(df, params, cache=None):
@@ -1462,7 +1462,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             os, ob = params.get('os', 20), params.get('ob', 80)
             long_sig = (prev_k < os) & (curr_k > os)
             short_sig = (prev_k > ob) & (curr_k < ob)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def cci_momentum(df, params, cache=None):
@@ -1477,7 +1477,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_cci, curr_cci = cci.shift(1), cci
             long_sig = (prev_cci < -100) & (curr_cci > -100)
             short_sig = (prev_cci > 100) & (curr_cci < 100)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def williams_r_reversal(df, params, cache=None):
@@ -1492,7 +1492,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_wr, curr_wr = wr.shift(1), wr
             long_sig = (prev_wr < -80) & (curr_wr > -80)
             short_sig = (prev_wr > -20) & (curr_wr < -20)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def hma_trend(df, params, cache=None):
@@ -1508,7 +1508,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_hma < curr_hma) & (prev_close > curr_hma)
             short_sig = (prev_hma > curr_hma) & (prev_close < curr_hma)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def tema_crossover(df, params, cache=None):
@@ -1524,7 +1524,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_tema, curr_tema = tema.shift(1), tema
             long_sig = (prev_close < prev_tema) & (curr_close > curr_tema)
             short_sig = (prev_close > prev_tema) & (curr_close < curr_tema)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def kama_trend(df, params, cache=None):
@@ -1539,7 +1539,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_kama, curr_kama = kama.shift(1), kama
             long_sig = prev_kama < curr_kama
             short_sig = prev_kama > curr_kama
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def aroon_oscillator(df, params, cache=None):
@@ -1555,7 +1555,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_down, curr_down = aroon_down.shift(1), aroon_down
             long_sig = (prev_up < prev_down) & (curr_up > curr_down)
             short_sig = (prev_up > prev_down) & (curr_up < curr_down)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def supertrend_reversal(df, params, cache=None):
@@ -1573,7 +1573,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_lower, curr_lower = lower.shift(1), lower
             long_sig = (prev_close < prev_upper) & (curr_close > curr_lower)
             short_sig = (prev_close > prev_lower) & (curr_close < curr_upper)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def parabolic_sar_strategy(df, params, cache=None):
@@ -1588,7 +1588,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_sar > prev_close) & (curr_sar < curr_close)
             short_sig = (prev_sar < prev_close) & (curr_sar > curr_close)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def tsi_crossover(df, params, cache=None):
@@ -1602,7 +1602,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_tsi, curr_tsi = tsi.shift(1), tsi
             long_sig = (prev_tsi < 0) & (curr_tsi > 0)
             short_sig = (prev_tsi > 0) & (curr_tsi < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def uo_strategy(df, params, cache=None):
@@ -1616,7 +1616,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_uo, curr_uo = uo.shift(1), uo
             long_sig = (prev_uo < 30) & (curr_uo > 30)
             short_sig = (prev_uo > 70) & (curr_uo < 70)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def keltner_channel_breakout(df, params, cache=None):
@@ -1632,7 +1632,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_lower, curr_lower = lower.shift(1), lower
             long_sig = (prev_close < prev_upper) & (curr_close > curr_upper)
             short_sig = (prev_close > prev_lower) & (curr_close < curr_lower)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def donchian_channel_breakout(df, params, cache=None):
@@ -1648,7 +1648,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_lower = lower.shift(1)
             long_sig = curr_close >= prev_upper
             short_sig = curr_close <= prev_lower
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def chaikin_volatility_strategy(df, params, cache=None):
@@ -1662,7 +1662,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_cv, curr_cv = cv.shift(1), cv
             long_sig = (prev_cv < 0) & (curr_cv > 0)
             short_sig = pd.Series(False, index=df.index)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def cmf_trend(df, params, cache=None):
@@ -1676,7 +1676,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_cmf, curr_cmf = cmf.shift(1), cmf
             long_sig = (prev_cmf < 0) & (curr_cmf > 0)
             short_sig = (prev_cmf > 0) & (curr_cmf < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def vwap_crossover(df, params, cache=None):
@@ -1691,7 +1691,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_vwap, curr_vwap = vwap.shift(1), vwap
             long_sig = (prev_close < prev_vwap) & (curr_close > curr_vwap)
             short_sig = (prev_close > prev_vwap) & (curr_close < curr_vwap)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def ad_line_trend(df, params, cache=None):
@@ -1706,7 +1706,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_ad < curr_ad) & (prev_close > curr_close)
             short_sig = pd.Series(False, index=df.index)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def vortex_crossover(df, params, cache=None):
@@ -1721,7 +1721,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_vm, curr_vm = vm.shift(1), vm
             long_sig = (prev_vp < prev_vm) & (curr_vp > curr_vm)
             short_sig = (prev_vp > prev_vm) & (curr_vp < curr_vm)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def choppiness_index_breakout(df, params, cache=None):
@@ -1735,7 +1735,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_chop, curr_chop = chop.shift(1), chop
             long_sig = (prev_chop > 61.8) & (curr_chop < 61.8)
             short_sig = (prev_chop < 38.2) & (curr_chop > 38.2)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def kst_crossover(df, params, cache=None):
@@ -1749,7 +1749,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_kst, curr_kst = kst.shift(1), kst
             long_sig = (prev_kst < 0) & (curr_kst > 0)
             short_sig = (prev_kst > 0) & (curr_kst < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def coppock_curve(df, params, cache=None):
@@ -1763,7 +1763,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_cop, curr_cop = cop.shift(1), cop
             long_sig = (prev_cop < 0) & (curr_cop > 0)
             short_sig = (prev_cop > 0) & (curr_cop < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def ichimoku_cloud_breakout(df, params, cache=None):
@@ -1779,7 +1779,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             curr_span_b = span_b
             long_sig = (prev_close < prev_span_a) & (curr_close > curr_span_a) & (curr_close > curr_span_b)
             short_sig = (prev_close > prev_span_a) & (curr_close < curr_span_a) & (curr_close < curr_span_b)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def awesome_oscillator(df, params, cache=None):
@@ -1793,7 +1793,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_ao, curr_ao = ao.shift(1), ao
             long_sig = (prev_ao < 0) & (curr_ao > 0)
             short_sig = (prev_ao > 0) & (curr_ao < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def ppo_crossover(df, params, cache=None):
@@ -1807,7 +1807,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_ppo, curr_ppo = ppo.shift(1), ppo
             long_sig = (prev_ppo < 0) & (curr_ppo > 0)
             short_sig = (prev_ppo > 0) & (curr_ppo < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def mass_index_reversal(df, params, cache=None):
@@ -1821,7 +1821,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_mi, curr_mi = mi.shift(1), mi
             long_sig = (prev_mi > 27) & (curr_mi < 27)
             short_sig = pd.Series(False, index=df.index)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def ulcer_index_safety(df, params, cache=None):
@@ -1835,7 +1835,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_ui, curr_ui = ui.shift(1), ui
             long_sig = (prev_ui > 5) & (curr_ui < 5)
             short_sig = pd.Series(False, index=df.index)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def wma_trend(df, params, cache=None):
@@ -1851,7 +1851,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_wma < curr_wma) & (prev_close > curr_wma)
             short_sig = (prev_wma > curr_wma) & (prev_close < curr_wma)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def trima_crossover(df, params, cache=None):
@@ -1867,7 +1867,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_trima, curr_trima = trima.shift(1), trima
             long_sig = (prev_close < prev_trima) & (curr_close > curr_trima)
             short_sig = (prev_close > prev_trima) & (curr_close < curr_trima)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def cmo_reversal(df, params, cache=None):
@@ -1881,7 +1881,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_cmo, curr_cmo = cmo.shift(1), cmo
             long_sig = (prev_cmo < -50) & (curr_cmo > -50)
             short_sig = (prev_cmo > 50) & (curr_cmo < 50)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def momentum_breakout(df, params, cache=None):
@@ -1896,7 +1896,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_mom, curr_mom = mom.shift(1), mom
             long_sig = (prev_mom < 0) & (curr_mom > 0)
             short_sig = (prev_mom > 0) & (curr_mom < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def bop_trend(df, params, cache=None):
@@ -1910,7 +1910,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_bop, curr_bop = bop.shift(1), bop
             long_sig = (prev_bop < 0) & (curr_bop > 0)
             short_sig = (prev_bop > 0) & (curr_bop < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def trix_crossover(df, params, cache=None):
@@ -1924,7 +1924,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_trix, curr_trix = trix.shift(1), trix
             long_sig = (prev_trix < 0) & (curr_trix > 0)
             short_sig = (prev_trix > 0) & (curr_trix < 0)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def stochrsi_reversal(df, params, cache=None):
@@ -1938,7 +1938,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_srsi, curr_srsi = srsi.shift(1), srsi
             long_sig = (prev_srsi < 0.2) & (curr_srsi > 0.2)
             short_sig = (prev_srsi > 0.8) & (curr_srsi < 0.8)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
         @staticmethod
         def tsf_trend(df, params, cache=None):
@@ -1953,7 +1953,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_tsf < curr_tsf) & (prev_close > curr_tsf)
             short_sig = (prev_tsf > curr_tsf) & (prev_close < curr_tsf)
-            return long_sig.fillna(False), short_sig.fillna(False)
+            return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
     class BacktestEngine:
         def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
@@ -2002,8 +2002,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             if not cols.empty:
                 self.df[cols] = self.df[cols].astype('float32')
             
-            # Data Integrity: Drop NaN values created by indicators (warm-up period)
-            self.df.dropna(inplace=True)
+            # Data Integrity: Use fillna instead of dropna to keep full dataframe length
+            self.df.fillna(0, inplace=True)
             self.df.reset_index(drop=True, inplace=True)
 
         def add_gex_levels(self, sensitivity=1.5):
@@ -2026,10 +2026,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             # Ensure base indicators are present (ATR is critical for SL/TP)
             if 'ATR' not in self.df.columns:
                 self.add_technical_indicators()
-
-            # CRITICAL FIX: Drop any remaining NaNs to prevent optimizer failure
-            self.df.dropna(inplace=True)
-            self.df.reset_index(drop=True, inplace=True)
 
             # Work with a copy to avoid side effects, convert to float32 for memory/speed
             # We use numpy arrays directly for the optimization loop
@@ -2128,8 +2124,19 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         print(f"Strategy Error in {strategy_type} with params {params}: {e}")
                         continue
 
+                    raw_signal_count = np.sum(signals != 0)
+
                     # Apply Time Mask
                     signals[~time_mask] = 0
+                    final_signal_count = np.sum(signals != 0)
+
+                    print(f"DEBUG: Params {params} generated {final_signal_count} signals")
+                    if final_signal_count == 0:
+                        if raw_signal_count == 0:
+                            print(f"  -> Reason: Indicator produced 0 signals (possibly all NaNs or no crossovers).")
+                        else:
+                            print(f"  -> Reason: Time filter blocked all {raw_signal_count} signals.")
+                        continue
 
                     # --- B. Vectorized Trade Simulation (Isolation & Next-Bar) ---
                     # Identify potential entry points (Signal at T -> Entry at T+1)
