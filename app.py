@@ -1403,8 +1403,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         @staticmethod
         def macd_crossover(df, params, cache=None):
-            # MACD usually fixed 12,26,9 but could be optimized
-            # For now, assume standard or use params if provided
             fast = params.get('fast', 12)
             slow = params.get('slow', 26)
             sig = params.get('signal', 9)
@@ -1442,7 +1440,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         @staticmethod
         def golden_death_cross(df, params, cache=None):
-            # Usually fixed 50/200
             prev_sma50, curr_sma50 = df['SMA50'].shift(1), df['SMA50']
             prev_sma200, curr_sma200 = df['SMA200'].shift(1), df['SMA200']
             long_sig = (prev_sma50 < prev_sma200) & (curr_sma50 > curr_sma200)
@@ -1468,249 +1465,491 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def cci_momentum(df, params):
-            prev_cci, curr_cci = df['CCI'].shift(1), df['CCI']
+        def cci_momentum(df, params, cache=None):
+            p = params.get('period', 20)
+            key = ('CCI', p)
+            if cache is not None and key in cache:
+                cci = cache[key]
+            else:
+                cci = TechnicalIndicators.cci(df, p)
+                if cache is not None: cache[key] = cci
+                
+            prev_cci, curr_cci = cci.shift(1), cci
             long_sig = (prev_cci < -100) & (curr_cci > -100)
             short_sig = (prev_cci > 100) & (curr_cci < 100)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def williams_r_reversal(df, params):
-            prev_wr, curr_wr = df['WilliamsR'].shift(1), df['WilliamsR']
+        def williams_r_reversal(df, params, cache=None):
+            p = params.get('period', 14)
+            key = ('WilliamsR', p)
+            if cache is not None and key in cache:
+                wr = cache[key]
+            else:
+                wr = TechnicalIndicators.williams_r(df, p)
+                if cache is not None: cache[key] = wr
+                
+            prev_wr, curr_wr = wr.shift(1), wr
             long_sig = (prev_wr < -80) & (curr_wr > -80)
             short_sig = (prev_wr > -20) & (curr_wr < -20)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def hma_trend(df, params):
-            prev_hma, curr_hma = df['HMA20'].shift(1), df['HMA20']
+        def hma_trend(df, params, cache=None):
+            p = params.get('period', 20)
+            key = ('HMA', p)
+            if cache is not None and key in cache:
+                hma = cache[key]
+            else:
+                hma = TechnicalIndicators.hma(df['Close'], p)
+                if cache is not None: cache[key] = hma
+                
+            prev_hma, curr_hma = hma.shift(1), hma
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_hma < curr_hma) & (prev_close > curr_hma)
             short_sig = (prev_hma > curr_hma) & (prev_close < curr_hma)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def tema_crossover(df, params):
+        def tema_crossover(df, params, cache=None):
+            p = params.get('period', 20)
+            key = ('TEMA', p)
+            if cache is not None and key in cache:
+                tema = cache[key]
+            else:
+                tema = TechnicalIndicators.tema(df['Close'], p)
+                if cache is not None: cache[key] = tema
+                
             prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_tema, curr_tema = df['TEMA20'].shift(1), df['TEMA20']
+            prev_tema, curr_tema = tema.shift(1), tema
             long_sig = (prev_close < prev_tema) & (curr_close > curr_tema)
             short_sig = (prev_close > prev_tema) & (curr_close < curr_tema)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def kama_trend(df, params):
-            prev_kama, curr_kama = df['KAMA20'].shift(1), df['KAMA20']
+        def kama_trend(df, params, cache=None):
+            p = params.get('period', 20)
+            key = ('KAMA', p)
+            if cache is not None and key in cache:
+                kama = cache[key]
+            else:
+                kama = TechnicalIndicators.kama(df['Close'], p)
+                if cache is not None: cache[key] = kama
+                
+            prev_kama, curr_kama = kama.shift(1), kama
             long_sig = prev_kama < curr_kama
             short_sig = prev_kama > curr_kama
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def aroon_oscillator(df, params):
-            prev_up, curr_up = df['Aroon_Up'].shift(1), df['Aroon_Up']
-            prev_down, curr_down = df['Aroon_Down'].shift(1), df['Aroon_Down']
+        def aroon_oscillator(df, params, cache=None):
+            p = params.get('period', 25)
+            key = ('Aroon', p)
+            if cache is not None and key in cache:
+                aroon_up, aroon_down = cache[key]
+            else:
+                aroon_up, aroon_down = TechnicalIndicators.aroon(df, p)
+                if cache is not None: cache[key] = (aroon_up, aroon_down)
+                
+            prev_up, curr_up = aroon_up.shift(1), aroon_up
+            prev_down, curr_down = aroon_down.shift(1), aroon_down
             long_sig = (prev_up < prev_down) & (curr_up > curr_down)
             short_sig = (prev_up > prev_down) & (curr_up < curr_down)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def supertrend_reversal(df, params):
+        def supertrend_reversal(df, params, cache=None):
+            p = params.get('period', 10)
+            m = params.get('multiplier', 3)
+            key = ('SuperTrend', p, m)
+            if cache is not None and key in cache:
+                upper, lower = cache[key]
+            else:
+                upper, lower = TechnicalIndicators.supertrend(df, p, m)
+                if cache is not None: cache[key] = (upper, lower)
+                
             prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_upper, curr_upper = df['SuperTrend_Upper'].shift(1), df['SuperTrend_Upper']
-            prev_lower, curr_lower = df['SuperTrend_Lower'].shift(1), df['SuperTrend_Lower']
+            prev_upper, curr_upper = upper.shift(1), upper
+            prev_lower, curr_lower = lower.shift(1), lower
             long_sig = (prev_close < prev_upper) & (curr_close > curr_lower)
             short_sig = (prev_close > prev_lower) & (curr_close < curr_upper)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def parabolic_sar_strategy(df, params):
-            prev_sar, curr_sar = df['Parabolic_SAR'].shift(1), df['Parabolic_SAR']
+        def parabolic_sar_strategy(df, params, cache=None):
+            key = ('Parabolic_SAR',)
+            if cache is not None and key in cache:
+                sar = cache[key]
+            else:
+                sar = TechnicalIndicators.parabolic_sar(df)
+                if cache is not None: cache[key] = sar
+                
+            prev_sar, curr_sar = sar.shift(1), sar
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_sar > prev_close) & (curr_sar < curr_close)
             short_sig = (prev_sar < prev_close) & (curr_sar > curr_close)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def tsi_crossover(df, params):
-            prev_tsi, curr_tsi = df['TSI'].shift(1), df['TSI']
+        def tsi_crossover(df, params, cache=None):
+            key = ('TSI',)
+            if cache is not None and key in cache:
+                tsi = cache[key]
+            else:
+                tsi = TechnicalIndicators.tsi(df['Close'])
+                if cache is not None: cache[key] = tsi
+                
+            prev_tsi, curr_tsi = tsi.shift(1), tsi
             long_sig = (prev_tsi < 0) & (curr_tsi > 0)
             short_sig = (prev_tsi > 0) & (curr_tsi < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def uo_strategy(df, params):
-            prev_uo, curr_uo = df['UO'].shift(1), df['UO']
+        def uo_strategy(df, params, cache=None):
+            key = ('UO',)
+            if cache is not None and key in cache:
+                uo = cache[key]
+            else:
+                uo = TechnicalIndicators.uo(df)
+                if cache is not None: cache[key] = uo
+                
+            prev_uo, curr_uo = uo.shift(1), uo
             long_sig = (prev_uo < 30) & (curr_uo > 30)
             short_sig = (prev_uo > 70) & (curr_uo < 70)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def keltner_channel_breakout(df, params):
+        def keltner_channel_breakout(df, params, cache=None):
+            key = ('KC',)
+            if cache is not None and key in cache:
+                upper, lower = cache[key]
+            else:
+                upper, lower = TechnicalIndicators.keltner_channels(df)
+                if cache is not None: cache[key] = (upper, lower)
+                
             prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_upper, curr_upper = df['KC_Upper'].shift(1), df['KC_Upper']
-            prev_lower, curr_lower = df['KC_Lower'].shift(1), df['KC_Lower']
+            prev_upper, curr_upper = upper.shift(1), upper
+            prev_lower, curr_lower = lower.shift(1), lower
             long_sig = (prev_close < prev_upper) & (curr_close > curr_upper)
             short_sig = (prev_close > prev_lower) & (curr_close < curr_lower)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def donchian_channel_breakout(df, params):
+        def donchian_channel_breakout(df, params, cache=None):
+            key = ('DC',)
+            if cache is not None and key in cache:
+                upper, lower = cache[key]
+            else:
+                upper, lower = TechnicalIndicators.donchian_channels(df)
+                if cache is not None: cache[key] = (upper, lower)
+                
             curr_close = df['Close']
-            prev_upper = df['DC_Upper'].shift(1)
-            prev_lower = df['DC_Lower'].shift(1)
+            prev_upper = upper.shift(1)
+            prev_lower = lower.shift(1)
             long_sig = curr_close >= prev_upper
             short_sig = curr_close <= prev_lower
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def chaikin_volatility_strategy(df, params):
-            prev_cv, curr_cv = df['Chaikin_Vol'].shift(1), df['Chaikin_Vol']
+        def chaikin_volatility_strategy(df, params, cache=None):
+            key = ('Chaikin_Vol',)
+            if cache is not None and key in cache:
+                cv = cache[key]
+            else:
+                cv = TechnicalIndicators.chaikin_volatility(df)
+                if cache is not None: cache[key] = cv
+                
+            prev_cv, curr_cv = cv.shift(1), cv
             long_sig = (prev_cv < 0) & (curr_cv > 0)
-            short_sig = pd.Series(False, index=df.index) # No short logic defined in original
+            short_sig = pd.Series(False, index=df.index)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def cmf_trend(df, params):
-            prev_cmf, curr_cmf = df['CMF'].shift(1), df['CMF']
+        def cmf_trend(df, params, cache=None):
+            key = ('CMF',)
+            if cache is not None and key in cache:
+                cmf = cache[key]
+            else:
+                cmf = TechnicalIndicators.cmf(df)
+                if cache is not None: cache[key] = cmf
+                
+            prev_cmf, curr_cmf = cmf.shift(1), cmf
             long_sig = (prev_cmf < 0) & (curr_cmf > 0)
             short_sig = (prev_cmf > 0) & (curr_cmf < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def vwap_crossover(df, params):
+        def vwap_crossover(df, params, cache=None):
+            key = ('VWAP',)
+            if cache is not None and key in cache:
+                vwap = cache[key]
+            else:
+                vwap = TechnicalIndicators.vwap(df)
+                if cache is not None: cache[key] = vwap
+                
             prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_vwap, curr_vwap = df['VWAP'].shift(1), df['VWAP']
+            prev_vwap, curr_vwap = vwap.shift(1), vwap
             long_sig = (prev_close < prev_vwap) & (curr_close > curr_vwap)
             short_sig = (prev_close > prev_vwap) & (curr_close < curr_vwap)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def ad_line_trend(df, params):
-            prev_ad, curr_ad = df['AD_Line'].shift(1), df['AD_Line']
+        def ad_line_trend(df, params, cache=None):
+            key = ('AD_Line',)
+            if cache is not None and key in cache:
+                ad = cache[key]
+            else:
+                ad = TechnicalIndicators.ad_line(df)
+                if cache is not None: cache[key] = ad
+                
+            prev_ad, curr_ad = ad.shift(1), ad
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_ad < curr_ad) & (prev_close > curr_close)
             short_sig = pd.Series(False, index=df.index)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def vortex_crossover(df, params):
-            prev_vp, curr_vp = df['Vortex_Plus'].shift(1), df['Vortex_Plus']
-            prev_vm, curr_vm = df['Vortex_Minus'].shift(1), df['Vortex_Minus']
+        def vortex_crossover(df, params, cache=None):
+            key = ('Vortex',)
+            if cache is not None and key in cache:
+                vp, vm = cache[key]
+            else:
+                vp, vm = TechnicalIndicators.vortex(df)
+                if cache is not None: cache[key] = (vp, vm)
+                
+            prev_vp, curr_vp = vp.shift(1), vp
+            prev_vm, curr_vm = vm.shift(1), vm
             long_sig = (prev_vp < prev_vm) & (curr_vp > curr_vm)
             short_sig = (prev_vp > prev_vm) & (curr_vp < curr_vm)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def choppiness_index_breakout(df, params):
-            prev_chop, curr_chop = df['Chop_Index'].shift(1), df['Chop_Index']
+        def choppiness_index_breakout(df, params, cache=None):
+            key = ('Chop',)
+            if cache is not None and key in cache:
+                chop = cache[key]
+            else:
+                chop = TechnicalIndicators.chop(df)
+                if cache is not None: cache[key] = chop
+                
+            prev_chop, curr_chop = chop.shift(1), chop
             long_sig = (prev_chop > 61.8) & (curr_chop < 61.8)
             short_sig = (prev_chop < 38.2) & (curr_chop > 38.2)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def kst_crossover(df, params):
-            prev_kst, curr_kst = df['KST'].shift(1), df['KST']
+        def kst_crossover(df, params, cache=None):
+            key = ('KST',)
+            if cache is not None and key in cache:
+                kst = cache[key]
+            else:
+                kst = TechnicalIndicators.kst(df)
+                if cache is not None: cache[key] = kst
+                
+            prev_kst, curr_kst = kst.shift(1), kst
             long_sig = (prev_kst < 0) & (curr_kst > 0)
             short_sig = (prev_kst > 0) & (curr_kst < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def coppock_curve(df, params):
-            prev_cop, curr_cop = df['Coppock'].shift(1), df['Coppock']
+        def coppock_curve(df, params, cache=None):
+            key = ('Coppock',)
+            if cache is not None and key in cache:
+                cop = cache[key]
+            else:
+                cop = TechnicalIndicators.coppock(df)
+                if cache is not None: cache[key] = cop
+                
+            prev_cop, curr_cop = cop.shift(1), cop
             long_sig = (prev_cop < 0) & (curr_cop > 0)
             short_sig = (prev_cop > 0) & (curr_cop < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def ichimoku_cloud_breakout(df, params):
+        def ichimoku_cloud_breakout(df, params, cache=None):
+            key = ('Ichimoku',)
+            if cache is not None and key in cache:
+                tenkan, kijun, span_a, span_b, chikou = cache[key]
+            else:
+                tenkan, kijun, span_a, span_b, chikou = TechnicalIndicators.ichimoku(df)
+                if cache is not None: cache[key] = (tenkan, kijun, span_a, span_b, chikou)
+                
             prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_span_a, curr_span_a = df['SpanA'].shift(1), df['SpanA']
-            curr_span_b = df['SpanB']
+            prev_span_a, curr_span_a = span_a.shift(1), span_a
+            curr_span_b = span_b
             long_sig = (prev_close < prev_span_a) & (curr_close > curr_span_a) & (curr_close > curr_span_b)
             short_sig = (prev_close > prev_span_a) & (curr_close < curr_span_a) & (curr_close < curr_span_b)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def awesome_oscillator(df, params):
-            prev_ao, curr_ao = df['AO'].shift(1), df['AO']
+        def awesome_oscillator(df, params, cache=None):
+            key = ('AO',)
+            if cache is not None and key in cache:
+                ao = cache[key]
+            else:
+                ao = TechnicalIndicators.ao(df)
+                if cache is not None: cache[key] = ao
+                
+            prev_ao, curr_ao = ao.shift(1), ao
             long_sig = (prev_ao < 0) & (curr_ao > 0)
             short_sig = (prev_ao > 0) & (curr_ao < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def ppo_crossover(df, params):
-            prev_ppo, curr_ppo = df['PPO'].shift(1), df['PPO']
+        def ppo_crossover(df, params, cache=None):
+            key = ('PPO',)
+            if cache is not None and key in cache:
+                ppo = cache[key]
+            else:
+                ppo = TechnicalIndicators.ppo(df)
+                if cache is not None: cache[key] = ppo
+                
+            prev_ppo, curr_ppo = ppo.shift(1), ppo
             long_sig = (prev_ppo < 0) & (curr_ppo > 0)
             short_sig = (prev_ppo > 0) & (curr_ppo < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def mass_index_reversal(df, params):
-            prev_mi, curr_mi = df['Mass_Index'].shift(1), df['Mass_Index']
+        def mass_index_reversal(df, params, cache=None):
+            key = ('Mass_Index',)
+            if cache is not None and key in cache:
+                mi = cache[key]
+            else:
+                mi = TechnicalIndicators.mass_index(df)
+                if cache is not None: cache[key] = mi
+                
+            prev_mi, curr_mi = mi.shift(1), mi
             long_sig = (prev_mi > 27) & (curr_mi < 27)
             short_sig = pd.Series(False, index=df.index)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def ulcer_index_safety(df, params):
-            prev_ui, curr_ui = df['Ulcer_Index'].shift(1), df['Ulcer_Index']
+        def ulcer_index_safety(df, params, cache=None):
+            key = ('Ulcer_Index',)
+            if cache is not None and key in cache:
+                ui = cache[key]
+            else:
+                ui = TechnicalIndicators.ulcer_index(df)
+                if cache is not None: cache[key] = ui
+                
+            prev_ui, curr_ui = ui.shift(1), ui
             long_sig = (prev_ui > 5) & (curr_ui < 5)
             short_sig = pd.Series(False, index=df.index)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def wma_trend(df, params):
-            prev_wma, curr_wma = df['WMA20'].shift(1), df['WMA20']
+        def wma_trend(df, params, cache=None):
+            p = params.get('period', 20)
+            key = ('WMA', p)
+            if cache is not None and key in cache:
+                wma = cache[key]
+            else:
+                wma = TechnicalIndicators.wma(df['Close'], p)
+                if cache is not None: cache[key] = wma
+                
+            prev_wma, curr_wma = wma.shift(1), wma
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_wma < curr_wma) & (prev_close > curr_wma)
             short_sig = (prev_wma > curr_wma) & (prev_close < curr_wma)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def trima_crossover(df, params):
+        def trima_crossover(df, params, cache=None):
+            p = params.get('period', 20)
+            key = ('TRIMA', p)
+            if cache is not None and key in cache:
+                trima = cache[key]
+            else:
+                trima = TechnicalIndicators.trima(df['Close'], p)
+                if cache is not None: cache[key] = trima
+                
             prev_close, curr_close = df['Close'].shift(1), df['Close']
-            prev_trima, curr_trima = df['TRIMA20'].shift(1), df['TRIMA20']
+            prev_trima, curr_trima = trima.shift(1), trima
             long_sig = (prev_close < prev_trima) & (curr_close > curr_trima)
             short_sig = (prev_close > prev_trima) & (curr_close < curr_trima)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def cmo_reversal(df, params):
-            prev_cmo, curr_cmo = df['CMO'].shift(1), df['CMO']
+        def cmo_reversal(df, params, cache=None):
+            key = ('CMO',)
+            if cache is not None and key in cache:
+                cmo = cache[key]
+            else:
+                cmo = TechnicalIndicators.cmo(df['Close'])
+                if cache is not None: cache[key] = cmo
+                
+            prev_cmo, curr_cmo = cmo.shift(1), cmo
             long_sig = (prev_cmo < -50) & (curr_cmo > -50)
             short_sig = (prev_cmo > 50) & (curr_cmo < 50)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def momentum_breakout(df, params):
-            prev_mom, curr_mom = df['MOM10'].shift(1), df['MOM10']
+        def momentum_breakout(df, params, cache=None):
+            p = params.get('period', 10)
+            key = ('MOM', p)
+            if cache is not None and key in cache:
+                mom = cache[key]
+            else:
+                mom = TechnicalIndicators.mom(df['Close'], p)
+                if cache is not None: cache[key] = mom
+                
+            prev_mom, curr_mom = mom.shift(1), mom
             long_sig = (prev_mom < 0) & (curr_mom > 0)
             short_sig = (prev_mom > 0) & (curr_mom < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def bop_trend(df, params):
-            prev_bop, curr_bop = df['BOP'].shift(1), df['BOP']
+        def bop_trend(df, params, cache=None):
+            key = ('BOP',)
+            if cache is not None and key in cache:
+                bop = cache[key]
+            else:
+                bop = TechnicalIndicators.bop(df)
+                if cache is not None: cache[key] = bop
+                
+            prev_bop, curr_bop = bop.shift(1), bop
             long_sig = (prev_bop < 0) & (curr_bop > 0)
             short_sig = (prev_bop > 0) & (curr_bop < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def trix_crossover(df, params):
-            prev_trix, curr_trix = df['TRIX'].shift(1), df['TRIX']
+        def trix_crossover(df, params, cache=None):
+            key = ('TRIX',)
+            if cache is not None and key in cache:
+                trix = cache[key]
+            else:
+                trix = TechnicalIndicators.trix(df['Close'])
+                if cache is not None: cache[key] = trix
+                
+            prev_trix, curr_trix = trix.shift(1), trix
             long_sig = (prev_trix < 0) & (curr_trix > 0)
             short_sig = (prev_trix > 0) & (curr_trix < 0)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def stochrsi_reversal(df, params):
-            prev_srsi, curr_srsi = df['StochRSI'].shift(1), df['StochRSI']
+        def stochrsi_reversal(df, params, cache=None):
+            key = ('StochRSI',)
+            if cache is not None and key in cache:
+                srsi = cache[key]
+            else:
+                srsi = TechnicalIndicators.stochrsi(df['Close'])
+                if cache is not None: cache[key] = srsi
+                
+            prev_srsi, curr_srsi = srsi.shift(1), srsi
             long_sig = (prev_srsi < 0.2) & (curr_srsi > 0.2)
             short_sig = (prev_srsi > 0.8) & (curr_srsi < 0.8)
             return long_sig.fillna(False), short_sig.fillna(False)
 
         @staticmethod
-        def tsf_trend(df, params):
-            prev_tsf, curr_tsf = df['TSF'].shift(1), df['TSF']
+        def tsf_trend(df, params, cache=None):
+            key = ('TSF',)
+            if cache is not None and key in cache:
+                tsf = cache[key]
+            else:
+                tsf = TechnicalIndicators.tsf(df['Close'])
+                if cache is not None: cache[key] = tsf
+                
+            prev_tsf, curr_tsf = tsf.shift(1), tsf
             prev_close, curr_close = df['Close'].shift(1), df['Close']
             long_sig = (prev_tsf < curr_tsf) & (prev_close > curr_tsf)
             short_sig = (prev_tsf > curr_tsf) & (prev_close < curr_tsf)
@@ -1886,7 +2125,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             continue
 
                     except Exception as e:
-                        # print(f"Strategy Error: {e}")
+                        print(f"Strategy Error in {strategy_type} with params {params}: {e}")
                         continue
 
                     # Apply Time Mask
