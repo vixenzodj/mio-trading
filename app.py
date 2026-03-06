@@ -909,7 +909,55 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     def calculate_advanced_metrics(trades_list):
         if not trades_list:
-            return 0, 0, 0, 0
+            return {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0}
+            
+        df_res = pd.DataFrame(trades_list)
+        
+        if 'pnl' in df_res.columns:
+            if 'type' in df_res.columns:
+                exits = df_res[df_res['type'].str.contains('EXIT', na=False)]
+            else:
+                exits = df_res
+                
+            if exits.empty:
+                return {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0}
+                
+            wins = exits[exits['pnl'] > 0]['pnl']
+            losses = exits[exits['pnl'] < 0]['pnl']
+            
+            total_trades = len(exits)
+            win_rate = (len(wins) / total_trades) * 100
+            loss_rate = 1 - (len(wins) / total_trades)
+            avg_win = wins.mean() if not wins.empty else 0
+            avg_loss = abs(losses.mean()) if not losses.empty else 0
+            
+            # Expectancy: (WR * AvgWin) - (LR * AvgLoss) -> usando le percentuali corrette
+            expectancy = ((win_rate / 100) * avg_win) - (loss_rate * avg_loss)
+            
+            gross_profit = wins.sum()
+            gross_loss = abs(losses.sum())
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+            
+            max_dd = 0
+            if 'balance' in df_res.columns:
+                equity_curve = df_res['balance'].tolist()
+                peak = equity_curve[0]
+                for eq in equity_curve:
+                    if eq > peak:
+                        peak = eq
+                    dd = (peak - eq) / peak if peak > 0 else 0
+                    if dd > max_dd:
+                        max_dd = dd
+            
+            # Restituisce il dizionario esatto che la UI si aspetta
+            return {
+                'expectancy': expectancy,
+                'profit_factor': profit_factor,
+                'max_drawdown': max_dd * 100,
+                'win_rate': win_rate
+            }
+            
+        return {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0}
             
         df_res = pd.DataFrame(trades_list)
         
