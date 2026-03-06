@@ -3151,7 +3151,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     st.subheader("Professional Risk Dashboard")
                     
                     if not trades:
-                        st.warning("No trades were executed. Cannot display risk metrics.")
+                        st.warning("Esegui il backtest per vedere le analisi avanzate")
                     else:
                         # Apply Friction
                         adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
@@ -3312,7 +3312,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     st.subheader("Professional Risk Dashboard")
                     
                     if not trades:
-                        st.warning("No trades were executed. Cannot display risk metrics.")
+                        st.warning("Esegui il backtest per vedere le analisi avanzate")
                     else:
                         # Apply Friction
                         adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
