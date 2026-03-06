@@ -2403,7 +2403,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     if exit_res:
                         pnl = (exit_price - position['entry']) * position['size'] if position['type'] == 'long' else (position['entry'] - exit_price) * position['size']
                         balance += pnl
-                        trades.append({'time': curr['datetime'], 'type': f'EXIT {exit_res}', 'price': exit_price, 'pnl': pnl, 'balance': balance})
+                        trades.append({'time': curr['datetime'], 'type': f'EXIT {exit_res}', 'price': exit_price, 'pnl': pnl, 'balance': balance, 'Logica': f"Exit: {exit_res}"})
                         position = None
                     equity_curve.append(balance)
                     continue
@@ -2428,6 +2428,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         entry_price = (curr['High'] + curr['Low']) / 2
                     
                     risk_amt = balance * (risk_per_trade / 100)
+                    logic_str = f"Trigger: {long_trigger if signal == 'long' else short_trigger} | RR: {risk_reward} -> Signal: {signal.upper()}"
                     
                     if signal == 'long':
                         sl = entry_price - sl_dist
@@ -2435,20 +2436,20 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         size = risk_amt / (entry_price - sl) if (entry_price - sl) > 0 else 0
                         if size > 0:
                             position = {'type': 'long', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': entry_price, 'pnl': 0, 'balance': balance})
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY LONG', 'price': entry_price, 'pnl': 0, 'balance': balance, 'Logica': logic_str})
                     else:
                         sl = entry_price + sl_dist
                         tp = entry_price - (sl_dist * risk_reward)
                         size = risk_amt / (sl - entry_price) if (sl - entry_price) > 0 else 0
                         if size > 0:
                             position = {'type': 'short', 'entry': entry_price, 'sl': sl, 'tp': tp, 'size': size}
-                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance})
+                            trades.append({'time': curr['datetime'], 'type': 'ENTRY SHORT', 'price': entry_price, 'pnl': 0, 'balance': balance, 'Logica': logic_str})
                 
                 equity_curve.append(balance)
                 
             return trades, equity_curve
 
-        def execute_trades_agnostic(self, signals, risk_reward, risk_per_trade, sl_atr_mult=1.5, start_time=None, end_time=None):
+        def execute_trades_agnostic(self, signals, risk_reward, risk_per_trade, sl_atr_mult=1.5, start_time=None, end_time=None, strategy_name="", params=None):
             # Prepare Data Arrays
             opens = self.df['Open'].values
             highs = self.df['High'].values
@@ -2571,6 +2572,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
                 # Record Trade
                 balance += pnl
+                logic_str = f"Trigger: {strategy_name} | Params: {params} -> Signal: {'LONG' if direction == 1 else 'SHORT'}"
                 trades.append({
                     'Entry Time': entry_time,
                     'Entry Price': entry_price,
@@ -2582,7 +2584,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     'Status': exit_type,
                     'type': 'ENTRY LONG' if direction == 1 else 'ENTRY SHORT',
                     'time': entry_time,
-                    'price': entry_price
+                    'price': entry_price,
+                    'Logica': logic_str
                 })
                 
                 if exit_idx < n_candles:
@@ -2616,7 +2619,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 st.error(f"Signal Gen Error: {e}")
                 return [], []
 
-            trades, equity, diag = self.execute_trades_agnostic(signal_series, risk_reward, risk_per_trade, sl_atr_mult, start_time, end_time)
+            trades, equity, diag = self.execute_trades_agnostic(signal_series, risk_reward, risk_per_trade, sl_atr_mult, start_time, end_time, strategy_name=strategy_type, params=params)
             
             if len(trades) == 0:
                 st.warning(f"⚠️ Nessuna operazione eseguita. Diagnostica: {diag}")
@@ -2793,26 +2796,60 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     class Visualizer:
         @staticmethod
         def plot_tradingview_clone(df, trades, engine_type="Hybrid", strategy_name=""):
-            fig = go.Figure()
+            from plotly.subplots import make_subplots
+            
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                vertical_spacing=0.03, row_heights=[0.7, 0.3])
             
             # Candlestick
             fig.add_trace(go.Candlestick(x=df['datetime'],
                             open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                            name='Price'))
+                            name='Price'), row=1, col=1)
             
             # Indicators based on Engine
             if engine_type == "Hybrid":
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['ZeroGamma'], name='Zero Gamma', line=dict(color='orange', width=1)))
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['CallWall'], name='Call Wall', line=dict(color='green', dash='dash')))
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['PutWall'], name='Put Wall', line=dict(color='red', dash='dash')))
+                if 'ZeroGamma' in df.columns: fig.add_trace(go.Scatter(x=df['datetime'], y=df['ZeroGamma'], name='Zero Gamma', line=dict(color='orange', width=1)), row=1, col=1)
+                if 'CallWall' in df.columns: fig.add_trace(go.Scatter(x=df['datetime'], y=df['CallWall'], name='Call Wall', line=dict(color='green', dash='dash')), row=1, col=1)
+                if 'PutWall' in df.columns: fig.add_trace(go.Scatter(x=df['datetime'], y=df['PutWall'], name='Put Wall', line=dict(color='red', dash='dash')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df['datetime'], y=[0]*len(df), showlegend=False, opacity=0), row=2, col=1)
             else:
                 # Technical Indicators Visualization
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA200'], name='SMA 200', line=dict(color='blue', width=2)))
-                fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA50'], name='SMA 50', line=dict(color='cyan', width=1)))
+                if 'SMA200' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA200'], name='SMA 200', line=dict(color='blue', width=2)), row=1, col=1)
+                if 'SMA50' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['SMA50'], name='SMA 50', line=dict(color='cyan', width=1)), row=1, col=1)
                 
-                if "Bollinger" in strategy_name:
-                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dot')))
-                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dot')))
+                if "Bollinger" in strategy_name and 'BB_Upper' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['BB_Lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+
+                # Row 2 Oscillators
+                if "RSI" in strategy_name and 'RSI' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['RSI'], name='RSI', line=dict(color='purple', width=1)), row=2, col=1)
+                    fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+                    fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+                elif "MACD" in strategy_name and 'MACD' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['MACD'], name='MACD', line=dict(color='blue', width=1)), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='orange', width=1)), row=2, col=1)
+                    fig.add_bar(x=df['datetime'], y=df['MACD'] - df['MACD_Signal'], name='Histogram', row=2, col=1)
+                elif "Stochastic" in strategy_name and 'Stoch_K' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['Stoch_K'], name='Stoch K', line=dict(color='blue', width=1)), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['Stoch_D'], name='Stoch D', line=dict(color='orange', width=1)), row=2, col=1)
+                    fig.add_hline(y=80, line_dash="dash", line_color="red", row=2, col=1)
+                    fig.add_hline(y=20, line_dash="dash", line_color="green", row=2, col=1)
+                elif "CCI" in strategy_name and 'CCI' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['CCI'], name='CCI', line=dict(color='purple', width=1)), row=2, col=1)
+                    fig.add_hline(y=100, line_dash="dash", line_color="red", row=2, col=1)
+                    fig.add_hline(y=-100, line_dash="dash", line_color="green", row=2, col=1)
+                elif "Williams" in strategy_name and 'WilliamsR' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['WilliamsR'], name='Williams %R', line=dict(color='purple', width=1)), row=2, col=1)
+                    fig.add_hline(y=-20, line_dash="dash", line_color="red", row=2, col=1)
+                    fig.add_hline(y=-80, line_dash="dash", line_color="green", row=2, col=1)
+                elif "Aroon" in strategy_name and 'Aroon_Up' in df.columns:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['Aroon_Up'], name='Aroon Up', line=dict(color='green', width=1)), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=df['Aroon_Down'], name='Aroon Down', line=dict(color='red', width=1)), row=2, col=1)
+                else:
+                    fig.add_trace(go.Scatter(x=df['datetime'], y=[0]*len(df), showlegend=False, opacity=0), row=2, col=1)
 
             # Signals
             buy_signals = [t for t in trades if 'ENTRY LONG' in t['type']]
@@ -2823,22 +2860,31 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     x=[t['time'] for t in buy_signals], 
                     y=[t['price'] for t in buy_signals],
                     mode='markers', marker=dict(symbol='triangle-up', size=12, color='green'), name='Buy Signal'
-                ))
+                ), row=1, col=1)
             if sell_signals:
                 fig.add_trace(go.Scatter(
                     x=[t['time'] for t in sell_signals], 
                     y=[t['price'] for t in sell_signals],
                     mode='markers', marker=dict(symbol='triangle-down', size=12, color='red'), name='Sell Signal'
-                ))
+                ), row=1, col=1)
 
             fig.update_layout(
                 title=f"TradingView Clone - {engine_type} Strategy ({strategy_name})",
                 template="plotly_dark",
                 xaxis_rangeslider_visible=False,
-                height=600,
-                yaxis_title="Price",
-                xaxis_title="Date"
+                xaxis2_rangeslider_visible=False,
+                height=800,
+                dragmode='pan',
+                hovermode='x unified',
+                margin=dict(l=50, r=50, t=50, b=50)
             )
+            
+            # Crosshairs
+            fig.update_xaxes(showspikes=True, spikecolor="gray", spikesnap="cursor", spikemode="across", row=1, col=1)
+            fig.update_yaxes(showspikes=True, spikecolor="gray", spikemode="across", row=1, col=1)
+            fig.update_xaxes(showspikes=True, spikecolor="gray", spikesnap="cursor", spikemode="across", row=2, col=1)
+            fig.update_yaxes(showspikes=True, spikecolor="gray", spikemode="across", row=2, col=1)
+            
             return fig
 
     engine = BacktestEngine(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), timeframe, initial_capital)
@@ -2907,9 +2953,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
                         
                         # Charts
-                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Hybrid"), use_container_width=True)
+                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Hybrid"), use_container_width=True, config={'scrollZoom': True, 'modeBarButtonsToAdd': ['drawline']})
                         st.line_chart(equity)
-                        st.dataframe(df_res)
+                        
+                        st.subheader("📝 Dettaglio Operazioni (Explainability)")
+                        st.data_editor(df_res, use_container_width=True, hide_index=True)
                     else:
                         st.warning("Nessuna operazione generata con le impostazioni correnti.")
         else:
@@ -3021,9 +3069,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         m4.metric("Saldo Finale", f"${equity[-1]:.2f}")
                         
                         # Charts
-                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True)
+                        st.plotly_chart(Visualizer.plot_tradingview_clone(engine.df, trades, "Technical", strategy_type), use_container_width=True, config={'scrollZoom': True, 'modeBarButtonsToAdd': ['drawline']})
                         st.line_chart(equity)
-                        st.dataframe(df_res)
+                        
+                        st.subheader("📝 Dettaglio Operazioni (Explainability)")
+                        st.data_editor(df_res, use_container_width=True, hide_index=True)
                     else:
                         st.warning("Nessuna operazione generata con le impostazioni correnti.")
             
