@@ -873,6 +873,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             except Exception as e:
                 st.error(f"Errore Yahoo Finance: {e}")
                 
+        if not df.empty:
+            # Memory Optimization: Convert all float64 to float32 immediately
+            cols = df.select_dtypes(include=['float64']).columns
+            if not cols.empty:
+                df[cols] = df[cols].astype('float32')
+            
+            # Ensure datetime is datetime object
+            if 'datetime' in df.columns:
+                df['datetime'] = pd.to_datetime(df['datetime'])
+            
+            # Sort by datetime
+            df.sort_values('datetime', inplace=True)
+            
+            # Drop initial NaNs if any
+            df.dropna(inplace=True)
+            
+            # Reset index
+            df.reset_index(drop=True, inplace=True)
+
         return df
 
     # Data Verification Step
@@ -1258,6 +1277,445 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 return slope * (period - 1) + intercept
             return series.rolling(period).apply(linreg_pred, raw=True)
 
+        @staticmethod
+        def process_indicator(data):
+            """Standardize input into clean float32 array"""
+            if isinstance(data, pd.Series):
+                return data.astype('float32').fillna(0).values
+            elif isinstance(data, pd.DataFrame):
+                return data.astype('float32').fillna(0).values
+            elif isinstance(data, np.ndarray):
+                return np.nan_to_num(data.astype('float32'))
+            return np.array(data, dtype='float32')
+
+        @classmethod
+        def get_registry(cls):
+            return {
+                "RSI": {"func": cls.rsi, "params": {"period": 14}, "input": "Close", "outputs": ["RSI"]},
+                "MACD": {"func": cls.macd, "params": {"fast": 12, "slow": 26, "signal": 9}, "input": "Close", "outputs": ["MACD", "MACD_Signal"]},
+                "Bollinger": {"func": cls.bollinger_bands, "params": {"period": 20, "std_dev": 2}, "input": "Close", "outputs": ["BB_Upper", "BB_Lower"]},
+                "ATR": {"func": cls.atr, "params": {"period": 14}, "input": "df", "outputs": ["ATR"]},
+                "SMA200": {"func": cls.sma, "params": {"period": 200}, "input": "Close", "outputs": ["SMA200"]},
+                "SMA50": {"func": cls.sma, "params": {"period": 50}, "input": "Close", "outputs": ["SMA50"]},
+                "EMA20": {"func": cls.ema, "params": {"period": 20}, "input": "Close", "outputs": ["EMA20"]},
+                "Stoch_K": {"func": cls.stochastic, "params": {"k_period": 14, "d_period": 3}, "input": "df", "outputs": ["Stoch_K", "Stoch_D"]},
+                "ADX": {"func": cls.adx, "params": {"period": 14}, "input": "df", "outputs": ["ADX"]},
+                "CCI": {"func": cls.cci, "params": {"period": 20}, "input": "df", "outputs": ["CCI"]},
+                "WilliamsR": {"func": cls.williams_r, "params": {"period": 14}, "input": "df", "outputs": ["WilliamsR"]},
+                "ROC": {"func": cls.roc, "params": {"period": 12}, "input": "Close", "outputs": ["ROC"]},
+                "OBV": {"func": cls.obv, "params": {}, "input": "df", "outputs": ["OBV"]},
+                "MFI": {"func": cls.mfi, "params": {"period": 14}, "input": "df", "outputs": ["MFI"]},
+                "HMA20": {"func": cls.hma, "params": {"period": 20}, "input": "Close", "outputs": ["HMA20"]},
+                "TEMA20": {"func": cls.tema, "params": {"period": 20}, "input": "Close", "outputs": ["TEMA20"]},
+                "DEMA20": {"func": cls.dema, "params": {"period": 20}, "input": "Close", "outputs": ["DEMA20"]},
+                "KAMA20": {"func": cls.kama, "params": {"period": 20}, "input": "Close", "outputs": ["KAMA20"]},
+                "Aroon": {"func": cls.aroon, "params": {"period": 25}, "input": "df", "outputs": ["Aroon_Up", "Aroon_Down"]},
+                "SuperTrend": {"func": cls.supertrend, "params": {"period": 10, "multiplier": 3}, "input": "df", "outputs": ["SuperTrend_Upper", "SuperTrend_Lower"]},
+                "Parabolic_SAR": {"func": cls.parabolic_sar, "params": {}, "input": "df", "outputs": ["Parabolic_SAR"]},
+                "TSI": {"func": cls.tsi, "params": {}, "input": "Close", "outputs": ["TSI"]},
+                "UO": {"func": cls.uo, "params": {}, "input": "df", "outputs": ["UO"]},
+                "KC": {"func": cls.keltner_channels, "params": {}, "input": "df", "outputs": ["KC_Upper", "KC_Lower"]},
+                "DC": {"func": cls.donchian_channels, "params": {}, "input": "df", "outputs": ["DC_Upper", "DC_Lower"]},
+                "Chaikin_Vol": {"func": cls.chaikin_volatility, "params": {}, "input": "df", "outputs": ["Chaikin_Vol"]},
+                "CMF": {"func": cls.cmf, "params": {}, "input": "df", "outputs": ["CMF"]},
+                "VWAP": {"func": cls.vwap, "params": {}, "input": "df", "outputs": ["VWAP"]},
+                "AD_Line": {"func": cls.ad_line, "params": {}, "input": "df", "outputs": ["AD_Line"]},
+                "Vortex": {"func": cls.vortex, "params": {}, "input": "df", "outputs": ["Vortex_Plus", "Vortex_Minus"]},
+                "Chop": {"func": cls.chop, "params": {}, "input": "df", "outputs": ["Chop_Index"]},
+                "KST": {"func": cls.kst, "params": {}, "input": "df", "outputs": ["KST"]},
+                "Coppock": {"func": cls.coppock, "params": {}, "input": "df", "outputs": ["Coppock"]},
+                "Ichimoku": {"func": cls.ichimoku, "params": {}, "input": "df", "outputs": ["Tenkan", "Kijun", "SpanA", "SpanB", "Chikou"]},
+                "AO": {"func": cls.ao, "params": {}, "input": "df", "outputs": ["AO"]},
+                "PPO": {"func": cls.ppo, "params": {}, "input": "df", "outputs": ["PPO"]},
+                "Mass_Index": {"func": cls.mass_index, "params": {}, "input": "df", "outputs": ["Mass_Index"]},
+                "Ulcer_Index": {"func": cls.ulcer_index, "params": {}, "input": "df", "outputs": ["Ulcer_Index"]},
+                "WMA20": {"func": cls.wma, "params": {"period": 20}, "input": "Close", "outputs": ["WMA20"]},
+                "TRIMA20": {"func": cls.trima, "params": {"period": 20}, "input": "Close", "outputs": ["TRIMA20"]},
+                "CMO": {"func": cls.cmo, "params": {}, "input": "Close", "outputs": ["CMO"]},
+                "MOM10": {"func": cls.mom, "params": {"period": 10}, "input": "Close", "outputs": ["MOM10"]},
+                "BOP": {"func": cls.bop, "params": {}, "input": "df", "outputs": ["BOP"]},
+                "TRIX": {"func": cls.trix, "params": {}, "input": "Close", "outputs": ["TRIX"]},
+                "StochRSI": {"func": cls.stochrsi, "params": {}, "input": "Close", "outputs": ["StochRSI"]},
+                "STDDEV": {"func": cls.stddev, "params": {}, "input": "Close", "outputs": ["STDDEV"]},
+                "TSF": {"func": cls.tsf, "params": {}, "input": "Close", "outputs": ["TSF"]},
+            }
+
+    class StrategyLib:
+        @staticmethod
+        def get_signal_func(strategy_name):
+            strategies = {
+                "RSI Mean Reversion": StrategyLib.rsi_mean_reversion,
+                "MACD Crossover": StrategyLib.macd_crossover,
+                "Bollinger Breakout": StrategyLib.bollinger_breakout,
+                "Golden/Death Cross": StrategyLib.golden_death_cross,
+                "Stochastic Oscillator": StrategyLib.stochastic_oscillator,
+                "CCI Momentum": StrategyLib.cci_momentum,
+                "Williams %R Reversal": StrategyLib.williams_r_reversal,
+                "HMA Trend": StrategyLib.hma_trend,
+                "TEMA Crossover": StrategyLib.tema_crossover,
+                "KAMA Trend": StrategyLib.kama_trend,
+                "Aroon Oscillator": StrategyLib.aroon_oscillator,
+                "SuperTrend Reversal": StrategyLib.supertrend_reversal,
+                "Parabolic SAR": StrategyLib.parabolic_sar_strategy,
+                "TSI Crossover": StrategyLib.tsi_crossover,
+                "UO Overbought/Oversold": StrategyLib.uo_strategy,
+                "Keltner Channel Breakout": StrategyLib.keltner_channel_breakout,
+                "Donchian Channel Breakout": StrategyLib.donchian_channel_breakout,
+                "Chaikin Volatility": StrategyLib.chaikin_volatility_strategy,
+                "CMF Trend": StrategyLib.cmf_trend,
+                "VWAP Crossover": StrategyLib.vwap_crossover,
+                "AD Line Trend": StrategyLib.ad_line_trend,
+                "Vortex Crossover": StrategyLib.vortex_crossover,
+                "Choppiness Index Breakout": StrategyLib.choppiness_index_breakout,
+                "KST Crossover": StrategyLib.kst_crossover,
+                "Coppock Curve": StrategyLib.coppock_curve,
+                "Ichimoku Cloud Breakout": StrategyLib.ichimoku_cloud_breakout,
+                "Awesome Oscillator": StrategyLib.awesome_oscillator,
+                "PPO Crossover": StrategyLib.ppo_crossover,
+                "Mass Index Reversal": StrategyLib.mass_index_reversal,
+                "Ulcer Index Safety": StrategyLib.ulcer_index_safety,
+                "WMA Trend": StrategyLib.wma_trend,
+                "TRIMA Crossover": StrategyLib.trima_crossover,
+                "CMO Reversal": StrategyLib.cmo_reversal,
+                "Momentum Breakout": StrategyLib.momentum_breakout,
+                "BOP Trend": StrategyLib.bop_trend,
+                "TRIX Crossover": StrategyLib.trix_crossover,
+                "StochRSI Reversal": StrategyLib.stochrsi_reversal,
+                "TSF Trend": StrategyLib.tsf_trend,
+            }
+            return strategies.get(strategy_name)
+
+        @staticmethod
+        def rsi_mean_reversion(df, params, cache=None):
+            p = params.get('period', 14)
+            if cache is not None and ('RSI', p) in cache:
+                rsi = cache[('RSI', p)]
+            else:
+                rsi = TechnicalIndicators.rsi(df['Close'], p)
+                if cache is not None: cache[('RSI', p)] = rsi
+            
+            prev = rsi.shift(1)
+            curr = rsi
+            os, ob = params.get('os', 30), params.get('ob', 70)
+            long_sig = (prev < os) & (curr > os)
+            short_sig = (prev > ob) & (curr < ob)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def macd_crossover(df, params, cache=None):
+            # MACD usually fixed 12,26,9 but could be optimized
+            # For now, assume standard or use params if provided
+            fast = params.get('fast', 12)
+            slow = params.get('slow', 26)
+            sig = params.get('signal', 9)
+            
+            key = ('MACD', fast, slow, sig)
+            if cache is not None and key in cache:
+                macd, signal_line = cache[key]
+            else:
+                macd, signal_line = TechnicalIndicators.macd(df['Close'], fast, slow, sig)
+                if cache is not None: cache[key] = (macd, signal_line)
+
+            prev_macd, curr_macd = macd.shift(1), macd
+            prev_sig, curr_sig = signal_line.shift(1), signal_line
+            long_sig = (prev_macd < prev_sig) & (curr_macd > curr_sig)
+            short_sig = (prev_macd > prev_sig) & (curr_macd < curr_sig)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def bollinger_breakout(df, params, cache=None):
+            p = params.get('period', 20)
+            std = params.get('std_dev', 2)
+            
+            key = ('BB', p, std)
+            if cache is not None and key in cache:
+                upper, lower = cache[key]
+            else:
+                upper, lower = TechnicalIndicators.bollinger_bands(df['Close'], p, std)
+                if cache is not None: cache[key] = (upper, lower)
+
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_lower, prev_upper = lower.shift(1), upper.shift(1)
+            long_sig = (prev_close < prev_lower) & (curr_close > prev_lower)
+            short_sig = (prev_close > prev_upper) & (curr_close < prev_upper)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def golden_death_cross(df, params, cache=None):
+            # Usually fixed 50/200
+            prev_sma50, curr_sma50 = df['SMA50'].shift(1), df['SMA50']
+            prev_sma200, curr_sma200 = df['SMA200'].shift(1), df['SMA200']
+            long_sig = (prev_sma50 < prev_sma200) & (curr_sma50 > curr_sma200)
+            short_sig = (prev_sma50 > prev_sma200) & (curr_sma50 < curr_sma200)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def stochastic_oscillator(df, params, cache=None):
+            k_p = params.get('k_period', 14)
+            d_p = params.get('d_period', 3)
+            
+            key = ('Stoch', k_p, d_p)
+            if cache is not None and key in cache:
+                k, d = cache[key]
+            else:
+                k, d = TechnicalIndicators.stochastic(df, k_p, d_p)
+                if cache is not None: cache[key] = (k, d)
+
+            prev_k, curr_k = k.shift(1), k
+            os, ob = params.get('os', 20), params.get('ob', 80)
+            long_sig = (prev_k < os) & (curr_k > os)
+            short_sig = (prev_k > ob) & (curr_k < ob)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def cci_momentum(df, params):
+            prev_cci, curr_cci = df['CCI'].shift(1), df['CCI']
+            long_sig = (prev_cci < -100) & (curr_cci > -100)
+            short_sig = (prev_cci > 100) & (curr_cci < 100)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def williams_r_reversal(df, params):
+            prev_wr, curr_wr = df['WilliamsR'].shift(1), df['WilliamsR']
+            long_sig = (prev_wr < -80) & (curr_wr > -80)
+            short_sig = (prev_wr > -20) & (curr_wr < -20)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def hma_trend(df, params):
+            prev_hma, curr_hma = df['HMA20'].shift(1), df['HMA20']
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            long_sig = (prev_hma < curr_hma) & (prev_close > curr_hma)
+            short_sig = (prev_hma > curr_hma) & (prev_close < curr_hma)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def tema_crossover(df, params):
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_tema, curr_tema = df['TEMA20'].shift(1), df['TEMA20']
+            long_sig = (prev_close < prev_tema) & (curr_close > curr_tema)
+            short_sig = (prev_close > prev_tema) & (curr_close < curr_tema)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def kama_trend(df, params):
+            prev_kama, curr_kama = df['KAMA20'].shift(1), df['KAMA20']
+            long_sig = prev_kama < curr_kama
+            short_sig = prev_kama > curr_kama
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def aroon_oscillator(df, params):
+            prev_up, curr_up = df['Aroon_Up'].shift(1), df['Aroon_Up']
+            prev_down, curr_down = df['Aroon_Down'].shift(1), df['Aroon_Down']
+            long_sig = (prev_up < prev_down) & (curr_up > curr_down)
+            short_sig = (prev_up > prev_down) & (curr_up < curr_down)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def supertrend_reversal(df, params):
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_upper, curr_upper = df['SuperTrend_Upper'].shift(1), df['SuperTrend_Upper']
+            prev_lower, curr_lower = df['SuperTrend_Lower'].shift(1), df['SuperTrend_Lower']
+            long_sig = (prev_close < prev_upper) & (curr_close > curr_lower)
+            short_sig = (prev_close > prev_lower) & (curr_close < curr_upper)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def parabolic_sar_strategy(df, params):
+            prev_sar, curr_sar = df['Parabolic_SAR'].shift(1), df['Parabolic_SAR']
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            long_sig = (prev_sar > prev_close) & (curr_sar < curr_close)
+            short_sig = (prev_sar < prev_close) & (curr_sar > curr_close)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def tsi_crossover(df, params):
+            prev_tsi, curr_tsi = df['TSI'].shift(1), df['TSI']
+            long_sig = (prev_tsi < 0) & (curr_tsi > 0)
+            short_sig = (prev_tsi > 0) & (curr_tsi < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def uo_strategy(df, params):
+            prev_uo, curr_uo = df['UO'].shift(1), df['UO']
+            long_sig = (prev_uo < 30) & (curr_uo > 30)
+            short_sig = (prev_uo > 70) & (curr_uo < 70)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def keltner_channel_breakout(df, params):
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_upper, curr_upper = df['KC_Upper'].shift(1), df['KC_Upper']
+            prev_lower, curr_lower = df['KC_Lower'].shift(1), df['KC_Lower']
+            long_sig = (prev_close < prev_upper) & (curr_close > curr_upper)
+            short_sig = (prev_close > prev_lower) & (curr_close < curr_lower)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def donchian_channel_breakout(df, params):
+            curr_close = df['Close']
+            prev_upper = df['DC_Upper'].shift(1)
+            prev_lower = df['DC_Lower'].shift(1)
+            long_sig = curr_close >= prev_upper
+            short_sig = curr_close <= prev_lower
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def chaikin_volatility_strategy(df, params):
+            prev_cv, curr_cv = df['Chaikin_Vol'].shift(1), df['Chaikin_Vol']
+            long_sig = (prev_cv < 0) & (curr_cv > 0)
+            short_sig = pd.Series(False, index=df.index) # No short logic defined in original
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def cmf_trend(df, params):
+            prev_cmf, curr_cmf = df['CMF'].shift(1), df['CMF']
+            long_sig = (prev_cmf < 0) & (curr_cmf > 0)
+            short_sig = (prev_cmf > 0) & (curr_cmf < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def vwap_crossover(df, params):
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_vwap, curr_vwap = df['VWAP'].shift(1), df['VWAP']
+            long_sig = (prev_close < prev_vwap) & (curr_close > curr_vwap)
+            short_sig = (prev_close > prev_vwap) & (curr_close < curr_vwap)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def ad_line_trend(df, params):
+            prev_ad, curr_ad = df['AD_Line'].shift(1), df['AD_Line']
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            long_sig = (prev_ad < curr_ad) & (prev_close > curr_close)
+            short_sig = pd.Series(False, index=df.index)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def vortex_crossover(df, params):
+            prev_vp, curr_vp = df['Vortex_Plus'].shift(1), df['Vortex_Plus']
+            prev_vm, curr_vm = df['Vortex_Minus'].shift(1), df['Vortex_Minus']
+            long_sig = (prev_vp < prev_vm) & (curr_vp > curr_vm)
+            short_sig = (prev_vp > prev_vm) & (curr_vp < curr_vm)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def choppiness_index_breakout(df, params):
+            prev_chop, curr_chop = df['Chop_Index'].shift(1), df['Chop_Index']
+            long_sig = (prev_chop > 61.8) & (curr_chop < 61.8)
+            short_sig = (prev_chop < 38.2) & (curr_chop > 38.2)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def kst_crossover(df, params):
+            prev_kst, curr_kst = df['KST'].shift(1), df['KST']
+            long_sig = (prev_kst < 0) & (curr_kst > 0)
+            short_sig = (prev_kst > 0) & (curr_kst < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def coppock_curve(df, params):
+            prev_cop, curr_cop = df['Coppock'].shift(1), df['Coppock']
+            long_sig = (prev_cop < 0) & (curr_cop > 0)
+            short_sig = (prev_cop > 0) & (curr_cop < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def ichimoku_cloud_breakout(df, params):
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_span_a, curr_span_a = df['SpanA'].shift(1), df['SpanA']
+            curr_span_b = df['SpanB']
+            long_sig = (prev_close < prev_span_a) & (curr_close > curr_span_a) & (curr_close > curr_span_b)
+            short_sig = (prev_close > prev_span_a) & (curr_close < curr_span_a) & (curr_close < curr_span_b)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def awesome_oscillator(df, params):
+            prev_ao, curr_ao = df['AO'].shift(1), df['AO']
+            long_sig = (prev_ao < 0) & (curr_ao > 0)
+            short_sig = (prev_ao > 0) & (curr_ao < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def ppo_crossover(df, params):
+            prev_ppo, curr_ppo = df['PPO'].shift(1), df['PPO']
+            long_sig = (prev_ppo < 0) & (curr_ppo > 0)
+            short_sig = (prev_ppo > 0) & (curr_ppo < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def mass_index_reversal(df, params):
+            prev_mi, curr_mi = df['Mass_Index'].shift(1), df['Mass_Index']
+            long_sig = (prev_mi > 27) & (curr_mi < 27)
+            short_sig = pd.Series(False, index=df.index)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def ulcer_index_safety(df, params):
+            prev_ui, curr_ui = df['Ulcer_Index'].shift(1), df['Ulcer_Index']
+            long_sig = (prev_ui > 5) & (curr_ui < 5)
+            short_sig = pd.Series(False, index=df.index)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def wma_trend(df, params):
+            prev_wma, curr_wma = df['WMA20'].shift(1), df['WMA20']
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            long_sig = (prev_wma < curr_wma) & (prev_close > curr_wma)
+            short_sig = (prev_wma > curr_wma) & (prev_close < curr_wma)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def trima_crossover(df, params):
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            prev_trima, curr_trima = df['TRIMA20'].shift(1), df['TRIMA20']
+            long_sig = (prev_close < prev_trima) & (curr_close > curr_trima)
+            short_sig = (prev_close > prev_trima) & (curr_close < curr_trima)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def cmo_reversal(df, params):
+            prev_cmo, curr_cmo = df['CMO'].shift(1), df['CMO']
+            long_sig = (prev_cmo < -50) & (curr_cmo > -50)
+            short_sig = (prev_cmo > 50) & (curr_cmo < 50)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def momentum_breakout(df, params):
+            prev_mom, curr_mom = df['MOM10'].shift(1), df['MOM10']
+            long_sig = (prev_mom < 0) & (curr_mom > 0)
+            short_sig = (prev_mom > 0) & (curr_mom < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def bop_trend(df, params):
+            prev_bop, curr_bop = df['BOP'].shift(1), df['BOP']
+            long_sig = (prev_bop < 0) & (curr_bop > 0)
+            short_sig = (prev_bop > 0) & (curr_bop < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def trix_crossover(df, params):
+            prev_trix, curr_trix = df['TRIX'].shift(1), df['TRIX']
+            long_sig = (prev_trix < 0) & (curr_trix > 0)
+            short_sig = (prev_trix > 0) & (curr_trix < 0)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def stochrsi_reversal(df, params):
+            prev_srsi, curr_srsi = df['StochRSI'].shift(1), df['StochRSI']
+            long_sig = (prev_srsi < 0.2) & (curr_srsi > 0.2)
+            short_sig = (prev_srsi > 0.8) & (curr_srsi < 0.8)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
+        @staticmethod
+        def tsf_trend(df, params):
+            prev_tsf, curr_tsf = df['TSF'].shift(1), df['TSF']
+            prev_close, curr_close = df['Close'].shift(1), df['Close']
+            long_sig = (prev_tsf < curr_tsf) & (prev_close > curr_tsf)
+            short_sig = (prev_tsf > curr_tsf) & (prev_close < curr_tsf)
+            return long_sig.fillna(False), short_sig.fillna(False)
+
     class BacktestEngine:
         def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
             self.ticker = ticker
@@ -1273,65 +1731,41 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         def add_technical_indicators(self):
             if self.df.empty: return
-            # Core Indicators
-            self.df['RSI'] = TechnicalIndicators.rsi(self.df['Close'])
-            self.df['MACD'], self.df['MACD_Signal'] = TechnicalIndicators.macd(self.df['Close'])
-            self.df['BB_Upper'], self.df['BB_Lower'] = TechnicalIndicators.bollinger_bands(self.df['Close'])
-            self.df['ATR'] = TechnicalIndicators.atr(self.df)
-            self.df['SMA200'] = TechnicalIndicators.sma(self.df['Close'], 200)
-            self.df['SMA50'] = TechnicalIndicators.sma(self.df['Close'], 50)
-            self.df['EMA20'] = TechnicalIndicators.ema(self.df['Close'], 20)
-            self.df['Stoch_K'], self.df['Stoch_D'] = TechnicalIndicators.stochastic(self.df)
-            self.df['ADX'] = TechnicalIndicators.adx(self.df)
-            self.df['CCI'] = TechnicalIndicators.cci(self.df)
-            self.df['WilliamsR'] = TechnicalIndicators.williams_r(self.df)
-            self.df['ROC'] = TechnicalIndicators.roc(self.df['Close'])
-            self.df['OBV'] = TechnicalIndicators.obv(self.df)
-            self.df['MFI'] = TechnicalIndicators.mfi(self.df)
             
-            # New Indicators
-            self.df['HMA20'] = TechnicalIndicators.hma(self.df['Close'], 20)
-            self.df['TEMA20'] = TechnicalIndicators.tema(self.df['Close'], 20)
-            self.df['DEMA20'] = TechnicalIndicators.dema(self.df['Close'], 20)
-            self.df['KAMA20'] = TechnicalIndicators.kama(self.df['Close'], 20)
-            self.df['Aroon_Up'], self.df['Aroon_Down'] = TechnicalIndicators.aroon(self.df)
-            self.df['SuperTrend_Upper'], self.df['SuperTrend_Lower'] = TechnicalIndicators.supertrend(self.df)
-            self.df['Parabolic_SAR'] = TechnicalIndicators.parabolic_sar(self.df)
-            self.df['TSI'] = TechnicalIndicators.tsi(self.df['Close'])
-            self.df['UO'] = TechnicalIndicators.uo(self.df)
-            self.df['KC_Upper'], self.df['KC_Lower'] = TechnicalIndicators.keltner_channels(self.df)
-            self.df['DC_Upper'], self.df['DC_Lower'] = TechnicalIndicators.donchian_channels(self.df)
-            self.df['Chaikin_Vol'] = TechnicalIndicators.chaikin_volatility(self.df)
-            self.df['CMF'] = TechnicalIndicators.cmf(self.df)
-            self.df['VWAP'] = TechnicalIndicators.vwap(self.df)
-            self.df['AD_Line'] = TechnicalIndicators.ad_line(self.df)
-
-            # New Indicators (Batch 2)
-            self.df['Vortex_Plus'], self.df['Vortex_Minus'] = TechnicalIndicators.vortex(self.df)
-            self.df['Chop_Index'] = TechnicalIndicators.chop(self.df)
-            self.df['KST'] = TechnicalIndicators.kst(self.df)
-            self.df['Coppock'] = TechnicalIndicators.coppock(self.df)
-            self.df['Tenkan'], self.df['Kijun'], self.df['SpanA'], self.df['SpanB'], self.df['Chikou'] = TechnicalIndicators.ichimoku(self.df)
-            self.df['AO'] = TechnicalIndicators.ao(self.df)
-            self.df['PPO'] = TechnicalIndicators.ppo(self.df)
-            self.df['Mass_Index'] = TechnicalIndicators.mass_index(self.df)
-            self.df['Ulcer_Index'] = TechnicalIndicators.ulcer_index(self.df)
-
-            # New Indicators (Batch 3)
-            self.df['WMA20'] = TechnicalIndicators.wma(self.df['Close'], 20)
-            self.df['TRIMA20'] = TechnicalIndicators.trima(self.df['Close'], 20)
-            self.df['CMO'] = TechnicalIndicators.cmo(self.df['Close'])
-            self.df['MOM10'] = TechnicalIndicators.mom(self.df['Close'], 10)
-            self.df['BOP'] = TechnicalIndicators.bop(self.df)
-            self.df['TRIX'] = TechnicalIndicators.trix(self.df['Close'])
-            self.df['StochRSI'] = TechnicalIndicators.stochrsi(self.df['Close'])
-            self.df['STDDEV'] = TechnicalIndicators.stddev(self.df['Close'])
-            self.df['TSF'] = TechnicalIndicators.tsf(self.df['Close'])
+            registry = TechnicalIndicators.get_registry()
+            
+            for name, config in registry.items():
+                try:
+                    # Prepare Input
+                    if config['input'] == 'df':
+                        data = self.df
+                    else:
+                        data = self.df[config['input']]
+                    
+                    # Execute Calculation
+                    result = config['func'](data, **config['params'])
+                    
+                    # Handle Outputs
+                    if isinstance(result, tuple):
+                        for i, out_col in enumerate(config['outputs']):
+                            if i < len(result):
+                                self.df[out_col] = result[i]
+                    else:
+                        if config['outputs']:
+                            self.df[config['outputs'][0]] = result
+                            
+                except Exception as e:
+                    pass
 
             # Memory Optimization: Convert all float64 to float32
             # This is crucial for 50k+ candles on Streamlit Cloud
             cols = self.df.select_dtypes(include=['float64']).columns
-            self.df[cols] = self.df[cols].astype('float32')
+            if not cols.empty:
+                self.df[cols] = self.df[cols].astype('float32')
+            
+            # Data Integrity: Drop NaN values created by indicators (warm-up period)
+            self.df.dropna(inplace=True)
+            self.df.reset_index(drop=True, inplace=True)
 
         def add_gex_levels(self, sensitivity=1.5):
             if self.df.empty: return
@@ -1425,80 +1859,32 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     signals = np.zeros(n_candles, dtype=np.int8) # 0: None, 1: Long, -1: Short
 
                     try:
-                        # --- STRATEGY LOGIC MAPPING ---
-                        # We implement the most common ones. For others, we need generic logic.
-                        
-                        if strategy_type == "RSI Mean Reversion":
-                            p = params.get('period', 14)
-                            # Check Cache
-                            cache_key = ('RSI', p)
-                            if cache_key in indicator_cache:
-                                rsi = indicator_cache[cache_key]
+                        # Use StrategyLib for signal generation
+                        signal_func = StrategyLib.get_signal_func(strategy_type)
+                        if signal_func:
+                            # Pass cache to support dynamic calculation
+                            # Some strategies might not accept cache, so we handle TypeError if needed?
+                            # But we control StrategyLib, so we can ensure they accept **kwargs or cache.
+                            # For now, updated strategies accept cache. Others might fail if we pass it?
+                            # Let's inspect StrategyLib.
+                            # The ones I updated accept cache. The others I didn't update (in this tool call) don't.
+                            # So I should inspect the signature or update ALL to accept **kwargs.
+                            # Or simpler: just try passing cache, if fails, pass without.
+                            import inspect
+                            sig_params = inspect.signature(signal_func).parameters
+                            if 'cache' in sig_params:
+                                long_sig, short_sig = signal_func(self.df, params, cache=indicator_cache)
                             else:
-                                # Calculate RSI Vectorized
-                                delta = np.diff(closes, prepend=closes[0])
-                                gain = np.where(delta > 0, delta, 0)
-                                loss = np.where(delta < 0, -delta, 0)
-                                avg_gain = pd.Series(gain).ewm(alpha=1/p, adjust=False).mean().values
-                                avg_loss = pd.Series(loss).ewm(alpha=1/p, adjust=False).mean().values
-                                rs = np.divide(avg_gain, avg_loss, out=np.zeros_like(avg_gain), where=avg_loss!=0)
-                                rsi = 100 - (100 / (1 + rs))
-                                indicator_cache[cache_key] = rsi
+                                long_sig, short_sig = signal_func(self.df, params)
                             
-                            os, ob = params.get('os', 30), params.get('ob', 70)
-                            # Long: Cross OS Up
-                            signals[1:] = np.where((rsi[:-1] < os) & (rsi[1:] > os), 1, signals[1:])
-                            # Short: Cross OB Down
-                            signals[1:] = np.where((rsi[:-1] > ob) & (rsi[1:] < ob), -1, signals[1:])
+                            signals[long_sig] = 1
+                            signals[short_sig] = -1
+                        else:
+                            # Fallback or continue
+                            continue
 
-                        elif strategy_type == "Stochastic Oscillator":
-                            k_p = params.get('k_period', 14)
-                            cache_key = ('Stoch', k_p)
-                            if cache_key in indicator_cache:
-                                k = indicator_cache[cache_key]
-                            else:
-                                # Fast Stoch K
-                                low_min = pd.Series(lows).rolling(k_p).min().values
-                                high_max = pd.Series(highs).rolling(k_p).max().values
-                                k = 100 * ((closes - low_min) / (high_max - low_min))
-                                indicator_cache[cache_key] = k
-                            
-                            os, ob = params.get('os', 20), params.get('ob', 80)
-                            signals[1:] = np.where((k[:-1] < os) & (k[1:] > os), 1, signals[1:])
-                            signals[1:] = np.where((k[:-1] > ob) & (k[1:] < ob), -1, signals[1:])
-
-                        elif strategy_type == "Bollinger Breakout":
-                            p, std_dev = params.get('period', 20), params.get('std_dev', 2.0)
-                            cache_key = ('BB', p, std_dev)
-                            if cache_key in indicator_cache:
-                                upper, lower = indicator_cache[cache_key]
-                            else:
-                                sma = pd.Series(closes).rolling(p).mean().values
-                                std = pd.Series(closes).rolling(p).std().values
-                                upper = sma + (std * std_dev)
-                                lower = sma - (std * std_dev)
-                                indicator_cache[cache_key] = (upper, lower)
-
-                            # Reversal Strategy as per original code
-                            signals[1:] = np.where((closes[:-1] < lower[:-1]) & (closes[1:] > lower[:-1]), 1, signals[1:])
-                            signals[1:] = np.where((closes[:-1] > upper[:-1]) & (closes[1:] < upper[:-1]), -1, signals[1:])
-
-                        elif strategy_type == "MACD Crossover":
-                            # Standard MACD (12, 26, 9) usually, but params might vary?
-                            # Assuming fixed params for MACD if not in ranges, or use defaults
-                            # Optimization usually targets SL/TP or other filters for MACD
-                            # Let's calculate MACD if not present
-                            if 'MACD' in self.df.columns:
-                                macd = self.df['MACD'].values
-                                signal_line = self.df['MACD_Signal'].values
-                                signals[1:] = np.where((macd[:-1] < signal_line[:-1]) & (macd[1:] > signal_line[1:]), 1, signals[1:])
-                                signals[1:] = np.where((macd[:-1] > signal_line[:-1]) & (macd[1:] < signal_line[1:]), -1, signals[1:])
-
-                        # ... (Add other strategies as needed) ...
-                        # For now, we handle the main ones requested. 
-                        # If strategy is not matched, signals remains all zeros, loop continues safely.
-
-                    except Exception:
+                    except Exception as e:
+                        # print(f"Strategy Error: {e}")
                         continue
 
                     # Apply Time Mask
@@ -1761,7 +2147,179 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
             return trades, equity_curve
 
+        def execute_trades_agnostic(self, signals, risk_reward, risk_per_trade, sl_atr_mult=1.5, start_time=None, end_time=None):
+            # Prepare Data Arrays
+            opens = self.df['Open'].values
+            highs = self.df['High'].values
+            lows = self.df['Low'].values
+            closes = self.df['Close'].values
+            datetimes = self.df['datetime'].values
+            atrs = self.df['ATR'].values if 'ATR' in self.df.columns else np.zeros_like(closes)
+            
+            n_candles = len(closes)
+            trades = []
+            
+            # Equity Curve Initialization
+            equity_curve = np.full(n_candles, self.initial_capital, dtype=np.float32)
+            balance = self.initial_capital
+            
+            last_exit_idx = -1
+            
+            # Diagnostics
+            diag = {
+                'total_signals': 0,
+                'skipped_isolation': 0,
+                'skipped_time': 0,
+                'skipped_invalid_atr': 0,
+                'skipped_size': 0,
+                'executed': 0
+            }
+            
+            # Get indices where signal is not 0 (up to n-2)
+            sig_indices = np.where(signals[:-1] != 0)[0]
+            diag['total_signals'] = len(sig_indices)
+            
+            for idx in sig_indices:
+                entry_idx = idx + 1
+                
+                # Trade Isolation
+                if entry_idx <= last_exit_idx:
+                    diag['skipped_isolation'] += 1
+                    continue
+                
+                # Time Check
+                if start_time and end_time:
+                    dt = pd.Timestamp(datetimes[idx])
+                    t = dt.time()
+                    if not (start_time <= t <= end_time):
+                        diag['skipped_time'] += 1
+                        continue
+
+                direction = signals[idx] # 1 or -1
+                entry_price = opens[entry_idx]
+                entry_time = datetimes[entry_idx]
+                atr_val = atrs[idx]
+                
+                if np.isnan(atr_val) or atr_val == 0: 
+                    diag['skipped_invalid_atr'] += 1
+                    continue
+                
+                sl_dist = atr_val * sl_atr_mult
+                
+                # Position Sizing
+                risk_amount = balance * (risk_per_trade / 100.0)
+                size = risk_amount / sl_dist if sl_dist > 0 else 0
+                
+                if size <= 0: 
+                    diag['skipped_size'] += 1
+                    continue
+
+                if direction == 1: # Long
+                    sl = entry_price - sl_dist
+                    tp = entry_price + (sl_dist * risk_reward)
+                    
+                    future_lows = lows[entry_idx:]
+                    future_highs = highs[entry_idx:]
+                    
+                    sl_hit_mask = future_lows <= sl
+                    tp_hit_mask = future_highs >= tp
+                    
+                    first_sl = np.argmax(sl_hit_mask) if sl_hit_mask.any() else n_candles
+                    first_tp = np.argmax(tp_hit_mask) if tp_hit_mask.any() else n_candles
+                    
+                    if first_sl == n_candles and first_tp == n_candles:
+                        last_exit_idx = n_candles
+                        continue
+                    elif first_sl <= first_tp:
+                        exit_idx = entry_idx + first_sl
+                        exit_price = sl
+                        exit_type = "SL"
+                    else:
+                        exit_idx = entry_idx + first_tp
+                        exit_price = tp
+                        exit_type = "TP"
+                        
+                    pnl = (exit_price - entry_price) * size
+                        
+                else: # Short
+                    sl = entry_price + sl_dist
+                    tp = entry_price - (sl_dist * risk_reward)
+                    
+                    future_lows = lows[entry_idx:]
+                    future_highs = highs[entry_idx:]
+                    
+                    sl_hit_mask = future_highs >= sl
+                    tp_hit_mask = future_lows <= tp
+                    
+                    first_sl = np.argmax(sl_hit_mask) if sl_hit_mask.any() else n_candles
+                    first_tp = np.argmax(tp_hit_mask) if tp_hit_mask.any() else n_candles
+                    
+                    if first_sl == n_candles and first_tp == n_candles:
+                        last_exit_idx = n_candles
+                        continue
+                    elif first_sl <= first_tp:
+                        exit_idx = entry_idx + first_sl
+                        exit_price = sl
+                        exit_type = "SL"
+                    else:
+                        exit_idx = entry_idx + first_tp
+                        exit_price = tp
+                        exit_type = "TP"
+                        
+                    pnl = (entry_price - exit_price) * size
+
+                # Record Trade
+                balance += pnl
+                trades.append({
+                    'Entry Time': entry_time,
+                    'Entry Price': entry_price,
+                    'Exit Time': datetimes[exit_idx],
+                    'Exit Price': exit_price,
+                    'pnl': pnl,
+                    'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
+                    'Type': 'long' if direction == 1 else 'short',
+                    'Status': exit_type
+                })
+                
+                if exit_idx < n_candles:
+                    equity_curve[exit_idx:] = balance
+                
+                last_exit_idx = exit_idx
+                diag['executed'] += 1
+
+            return trades, equity_curve, diag
+
         def run_technical_strategy(self, strategy_type, params, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard", sl_atr_mult=1.5):
+            if 'ATR' not in self.df.columns:
+                self.add_technical_indicators()
+            
+            n_candles = len(self.df)
+            signal_series = np.zeros(n_candles, dtype=np.int8)
+            
+            try:
+                signal_func = StrategyLib.get_signal_func(strategy_type)
+                if signal_func:
+                    import inspect
+                    sig_params = inspect.signature(signal_func).parameters
+                    if 'cache' in sig_params:
+                        long_sig, short_sig = signal_func(self.df, params, cache={})
+                    else:
+                        long_sig, short_sig = signal_func(self.df, params)
+                    
+                    signal_series[long_sig] = 1
+                    signal_series[short_sig] = -1
+            except Exception as e:
+                st.error(f"Signal Gen Error: {e}")
+                return [], []
+
+            trades, equity, diag = self.execute_trades_agnostic(signal_series, risk_reward, risk_per_trade, sl_atr_mult, start_time, end_time)
+            
+            if len(trades) == 0:
+                st.warning(f"⚠️ Nessuna operazione eseguita. Diagnostica: {diag}")
+                
+            return trades, equity
+
+        def run_technical_strategy_old(self, strategy_type, params, risk_reward, risk_per_trade, start_time=None, end_time=None, entry_mode="Standard", sl_atr_mult=1.5):
             trades = []
             balance = self.initial_capital
             equity_curve = [balance] * len(self.df)
@@ -1775,6 +2333,24 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             
             position = None # {type, entry_price, sl, tp, size, entry_time}
             
+            # --- Pre-calculate Signals ---
+            signal_series = np.zeros(n_candles, dtype=np.int8)
+            try:
+                signal_func = StrategyLib.get_signal_func(strategy_type)
+                if signal_func:
+                    # Check if accepts cache
+                    import inspect
+                    sig_params = inspect.signature(signal_func).parameters
+                    if 'cache' in sig_params:
+                        long_sig, short_sig = signal_func(self.df, params, cache={})
+                    else:
+                        long_sig, short_sig = signal_func(self.df, params)
+                    
+                    signal_series[long_sig] = 1
+                    signal_series[short_sig] = -1
+            except Exception as e:
+                print(f"Signal Gen Error: {e}")
+
             # Loop from 1 to n (need prev candle for signal)
             for i in range(1, n_candles):
                 prev = records[i-1]
@@ -1832,43 +2408,17 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         continue # Isolation: No new entry on same bar as exit
                 
                 # 2. Check for New Entry (if no position)
-                # Signal at Close of T (prev), Entry at Open of T+1 (curr)
                 if position is None:
                     # Time Schedule Check (based on Signal Time)
                     if start_time and end_time:
                         t_obj = prev['datetime'].time()
                         if not (start_time <= t_obj <= end_time):
                             continue
-                            
-                    signal = None
-                    pprev = records[i-2] if i >= 2 else None
                     
-                    try:
-                        # Logic must match Optimizer's vectorized logic
-                        if strategy_type == "RSI Mean Reversion":
-                            # Long: prev < os and curr > os (in optimizer terms: rsi[t-1] < os & rsi[t] > os)
-                            # Here 'prev' is T, 'pprev' is T-1.
-                            if pprev and pprev['RSI'] < params['os'] and prev['RSI'] > params['os']: signal = 'long'
-                            elif pprev and pprev['RSI'] > params['ob'] and prev['RSI'] < params['ob']: signal = 'short'
-                                
-                        elif strategy_type == "Stochastic Oscillator":
-                            if pprev and pprev['Stoch_K'] < params['os'] and prev['Stoch_K'] > params['os']: signal = 'long'
-                            elif pprev and pprev['Stoch_K'] > params['ob'] and prev['Stoch_K'] < params['ob']: signal = 'short'
-                                
-                        elif strategy_type == "Bollinger Breakout":
-                            if pprev and pprev['Close'] < pprev['BB_Lower'] and prev['Close'] > prev['BB_Lower']: signal = 'long'
-                            elif pprev and pprev['Close'] > pprev['BB_Upper'] and prev['Close'] < prev['BB_Upper']: signal = 'short'
-                                
-                        elif strategy_type == "MACD Crossover":
-                            if pprev and pprev['MACD'] < pprev['MACD_Signal'] and prev['MACD'] > prev['MACD_Signal']: signal = 'long'
-                            elif pprev and pprev['MACD'] > pprev['MACD_Signal'] and prev['MACD'] < prev['MACD_Signal']: signal = 'short'
-                        
-                        # Fallback for other strategies (Simple crossover logic)
-                        # If strategy not explicitly handled above, we skip or add generic logic if needed.
-                        # For now, we assume the main ones are covered.
-                        
-                    except KeyError:
-                        pass
+                    # Check Pre-calculated Signal (Signal at T (prev) -> Entry at T+1 (curr))
+                    # signal_series[i-1] corresponds to signal generated at prev candle
+                    sig_val = signal_series[i-1]
+                    signal = 'long' if sig_val == 1 else 'short' if sig_val == -1 else None
                         
                     if signal:
                         # Entry Setup
@@ -1917,6 +2467,24 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                 else: pnl = (entry_price - imm_price) * size
                                     
                                 balance += pnl
+                                equity_curve[i] = balance
+                                
+                                trades.append({
+                                    'Entry Time': curr['datetime'],
+                                    'Entry Price': entry_price,
+                                    'Exit Time': curr['datetime'],
+                                    'Exit Price': imm_price,
+                                    'pnl': pnl,
+                                    'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
+                                    'Type': signal,
+                                    'Status': imm_exit,
+                                    'type': f"ENTRY {signal.upper()}",
+                                    'time': curr['datetime'],
+                                    'price': entry_price
+                                })
+                                position = None
+                            
+            return trades, equity_curve
                                 equity_curve[i] = balance
                                 
                                 trades.append({
@@ -2143,6 +2711,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     # Results
                     st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
                     
+                    # Optimization Feedback: Actual Processed Range
+                    if not engine.df.empty:
+                        min_date = engine.df['datetime'].min()
+                        max_date = engine.df['datetime'].max()
+                        st.caption(f"📅 Range Effettivo Processato: {min_date} -> {max_date} ({len(engine.df)} candele)")
+                    
                     if trades:
                         df_res = pd.DataFrame(trades)
                         win_rate = len(df_res[df_res['pnl'] > 0]) / len(df_res) * 100
@@ -2171,8 +2745,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 engine.add_technical_indicators() # Ensure ATR and other base indicators are present
                 opt_df = engine.df.copy()
                 if len(opt_df) > 10000:
-                    status_text.text(f"⚠️ Dati troppo estesi ({len(opt_df)} candele). Ottimizzazione sugli ultimi 5000 periodi per velocità.")
-                    opt_df = opt_df.iloc[-5000:].reset_index(drop=True)
+                    status_text.text(f"⚠️ Dati estesi ({len(opt_df)} candele). Ottimizzazione in corso su tutto il dataset...")
+                    # No truncation as per user request
+
                 
                 # 2. Define Ranges
                 opt_config = {}
