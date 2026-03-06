@@ -2485,24 +2485,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                 position = None
                             
             return trades, equity_curve
-                                equity_curve[i] = balance
-                                
-                                trades.append({
-                                    'Entry Time': curr['datetime'],
-                                    'Entry Price': entry_price,
-                                    'Exit Time': curr['datetime'],
-                                    'Exit Price': imm_price,
-                                    'pnl': pnl,
-                                    'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
-                                    'Type': signal,
-                                    'Status': imm_exit,
-                                    'type': f"ENTRY {signal.upper()}",
-                                    'time': curr['datetime'],
-                                    'price': entry_price
-                                })
-                                position = None
-
-            return trades, equity_curve
 
     class Visualizer:
         @staticmethod
