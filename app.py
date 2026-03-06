@@ -834,22 +834,28 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         equity_curve = [initial_capital]
         balance = initial_capital
         
-        # Check format
-        is_agnostic = 'Entry Price' in trades_list[0] if trades_list else False
+        # Check format: look for keys in either title case or lowercase
+        is_agnostic = any('Entry Price' in t or 'entry_price' in t for t in trades_list)
         
         if is_agnostic:
             for t in trades_list:
                 t_copy = dict(t)
-                entry = t_copy['Entry Price']
-                exit_p = t_copy['Exit Price']
+                entry = t_copy.get('Entry Price', t_copy.get('entry_price'))
+                exit_p = t_copy.get('Exit Price', t_copy.get('exit_price'))
+                pnl = t_copy.get('pnl', t_copy.get('PnL', 0))
+                t_type = t_copy.get('Type', t_copy.get('type', '')).lower()
                 
-                if t_copy['Type'] == 'long':
-                    size = t_copy['pnl'] / (exit_p - entry) if (exit_p - entry) != 0 else 0
+                if entry is None or exit_p is None:
+                    new_trades.append(t_copy)
+                    continue
+
+                if t_type == 'long':
+                    size = pnl / (exit_p - entry) if (exit_p - entry) != 0 else 0
                     new_entry = entry * (1 + friction_pct / 100)
                     new_exit = exit_p * (1 - friction_pct / 100)
                     new_pnl = (new_exit - new_entry) * size
                 else:
-                    size = t_copy['pnl'] / (entry - exit_p) if (entry - exit_p) != 0 else 0
+                    size = pnl / (entry - exit_p) if (entry - exit_p) != 0 else 0
                     new_entry = entry * (1 - friction_pct / 100)
                     new_exit = exit_p * (1 + friction_pct / 100)
                     new_pnl = (new_entry - new_exit) * size
@@ -869,9 +875,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             current_position = None
             for t in trades_list:
                 t_copy = dict(t)
-                if 'ENTRY' in t_copy.get('type', ''):
-                    entry_price = t_copy['price']
-                    is_long = 'LONG' in t_copy['type']
+                if 'ENTRY' in t_copy.get('type', '').upper():
+                    entry_price = t_copy.get('price')
+                    is_long = 'LONG' in t_copy.get('type', '').upper()
                     new_entry = entry_price * (1 + friction_pct / 100) if is_long else entry_price * (1 - friction_pct / 100)
                     current_position = {
                         'type': 'long' if is_long else 'short',
@@ -881,9 +887,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     t_copy['price'] = new_entry
                     t_copy['balance'] = balance
                     new_trades.append(t_copy)
-                elif 'EXIT' in t_copy.get('type', '') and current_position:
-                    exit_price = t_copy['price']
-                    orig_pnl = t_copy['pnl']
+                elif 'EXIT' in t_copy.get('type', '').upper() and current_position:
+                    exit_price = t_copy.get('price')
+                    orig_pnl = t_copy.get('pnl', t_copy.get('PnL', 0))
                     orig_entry = current_position['orig_entry']
                     
                     if current_position['type'] == 'long':
@@ -914,9 +920,16 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             
         df_res = pd.DataFrame(trades_list)
         
-        if 'pnl' in df_res.columns:
+        # Handle PnL / pnl case-insensitivity
+        pnl_col = 'pnl' if 'pnl' in df_res.columns else ('PnL' if 'PnL' in df_res.columns else None)
+        
+        if pnl_col:
+            # Rename to 'pnl' for internal logic
+            df_res = df_res.rename(columns={pnl_col: 'pnl'})
+            
+            # Identify exits
             if 'type' in df_res.columns:
-                exits = df_res[df_res['type'].str.contains('EXIT', na=False)]
+                exits = df_res[df_res['type'].str.contains('EXIT', na=False, case=False)]
             else:
                 exits = df_res
                 
@@ -937,8 +950,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             gross_loss = abs(losses.sum())
             profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
             
-            if 'balance' in df_res.columns:
-                equity_curve = df_res['balance'].tolist()
+            # Handle balance / Balance
+            bal_col = 'balance' if 'balance' in df_res.columns else ('Balance' if 'Balance' in df_res.columns else None)
+            if bal_col:
+                equity_curve = df_res[bal_col].tolist()
                 peak = equity_curve[0]
                 max_dd = 0
                 for eq in equity_curve:
@@ -3144,17 +3159,19 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     e_time = end_t if use_schedule else None
                     
                     trades, equity = engine.run_hybrid_strategy(long_trigger_en, short_trigger_en, rr, risk_pct, s_time, e_time, entry_mode)
+                    st.session_state['trades'] = trades
                     
                     # Results
                     st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
                     
                     st.subheader("Professional Risk Dashboard")
                     
-                    if not trades:
+                    current_trades = st.session_state.get('trades', [])
+                    if not current_trades:
                         st.warning("Esegui il backtest per vedere le analisi avanzate")
                     else:
                         # Apply Friction
-                        adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
+                        adjusted_trades, adjusted_equity = apply_friction_post_process(current_trades, initial_capital, friction_pct)
                         
                         # Calculate Metrics
                         metrics = calculate_advanced_metrics(adjusted_trades)
@@ -3299,6 +3316,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     e_time = end_t if use_schedule else None
                     
                     trades, equity = engine.run_technical_strategy(strategy_type, params, rr, risk_pct, s_time, e_time, entry_mode)
+                    st.session_state['trades'] = trades
                     
                     # Results
                     st.success(f"Simulazione Completata. Totale Operazioni: {len(trades)}")
@@ -3311,11 +3329,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     
                     st.subheader("Professional Risk Dashboard")
                     
-                    if not trades:
+                    current_trades = st.session_state.get('trades', [])
+                    if not current_trades:
                         st.warning("Esegui il backtest per vedere le analisi avanzate")
                     else:
                         # Apply Friction
-                        adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
+                        adjusted_trades, adjusted_equity = apply_friction_post_process(current_trades, initial_capital, friction_pct)
                         
                         # Calculate Metrics
                         metrics = calculate_advanced_metrics(adjusted_trades)
