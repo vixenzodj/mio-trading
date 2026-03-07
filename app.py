@@ -826,91 +826,42 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     st.sidebar.markdown("### 🛡️ Risk & Robustness")
     friction_pct = st.sidebar.slider("Execution Friction (%)", 0.00, 0.50, 0.00, 0.01)
 
+    def normalize_key(d, possible_keys):
+        for k in d.keys():
+            if k.lower() in [pk.lower() for pk in possible_keys]:
+                return d[k]
+        return None
+
     def apply_friction_post_process(trades_list, initial_capital, friction_pct):
         if not trades_list or friction_pct == 0.0:
             return trades_list, [initial_capital] + [t.get('balance', initial_capital) for t in trades_list if 'balance' in t]
             
         new_trades = []
-        equity_curve = [initial_capital]
         balance = initial_capital
+        equity_curve = [balance]
         
-        # Check format: look for keys in either title case or lowercase
-        is_agnostic = any('Entry Price' in t or 'entry_price' in t for t in trades_list)
-        
-        if is_agnostic:
-            for t in trades_list:
-                t_copy = dict(t)
-                entry = t_copy.get('Entry Price', t_copy.get('entry_price'))
-                exit_p = t_copy.get('Exit Price', t_copy.get('exit_price'))
-                pnl = t_copy.get('pnl', t_copy.get('PnL', 0))
-                t_type = t_copy.get('Type', t_copy.get('type', '')).lower()
-                
-                if entry is None or exit_p is None:
-                    new_trades.append(t_copy)
-                    continue
-
-                if t_type == 'long':
-                    size = pnl / (exit_p - entry) if (exit_p - entry) != 0 else 0
-                    new_entry = entry * (1 + friction_pct / 100)
-                    new_exit = exit_p * (1 - friction_pct / 100)
-                    new_pnl = (new_exit - new_entry) * size
-                else:
-                    size = pnl / (entry - exit_p) if (entry - exit_p) != 0 else 0
-                    new_entry = entry * (1 - friction_pct / 100)
-                    new_exit = exit_p * (1 + friction_pct / 100)
-                    new_pnl = (new_entry - new_exit) * size
-                    
-                t_copy['Entry Price'] = new_entry
-                t_copy['Exit Price'] = new_exit
-                t_copy['pnl'] = new_pnl
-                if size > 0:
-                    t_copy['Return %'] = (new_pnl / (new_entry * size)) * 100
-                    
-                balance += new_pnl
+        for t in trades_list:
+            t_copy = dict(t)
+            t_type = str(normalize_key(t_copy, ['type', 'Type']) or '').upper()
+            price = normalize_key(t_copy, ['price', 'Price', 'Entry Price', 'Exit Price']) or 0
+            pnl = normalize_key(t_copy, ['pnl', 'PnL']) or 0
+            
+            if "EXIT" in t_type:
+                friction_multiplier = 1 - (friction_pct / 100)
+                new_price = price * friction_multiplier
+                pnl = pnl * friction_multiplier
+                t_copy['price'] = new_price
+                t_copy['pnl'] = pnl
+                balance += pnl
                 t_copy['balance'] = balance
-                new_trades.append(t_copy)
                 equity_curve.append(balance)
-        else:
-            # Hybrid format (events)
-            current_position = None
-            for t in trades_list:
-                t_copy = dict(t)
-                if 'ENTRY' in t_copy.get('type', '').upper():
-                    entry_price = t_copy.get('price')
-                    is_long = 'LONG' in t_copy.get('type', '').upper()
-                    new_entry = entry_price * (1 + friction_pct / 100) if is_long else entry_price * (1 - friction_pct / 100)
-                    current_position = {
-                        'type': 'long' if is_long else 'short',
-                        'orig_entry': entry_price,
-                        'new_entry': new_entry
-                    }
-                    t_copy['price'] = new_entry
-                    t_copy['balance'] = balance
-                    new_trades.append(t_copy)
-                elif 'EXIT' in t_copy.get('type', '').upper() and current_position:
-                    exit_price = t_copy.get('price')
-                    orig_pnl = t_copy.get('pnl', t_copy.get('PnL', 0))
-                    orig_entry = current_position['orig_entry']
-                    
-                    if current_position['type'] == 'long':
-                        new_exit = exit_price * (1 - friction_pct / 100)
-                        size = orig_pnl / (exit_price - orig_entry) if (exit_price - orig_entry) != 0 else 0
-                        new_pnl = (new_exit - current_position['new_entry']) * size
-                    else:
-                        new_exit = exit_price * (1 + friction_pct / 100)
-                        size = orig_pnl / (orig_entry - exit_price) if (orig_entry - exit_price) != 0 else 0
-                        new_pnl = (current_position['new_entry'] - new_exit) * size
-                    
-                    t_copy['price'] = new_exit
-                    t_copy['pnl'] = new_pnl
-                    balance += new_pnl
-                    t_copy['balance'] = balance
-                    new_trades.append(t_copy)
-                    equity_curve.append(balance)
-                    current_position = None
-                else:
-                    new_trades.append(t_copy)
-                    
+            elif "ENTRY" in t_type:
+                friction_multiplier = 1 + (friction_pct / 100)
+                new_price = price * friction_multiplier
+                t_copy['price'] = new_price
+                
+            new_trades.append(t_copy)
+                
         return new_trades, equity_curve
 
     def calculate_advanced_metrics(trades_list):
@@ -918,60 +869,41 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         if not trades_list:
             return fallback
             
-        df_res = pd.DataFrame(trades_list)
+        df = pd.DataFrame(trades_list)
+        df.columns = [str(c).lower() for c in df.columns]
         
-        # Handle PnL / pnl case-insensitivity
-        pnl_col = 'pnl' if 'pnl' in df_res.columns else ('PnL' if 'PnL' in df_res.columns else None)
+        if 'pnl' not in df.columns or 'type' not in df.columns:
+            return fallback
+            
+        exits = df[df['type'].astype(str).str.contains('exit', na=False, case=False)]
+        if exits.empty:
+            return fallback
+            
+        wins = exits[exits['pnl'] > 0]['pnl']
+        losses = exits[exits['pnl'] < 0]['pnl']
         
-        if pnl_col:
-            # Rename to 'pnl' for internal logic
-            df_res = df_res.rename(columns={pnl_col: 'pnl'})
-            
-            # Identify exits
-            if 'type' in df_res.columns:
-                exits = df_res[df_res['type'].str.contains('EXIT', na=False, case=False)]
-            else:
-                exits = df_res
+        win_rate = len(wins) / len(exits)
+        avg_win = wins.mean() if not wins.empty else 0
+        avg_loss = abs(losses.mean()) if not losses.empty else 0
+        expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+        profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
+        
+        bal_col = 'balance' if 'balance' in df.columns else None
+        max_dd = 0
+        if bal_col:
+            curve = df[bal_col].tolist()
+            peak = curve[0]
+            for val in curve:
+                if val > peak: peak = val
+                dd = (peak - val) / peak if peak > 0 else 0
+                if dd > max_dd: max_dd = dd
                 
-            if exits.empty:
-                return fallback
-                
-            wins = exits[exits['pnl'] > 0]['pnl']
-            losses = exits[exits['pnl'] < 0]['pnl']
-            
-            total_trades = len(exits)
-            win_rate = len(wins) / total_trades
-            loss_rate = 1 - win_rate
-            avg_win = wins.mean() if not wins.empty else 0
-            avg_loss = abs(losses.mean()) if not losses.empty else 0
-            expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
-            
-            gross_profit = wins.sum()
-            gross_loss = abs(losses.sum())
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-            
-            # Handle balance / Balance
-            bal_col = 'balance' if 'balance' in df_res.columns else ('Balance' if 'Balance' in df_res.columns else None)
-            if bal_col:
-                equity_curve = df_res[bal_col].tolist()
-                peak = equity_curve[0]
-                max_dd = 0
-                for eq in equity_curve:
-                    if eq > peak:
-                        peak = eq
-                    dd = (peak - eq) / peak if peak > 0 else 0
-                    if dd > max_dd:
-                        max_dd = dd
-            else:
-                max_dd = 0
-                
-            return {
-                'expectancy': expectancy,
-                'profit_factor': profit_factor,
-                'max_drawdown': max_dd * 100,
-                'win_rate': win_rate * 100
-            }
-        return fallback
+        return {
+            'expectancy': expectancy,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_dd * 100,
+            'win_rate': win_rate * 100
+        }
 
     def run_monte_carlo(trades_list, initial_capital, simulations=1000):
         import plotly.graph_objects as go
