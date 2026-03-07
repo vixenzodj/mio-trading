@@ -925,18 +925,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         if n_trades == 0:
             return None
             
-        # Sample Size Expansion: force at least 100 trades for the simulation
-        sim_trades = max(100, n_trades)
+        # Fixed forward-horizon
+        sim_length = min(50, n_trades)
         
-        # Calculate standard deviation of PnLs for noise
-        std_dev_of_pnls = np.std(pnls)
-        
-        # Vectorized Monte Carlo: Sample with replacement and add StdDev Noise
-        random_indices = np.random.randint(0, n_trades, size=(simulations, sim_trades))
-        sampled_pnls = pnls[random_indices]
-        
-        random_noise = np.random.normal(0, 1, size=(simulations, sim_trades))
-        simulated_pnls = sampled_pnls + (random_noise * std_dev_of_pnls)
+        # Vectorized Monte Carlo: Sample with replacement
+        random_indices = np.random.randint(0, n_trades, size=(simulations, sim_length))
+        simulated_pnls = pnls[random_indices]
         
         # Calculate equity curves
         equity_curves = np.cumsum(simulated_pnls, axis=1) + initial_capital
@@ -951,6 +945,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # Calculate quantitative analytics
         final_balances = equity_curves[:, -1]
         prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
+        
+        # Risk of Ruin: equity drops below initial_capital * 0.80 at any point
+        ruin_threshold = initial_capital * 0.80
+        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
+        risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
+        
         median_final_balance = np.median(final_balances)
         
         # Visualization with Plotly
@@ -958,7 +958,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         
         # Performance optimization: Plot all 1000 lines as a single trace separated by NaNs
         # This prevents Plotly from crashing the browser when rendering 1000 individual traces
-        x_base = np.arange(sim_trades + 1)
+        x_base = np.arange(sim_length + 1)
         x_all = np.tile(np.append(x_base, np.nan), simulations)
         y_all = np.hstack((equity_curves, np.full((simulations, 1), np.nan))).flatten()
         
@@ -983,7 +983,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         ))
         
         fig.update_layout(
-            title='🔬 Monte Carlo Robustness Analysis',
+            title='🔬 Monte Carlo Robustness Analysis (Forward 50 Trades)',
             xaxis_title='Trade Number',
             yaxis_title='Equity ($)',
             template='plotly_dark',
@@ -991,7 +991,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             margin=dict(l=40, r=40, t=50, b=40)
         )
         
-        return fig, prob_profit, median_final_balance
+        return fig, prob_profit, risk_of_ruin, median_final_balance
     
     # Engine Selection
     engine_choice = st.radio("Seleziona Motore di Backtesting:", 
@@ -3189,20 +3189,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         with st.expander('🔍 Analisi di Robustezza e Stress Test', expanded=True):
                             mc_res = run_monte_carlo(adjusted_trades, initial_capital)
                             if mc_res:
-                                mc_fig, prob_profit, median_final_balance = mc_res
+                                mc_fig, prob_profit, risk_of_ruin, median_final_balance = mc_res
                                 st.plotly_chart(mc_fig, use_container_width=True)
                                 
                                 st.subheader('🔬 Validazione Statistica Long-Term')
-                                c1, c2 = st.columns(2)
+                                c1, c2, c3 = st.columns(3)
                                 with c1:
-                                    st.metric('Probabilità di Successo Finale', f"{prob_profit:.1f}%")
+                                    st.metric('Probabilità di Profitto (Prossimi 50 Trade)', f"{prob_profit:.1f}%")
                                 with c2:
-                                    st.metric('Rendimento Probabile (Mediano)', f"${median_final_balance:.2f}")
+                                    st.metric('Rischio di Rovina (Max DD > 20%)', f"{risk_of_ruin:.1f}%")
+                                with c3:
+                                    st.metric('Rendimento Mediano Stimato', f"${median_final_balance:.2f}")
                                 
                                 if prob_profit > 75:
                                     st.success('✅ Strategia Robusta')
                                 elif prob_profit < 60:
                                     st.warning('⚠️ Strategia Fragile (Flop)')
+                                    
+                                if risk_of_ruin > 10:
+                                    st.error('⚠️ Rischio di Rovina Elevato: La strategia potrebbe bruciare il conto.')
                                     
                                 if len(adjusted_trades) < 30:
                                     st.warning('⚠️ Low Sample Size: Results might be overly optimistic.')
@@ -3387,20 +3392,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         with st.expander('🔍 Analisi di Robustezza e Stress Test', expanded=True):
                             mc_res = run_monte_carlo(adjusted_trades, initial_capital)
                             if mc_res:
-                                mc_fig, prob_profit, median_final_balance = mc_res
+                                mc_fig, prob_profit, risk_of_ruin, median_final_balance = mc_res
                                 st.plotly_chart(mc_fig, use_container_width=True)
                                 
                                 st.subheader('🔬 Validazione Statistica Long-Term')
-                                c1, c2 = st.columns(2)
+                                c1, c2, c3 = st.columns(3)
                                 with c1:
-                                    st.metric('Probabilità di Successo Finale', f"{prob_profit:.1f}%")
+                                    st.metric('Probabilità di Profitto (Prossimi 50 Trade)', f"{prob_profit:.1f}%")
                                 with c2:
-                                    st.metric('Rendimento Probabile (Mediano)', f"${median_final_balance:.2f}")
+                                    st.metric('Rischio di Rovina (Max DD > 20%)', f"{risk_of_ruin:.1f}%")
+                                with c3:
+                                    st.metric('Rendimento Mediano Stimato', f"${median_final_balance:.2f}")
                                 
                                 if prob_profit > 75:
                                     st.success('✅ Strategia Robusta')
                                 elif prob_profit < 60:
                                     st.warning('⚠️ Strategia Fragile (Flop)')
+                                    
+                                if risk_of_ruin > 10:
+                                    st.error('⚠️ Rischio di Rovina Elevato: La strategia potrebbe bruciare il conto.')
                                     
                                 if len(adjusted_trades) < 30:
                                     st.warning('⚠️ Low Sample Size: Results might be overly optimistic.')
