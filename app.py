@@ -860,7 +860,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         return new_trades, equity_curve
 
     def calculate_advanced_metrics(trades_list):
-        fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0}
+        fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
         if not trades_list:
             return fallback
             
@@ -883,21 +883,28 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
         profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
         
+        total_profit_abs = exits['pnl'].sum()
+        
         bal_col = 'balance' if 'balance' in df.columns else None
         max_dd = 0
+        max_dd_abs = 0
         if bal_col:
             curve = df[bal_col].tolist()
             peak = curve[0]
             for val in curve:
                 if val > peak: peak = val
                 dd = (peak - val) / peak if peak > 0 else 0
+                dd_abs = peak - val
                 if dd > max_dd: max_dd = dd
+                if dd_abs > max_dd_abs: max_dd_abs = dd_abs
                 
         return {
             'expectancy': expectancy,
             'profit_factor': profit_factor,
             'max_drawdown': max_dd * 100,
-            'win_rate': win_rate * 100
+            'win_rate': win_rate * 100,
+            'total_profit_abs': total_profit_abs,
+            'max_dd_abs': max_dd_abs
         }
 
     def run_monte_carlo(trades_list, initial_capital, simulations=1000):
@@ -909,10 +916,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             return None
             
         df_res = pd.DataFrame(trades_list)
-        if 'type' in df_res.columns:
-            pnls = df_res[df_res['type'].str.contains('EXIT', na=False)]['pnl'].values
+        if 'pnl' in df_res.columns:
+            pnls = df_res[df_res['pnl'].notna()]['pnl'].values
         else:
-            pnls = df_res['pnl'].values
+            return None
             
         n_trades = len(pnls)
         if n_trades == 0:
@@ -3104,7 +3111,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         metrics = calculate_advanced_metrics(adjusted_trades)
                         
                         # Metric Cards
-                        col1, col2, col3, col4 = st.columns(4)
+                        col1, col2, col3 = st.columns(3)
+                        col4, col5, col6 = st.columns(3)
                         
                         with col1:
                             expectancy = metrics['expectancy']
@@ -3125,21 +3133,39 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             )
                             
                         with col3:
+                            win_rate = metrics['win_rate']
+                            st.metric(
+                                label="Win Rate (%)",
+                                value=f"{win_rate:.2f}%",
+                                delta="Profitable" if win_rate > 50 else "Unprofitable",
+                                delta_color="normal" if win_rate > 50 else "inverse"
+                            )
+                            
+                        with col4:
                             max_dd = metrics['max_drawdown']
                             st.metric(
-                                label="Max Drawdown",
+                                label="Max Drawdown (%)",
                                 value=f"{max_dd:.2f}%",
                                 delta="High Risk" if max_dd < -20 else "Acceptable",
                                 delta_color="inverse" if max_dd < -20 else "normal"
                             )
                             
-                        with col4:
-                            win_rate = metrics['win_rate']
+                        with col5:
+                            total_profit_abs = metrics.get('total_profit_abs', 0)
                             st.metric(
-                                label="Win Rate",
-                                value=f"{win_rate:.2f}%",
-                                delta="Profitable" if win_rate > 50 else "Unprofitable",
-                                delta_color="normal" if win_rate > 50 else "inverse"
+                                label="Total Net Profit ($)",
+                                value=f"${total_profit_abs:.2f}",
+                                delta="Positive" if total_profit_abs > 0 else "Negative",
+                                delta_color="normal" if total_profit_abs > 0 else "inverse"
+                            )
+                            
+                        with col6:
+                            max_dd_abs = metrics.get('max_dd_abs', 0)
+                            st.metric(
+                                label="Max Drawdown ($)",
+                                value=f"${max_dd_abs:.2f}",
+                                delta="High Loss" if max_dd_abs > initial_capital * 0.2 else "Acceptable",
+                                delta_color="inverse" if max_dd_abs > initial_capital * 0.2 else "normal"
                             )
                             
                         # Charts
@@ -3267,7 +3293,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         metrics = calculate_advanced_metrics(adjusted_trades)
                         
                         # Metric Cards
-                        col1, col2, col3, col4 = st.columns(4)
+                        col1, col2, col3 = st.columns(3)
+                        col4, col5, col6 = st.columns(3)
                         
                         with col1:
                             expectancy = metrics['expectancy']
@@ -3288,21 +3315,39 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             )
                             
                         with col3:
+                            win_rate = metrics['win_rate']
+                            st.metric(
+                                label="Win Rate (%)",
+                                value=f"{win_rate:.2f}%",
+                                delta="Profitable" if win_rate > 50 else "Unprofitable",
+                                delta_color="normal" if win_rate > 50 else "inverse"
+                            )
+                            
+                        with col4:
                             max_dd = metrics['max_drawdown']
                             st.metric(
-                                label="Max Drawdown",
+                                label="Max Drawdown (%)",
                                 value=f"{max_dd:.2f}%",
                                 delta="High Risk" if max_dd < -20 else "Acceptable",
                                 delta_color="inverse" if max_dd < -20 else "normal"
                             )
                             
-                        with col4:
-                            win_rate = metrics['win_rate']
+                        with col5:
+                            total_profit_abs = metrics.get('total_profit_abs', 0)
                             st.metric(
-                                label="Win Rate",
-                                value=f"{win_rate:.2f}%",
-                                delta="Profitable" if win_rate > 50 else "Unprofitable",
-                                delta_color="normal" if win_rate > 50 else "inverse"
+                                label="Total Net Profit ($)",
+                                value=f"${total_profit_abs:.2f}",
+                                delta="Positive" if total_profit_abs > 0 else "Negative",
+                                delta_color="normal" if total_profit_abs > 0 else "inverse"
+                            )
+                            
+                        with col6:
+                            max_dd_abs = metrics.get('max_dd_abs', 0)
+                            st.metric(
+                                label="Max Drawdown ($)",
+                                value=f"${max_dd_abs:.2f}",
+                                delta="High Loss" if max_dd_abs > initial_capital * 0.2 else "Acceptable",
+                                delta_color="inverse" if max_dd_abs > initial_capital * 0.2 else "normal"
                             )
                             
                         # Charts
