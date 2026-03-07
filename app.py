@@ -1063,23 +1063,47 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         if df.empty and (is_forex or is_index or (is_stock and days_requested > 60 and timeframe in ["5Min", "15Min", "1H"])):
             try:
                 api_key = "GSG6LTBDGJE2H67M"
-                tf_map = {"5Min": "5min", "15Min": "15min", "1H": "60min", "1D": "Daily"}
-                interval = tf_map.get(timeframe, "15min")
+                
+                # Robust Timeframe Mapping
+                tf_lower = timeframe.lower()
+                tf_map = {
+                    "1m": "1min", "1min": "1min",
+                    "5m": "5min", "5min": "5min",
+                    "15m": "15min", "15min": "15min",
+                    "1h": "60min", "60min": "60min",
+                    "1d": "Daily", "daily": "Daily"
+                }
+                interval = tf_map.get(tf_lower, "15min")
+                is_daily = (interval == "Daily")
+                
                 av_symbol = ticker.replace("=X", "").replace("^", "")
                 
-                if timeframe == "1D":
-                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
+                if is_forex:
+                    base_ccy = av_symbol[:3]
+                    quote_ccy = av_symbol[3:6]
+                    if is_daily:
+                        url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={base_ccy}&to_symbol={quote_ccy}&outputsize=full&apikey={api_key}&datatype=csv"
+                    else:
+                        url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={base_ccy}&to_symbol={quote_ccy}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
                 else:
-                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                    if is_daily:
+                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
+                    else:
+                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
                 
                 res = requests.get(url)
-                df_av = pd.read_csv(io.StringIO(res.text))
                 
-                if 'timestamp' in df_av.columns:
-                    df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
-                    df_av['datetime'] = pd.to_datetime(df_av['datetime'])
-                    df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
-                    df = df_av
+                # Error Handling (JSON vs CSV)
+                if "{" in res.text[:10]:
+                    print("AV API Error:", res.text)
+                else:
+                    df_av = pd.read_csv(io.StringIO(res.text))
+                    
+                    if 'timestamp' in df_av.columns:
+                        df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                        df_av['datetime'] = pd.to_datetime(df_av['datetime'])
+                        df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
+                        df = df_av
             except Exception as e:
                 print(f"Alpha Vantage fetch failed: {e}")
 
@@ -3831,23 +3855,47 @@ elif menu == "🛠️ STRATEGY BUILDER":
         if df.empty and (is_forex or is_index or (is_stock and days_requested > 60 and timeframe in ["1m", "5m", "15m", "1h"])):
             try:
                 api_key = "GSG6LTBDGJE2H67M"
-                tf_map = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "1d": "Daily"}
-                interval = tf_map.get(timeframe, "15min")
+                
+                # Robust Timeframe Mapping
+                tf_lower = timeframe.lower()
+                tf_map = {
+                    "1m": "1min", "1min": "1min",
+                    "5m": "5min", "5min": "5min",
+                    "15m": "15min", "15min": "15min",
+                    "1h": "60min", "60min": "60min",
+                    "1d": "Daily", "daily": "Daily"
+                }
+                interval = tf_map.get(tf_lower, "15min")
+                is_daily = (interval == "Daily")
+                
                 av_symbol = ticker.replace("=X", "").replace("^", "")
                 
-                if timeframe == "1d":
-                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
+                if is_forex:
+                    base_ccy = av_symbol[:3]
+                    quote_ccy = av_symbol[3:6]
+                    if is_daily:
+                        url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={base_ccy}&to_symbol={quote_ccy}&outputsize=full&apikey={api_key}&datatype=csv"
+                    else:
+                        url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={base_ccy}&to_symbol={quote_ccy}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
                 else:
-                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                    if is_daily:
+                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
+                    else:
+                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
                 
                 res = requests.get(url)
-                df_av = pd.read_csv(io.StringIO(res.text))
                 
-                if 'timestamp' in df_av.columns:
-                    df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
-                    df_av['datetime'] = pd.to_datetime(df_av['datetime'])
-                    df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
-                    df = df_av
+                # Error Handling (JSON vs CSV)
+                if "{" in res.text[:10]:
+                    print("AV API Error:", res.text)
+                else:
+                    df_av = pd.read_csv(io.StringIO(res.text))
+                    
+                    if 'timestamp' in df_av.columns:
+                        df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                        df_av['datetime'] = pd.to_datetime(df_av['datetime'])
+                        df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
+                        df = df_av
             except Exception as e:
                 print(f"Alpha Vantage fetch failed: {e}")
 
