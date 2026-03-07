@@ -3596,14 +3596,33 @@ elif menu == "🛠️ STRATEGY BUILDER":
         orb_duration = st.sidebar.selectbox("ORB Candle Duration (min)", [5, 15, 30])
         
     # Ticker and Date Range
-    ticker = st.text_input("Ticker", value="SPY").upper()
+    st.sidebar.markdown("### 📈 Selezione Asset")
+    ticker_choices = [
+        "EURUSD=X (Forex)", "GBPUSD=X (Forex)", "USDJPY=X (Forex)", "EURGBP=X (Forex)",
+        "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
+        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
+        "--- INSERIMENTO MANUALE ---"
+    ]
+    selected_ticker = st.sidebar.selectbox("Ticker", ticker_choices, index=4)
+    if selected_ticker == "--- INSERIMENTO MANUALE ---":
+        ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
+    else:
+        ticker = selected_ticker.split(" ")[0]
+        
+    st.sidebar.markdown("### 🛡️ Risk Management")
+    initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
+    risk_per_trade = st.sidebar.slider("Risk per Trade (%)", 0.1, 5.0, 1.0, 0.1)
+    rr_ratio = st.sidebar.slider("Target Risk/Reward (R:R)", 1.0, 5.0, 2.0, 0.1)
+    sl_mode = st.sidebar.selectbox("Stop Loss Mode", ["Fixed %", "Candle Low/High"])
+    fixed_sl_pct = 1.0
+    if sl_mode == "Fixed %":
+        fixed_sl_pct = st.sidebar.slider("Fixed Stop Loss (%)", 0.1, 5.0, 1.0, 0.1)
     
     c1, c2 = st.columns(2)
     with c1: start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=30))
     with c2: end_date = st.date_input("End Date", value=datetime.now())
     
-    timeframe = st.selectbox("Timeframe", ["1Min", "5Min", "15Min", "1H", "1D"], index=1)
-    initial_capital = st.number_input("Initial Capital ($)", value=10000)
+    timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"], index=1)
     
     # Duplicate necessary functions
     def normalize_key(d, possible_keys):
@@ -3764,38 +3783,29 @@ elif menu == "🛠️ STRATEGY BUILDER":
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
         df = pd.DataFrame()
         try:
-            tf_alpaca = timeframe
-            if timeframe == "1D": tf_alpaca = "1Day"
-            elif timeframe == "1H": tf_alpaca = "1Hour"
-            elif timeframe == "15Min": tf_alpaca = "15Min"
-            elif timeframe == "5Min": tf_alpaca = "5Min"
-            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-        except Exception as e:
-            print(f"Alpaca fetch failed: {e}")
-
-        if df.empty:
-            try:
-                tf_yf = "1d"
-                if timeframe == "1D": tf_yf = "1d"
-                elif timeframe == "1H": tf_yf = "1h"
-                elif timeframe == "15Min": tf_yf = "15m"
-                elif timeframe == "5Min": tf_yf = "5m"
-                df = yf.download(ticker, start=start_date, end=end_date, interval=tf_yf, progress=False)
-                if not df.empty:
+            tf_yf = "1d"
+            if timeframe == "1m": tf_yf = "1m"
+            elif timeframe == "5m": tf_yf = "5m"
+            elif timeframe == "15m": tf_yf = "15m"
+            elif timeframe == "1h": tf_yf = "1h"
+            elif timeframe == "1d": tf_yf = "1d"
+            
+            df = yf.download(ticker, start=start_date, end=end_date, interval=tf_yf, progress=False)
+            if not df.empty:
+                df.reset_index(inplace=True)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                rename_map = {
+                    'Date': 'datetime', 'Datetime': 'datetime',
+                    'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
+                }
+                df.rename(columns=rename_map, inplace=True)
+                if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
                     df.reset_index(inplace=True)
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.get_level_values(0)
-                    rename_map = {
-                        'Date': 'datetime', 'Datetime': 'datetime',
-                        'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
-                    }
-                    df.rename(columns=rename_map, inplace=True)
-                    if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
-                        df.reset_index(inplace=True)
-                        df.rename(columns={df.index.name: 'datetime'}, inplace=True)
-                    df['datetime'] = pd.to_datetime(df['datetime'])
-            except Exception as e:
-                pass
+                    df.rename(columns={df.index.name: 'datetime'}, inplace=True)
+                df['datetime'] = pd.to_datetime(df['datetime'])
+        except Exception as e:
+            st.error(f"Error fetching data: {e}")
                 
         if not df.empty:
             cols = df.select_dtypes(include=['float64']).columns
@@ -3809,7 +3819,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
 
         return df
 
-    def run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration):
+    def run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct):
         trades = []
         if df.empty:
             return trades
@@ -3822,7 +3832,9 @@ elif menu == "🛠️ STRATEGY BUILDER":
         entry_price = 0
         entry_time = None
         position_type = None
-        size = 1
+        size = 0
+        sl_price = 0
+        tp_price = 0
         
         grouped = df.groupby('date')
         
@@ -3852,16 +3864,37 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 if in_position:
                     exit_triggered = False
                     exit_type = ""
+                    exit_price = 0
                     
-                    if eod_close and current_time >= end_time:
+                    if position_type == 'LONG':
+                        if row['Low'] <= sl_price:
+                            exit_triggered = True
+                            exit_type = "SL"
+                            exit_price = sl_price
+                        elif row['High'] >= tp_price:
+                            exit_triggered = True
+                            exit_type = "TP"
+                            exit_price = tp_price
+                    elif position_type == 'SHORT':
+                        if row['High'] >= sl_price:
+                            exit_triggered = True
+                            exit_type = "SL"
+                            exit_price = sl_price
+                        elif row['Low'] <= tp_price:
+                            exit_triggered = True
+                            exit_type = "TP"
+                            exit_price = tp_price
+                            
+                    if not exit_triggered and eod_close and current_time >= end_time:
                         exit_triggered = True
                         exit_type = "EOD"
-                    elif not is_trading_time:
+                        exit_price = row['Close']
+                    elif not exit_triggered and not is_trading_time:
                         exit_triggered = True
                         exit_type = "Out of Time"
+                        exit_price = row['Close']
                     
                     if exit_triggered:
-                        exit_price = row['Close']
                         pnl = (exit_price - entry_price) if position_type == 'LONG' else (entry_price - exit_price)
                         pnl *= size
                         
@@ -3889,11 +3922,39 @@ elif menu == "🛠️ STRATEGY BUILDER":
                                 position_type = 'LONG'
                                 entry_price = max(row['Open'], orb_high)
                                 entry_time = current_datetime
+                                
+                                if sl_mode == "Fixed %":
+                                    sl_price = entry_price * (1 - fixed_sl_pct / 100)
+                                else:
+                                    sl_price = row['Low']
+                                    if sl_price >= entry_price:
+                                        sl_price = entry_price * 0.999
+                                        
+                                tp_price = entry_price + ((entry_price - sl_price) * rr_ratio)
+                                
+                                risk_amount = initial_capital * (risk_per_trade / 100)
+                                risk_per_unit = entry_price - sl_price
+                                size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+                                
                             elif row['Low'] < orb_low:
                                 in_position = True
                                 position_type = 'SHORT'
                                 entry_price = min(row['Open'], orb_low)
                                 entry_time = current_datetime
+                                
+                                if sl_mode == "Fixed %":
+                                    sl_price = entry_price * (1 + fixed_sl_pct / 100)
+                                else:
+                                    sl_price = row['High']
+                                    if sl_price <= entry_price:
+                                        sl_price = entry_price * 1.001
+                                        
+                                tp_price = entry_price - ((sl_price - entry_price) * rr_ratio)
+                                
+                                risk_amount = initial_capital * (risk_per_trade / 100)
+                                risk_per_unit = sl_price - entry_price
+                                size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+                                
                     elif not orb_enabled:
                         if current_time >= start_time:
                             in_position = True
@@ -3901,13 +3962,26 @@ elif menu == "🛠️ STRATEGY BUILDER":
                             entry_price = row['Close']
                             entry_time = current_datetime
                             
+                            if sl_mode == "Fixed %":
+                                sl_price = entry_price * (1 - fixed_sl_pct / 100)
+                            else:
+                                sl_price = row['Low']
+                                if sl_price >= entry_price:
+                                    sl_price = entry_price * 0.999
+                                    
+                            tp_price = entry_price + ((entry_price - sl_price) * rr_ratio)
+                            
+                            risk_amount = initial_capital * (risk_per_trade / 100)
+                            risk_per_unit = entry_price - sl_price
+                            size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+                            
         return trades
 
     if st.button("🚀 Esegui Strategia Custom"):
         with st.spinner("Fetching data and running strategy..."):
             df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
-                trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration)
+                trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
                 
                 if trades:
                     friction_pct = 0.0
