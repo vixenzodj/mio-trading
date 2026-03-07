@@ -925,13 +925,21 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         if n_trades == 0:
             return None
             
-        # Vectorized Monte Carlo: Shuffle trades 1000 times
-        # Generate random indices for fast row-wise shuffling
-        random_indices = np.argsort(np.random.rand(simulations, n_trades), axis=1)
-        shuffled_pnls = pnls[random_indices]
+        # Sample Size Expansion: force at least 100 trades for the simulation
+        sim_trades = max(100, n_trades)
+        
+        # Calculate standard deviation of PnLs for noise
+        std_dev_of_pnls = np.std(pnls)
+        
+        # Vectorized Monte Carlo: Sample with replacement and add StdDev Noise
+        random_indices = np.random.randint(0, n_trades, size=(simulations, sim_trades))
+        sampled_pnls = pnls[random_indices]
+        
+        random_noise = np.random.normal(0, 1, size=(simulations, sim_trades))
+        simulated_pnls = sampled_pnls + (random_noise * std_dev_of_pnls)
         
         # Calculate equity curves
-        equity_curves = np.cumsum(shuffled_pnls, axis=1) + initial_capital
+        equity_curves = np.cumsum(simulated_pnls, axis=1) + initial_capital
         
         # Prepend initial capital to the beginning of each curve
         starting_capital = np.full((simulations, 1), initial_capital)
@@ -950,7 +958,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         
         # Performance optimization: Plot all 1000 lines as a single trace separated by NaNs
         # This prevents Plotly from crashing the browser when rendering 1000 individual traces
-        x_base = np.arange(n_trades + 1)
+        x_base = np.arange(sim_trades + 1)
         x_all = np.tile(np.append(x_base, np.nan), simulations)
         y_all = np.hstack((equity_curves, np.full((simulations, 1), np.nan))).flatten()
         
@@ -3195,6 +3203,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                     st.success('✅ Strategia Robusta')
                                 elif prob_profit < 60:
                                     st.warning('⚠️ Strategia Fragile (Flop)')
+                                    
+                                if len(adjusted_trades) < 30:
+                                    st.warning('⚠️ Low Sample Size: Results might be overly optimistic.')
                             else:
                                 st.warning("Not enough data for Monte Carlo simulation.")
                         
@@ -3390,6 +3401,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                     st.success('✅ Strategia Robusta')
                                 elif prob_profit < 60:
                                     st.warning('⚠️ Strategia Fragile (Flop)')
+                                    
+                                if len(adjusted_trades) < 30:
+                                    st.warning('⚠️ Low Sample Size: Results might be overly optimistic.')
                             else:
                                 st.warning("Not enough data for Monte Carlo simulation.")
                         
