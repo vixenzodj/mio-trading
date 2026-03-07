@@ -1094,16 +1094,34 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 res = requests.get(url)
                 
                 # Error Handling (JSON vs CSV)
-                if "{" in res.text[:10]:
-                    print("AV API Error:", res.text)
+                if res.text.startswith('{') or "Error" in res.text or "Information" in res.text:
+                    st.warning(f"⚠️ Alpha Vantage API Msg: {res.text[:100]}")
                 else:
                     df_av = pd.read_csv(io.StringIO(res.text))
                     
+                    # Robust Column Parsing
                     if 'timestamp' in df_av.columns:
-                        df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                        df_av.rename(columns={'timestamp': 'datetime'}, inplace=True)
+                    elif 'time' in df_av.columns:
+                        df_av.rename(columns={'time': 'datetime'}, inplace=True)
+                        
+                    if 'datetime' in df_av.columns:
+                        rename_cols = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}
+                        df_av.rename(columns=rename_cols, inplace=True)
+                        
+                        if 'volume' in df_av.columns:
+                            df_av.rename(columns={'volume': 'Volume'}, inplace=True)
+                        else:
+                            df_av['Volume'] = 0
+                            
                         df_av['datetime'] = pd.to_datetime(df_av['datetime'])
-                        df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
-                        df = df_av
+                        
+                        # Smart Date Truncation
+                        df_av = df_av[df_av['datetime'] <= pd.to_datetime(end_date)]
+                        
+                        if not df_av.empty:
+                            st.success("✅ Dati Forex scaricati tramite Alpha Vantage")
+                            df = df_av
             except Exception as e:
                 print(f"Alpha Vantage fetch failed: {e}")
 
@@ -3886,16 +3904,34 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 res = requests.get(url)
                 
                 # Error Handling (JSON vs CSV)
-                if "{" in res.text[:10]:
-                    print("AV API Error:", res.text)
+                if res.text.startswith('{') or "Error" in res.text or "Information" in res.text:
+                    st.warning(f"⚠️ Alpha Vantage API Msg: {res.text[:100]}")
                 else:
                     df_av = pd.read_csv(io.StringIO(res.text))
                     
+                    # Robust Column Parsing
                     if 'timestamp' in df_av.columns:
-                        df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                        df_av.rename(columns={'timestamp': 'datetime'}, inplace=True)
+                    elif 'time' in df_av.columns:
+                        df_av.rename(columns={'time': 'datetime'}, inplace=True)
+                        
+                    if 'datetime' in df_av.columns:
+                        rename_cols = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}
+                        df_av.rename(columns=rename_cols, inplace=True)
+                        
+                        if 'volume' in df_av.columns:
+                            df_av.rename(columns={'volume': 'Volume'}, inplace=True)
+                        else:
+                            df_av['Volume'] = 0
+                            
                         df_av['datetime'] = pd.to_datetime(df_av['datetime'])
-                        df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
-                        df = df_av
+                        
+                        # Smart Date Truncation
+                        df_av = df_av[df_av['datetime'] <= pd.to_datetime(end_date)]
+                        
+                        if not df_av.empty:
+                            st.success("✅ Dati Forex scaricati tramite Alpha Vantage")
+                            df = df_av
             except Exception as e:
                 print(f"Alpha Vantage fetch failed: {e}")
 
