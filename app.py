@@ -940,6 +940,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # Calculate median curve
         median_curve = np.median(equity_curves, axis=0)
         
+        # Calculate quantitative analytics
+        final_balances = equity_curves[:, -1]
+        prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
+        median_final_balance = np.median(final_balances)
+        
         # Visualization with Plotly
         fig = go.Figure()
         
@@ -978,7 +983,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             margin=dict(l=40, r=40, t=50, b=40)
         )
         
-        return fig
+        return fig, prob_profit, median_final_balance
     
     # Engine Selection
     engine_choice = st.radio("Seleziona Motore di Backtesting:", 
@@ -3174,9 +3179,22 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         
                         # Monte Carlo Expander
                         with st.expander('🔍 Analisi di Robustezza e Stress Test', expanded=True):
-                            mc_fig = run_monte_carlo(adjusted_trades, initial_capital)
-                            if mc_fig:
+                            mc_res = run_monte_carlo(adjusted_trades, initial_capital)
+                            if mc_res:
+                                mc_fig, prob_profit, median_final_balance = mc_res
                                 st.plotly_chart(mc_fig, use_container_width=True)
+                                
+                                st.subheader('🔬 Validazione Statistica Long-Term')
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    st.metric('Probabilità di Successo Finale', f"{prob_profit:.1f}%")
+                                with c2:
+                                    st.metric('Rendimento Probabile (Mediano)', f"${median_final_balance:.2f}")
+                                
+                                if prob_profit > 75:
+                                    st.success('✅ Strategia Robusta')
+                                elif prob_profit < 60:
+                                    st.warning('⚠️ Strategia Fragile (Flop)')
                             else:
                                 st.warning("Not enough data for Monte Carlo simulation.")
                         
@@ -3356,9 +3374,22 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         
                         # Monte Carlo Expander
                         with st.expander('🔍 Analisi di Robustezza e Stress Test', expanded=True):
-                            mc_fig = run_monte_carlo(adjusted_trades, initial_capital)
-                            if mc_fig:
+                            mc_res = run_monte_carlo(adjusted_trades, initial_capital)
+                            if mc_res:
+                                mc_fig, prob_profit, median_final_balance = mc_res
                                 st.plotly_chart(mc_fig, use_container_width=True)
+                                
+                                st.subheader('🔬 Validazione Statistica Long-Term')
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    st.metric('Probabilità di Successo Finale', f"{prob_profit:.1f}%")
+                                with c2:
+                                    st.metric('Rendimento Probabile (Mediano)', f"${median_final_balance:.2f}")
+                                
+                                if prob_profit > 75:
+                                    st.success('✅ Strategia Robusta')
+                                elif prob_profit < 60:
+                                    st.warning('⚠️ Strategia Fragile (Flop)')
                             else:
                                 st.warning("Not enough data for Monte Carlo simulation.")
                         
