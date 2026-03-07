@@ -1059,71 +1059,77 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             except Exception as e:
                 print(f"Alpaca fetch failed: {e}")
         
-        # ENGINE 2: Alpha Vantage (Primary for Forex and Indices)
-        if df.empty and (is_forex or is_index or (is_stock and days_requested > 60 and timeframe in ["5Min", "15Min", "1H"])):
+        # ENGINE 2: Polygon.io (Deep History)
+        if df.empty:
             try:
-                api_key = "GSG6LTBDGJE2H67M"
+                api_key = "XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1"
                 
-                # Robust Timeframe Mapping
-                tf_lower = timeframe.lower()
-                tf_map = {
-                    "1m": "1min", "1min": "1min",
-                    "5m": "5min", "5min": "5min",
-                    "15m": "15min", "15min": "15min",
-                    "1h": "60min", "60min": "60min",
-                    "1d": "Daily", "daily": "Daily"
-                }
-                interval = tf_map.get(tf_lower, "15min")
-                is_daily = (interval == "Daily")
-                
-                av_symbol = ticker.replace("=X", "").replace("^", "")
-                
+                # Ticker Mapping
                 if is_forex:
-                    base_ccy = av_symbol[:3]
-                    quote_ccy = av_symbol[3:6]
-                    if is_daily:
-                        url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={base_ccy}&to_symbol={quote_ccy}&outputsize=full&apikey={api_key}&datatype=csv"
+                    poly_ticker = f"C:{ticker.replace('=X', '')}"
+                elif is_crypto:
+                    poly_ticker = f"X:{ticker.replace('-', '')}"
+                elif is_index:
+                    if ticker == "^GSPC":
+                        poly_ticker = "I:SPX"
                     else:
-                        url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={base_ccy}&to_symbol={quote_ccy}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                        poly_ticker = f"I:{ticker.replace('^', '')}"
                 else:
-                    if is_daily:
-                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
-                    else:
-                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                    poly_ticker = ticker
+                
+                # Timeframe Mapping
+                tf_lower = timeframe.lower()
+                if tf_lower in ["1m", "1min"]:
+                    multiplier = 1
+                    timespan = "minute"
+                elif tf_lower in ["5m", "5min"]:
+                    multiplier = 5
+                    timespan = "minute"
+                elif tf_lower in ["15m", "15min"]:
+                    multiplier = 15
+                    timespan = "minute"
+                elif tf_lower in ["1h", "60min"]:
+                    multiplier = 1
+                    timespan = "hour"
+                elif tf_lower in ["1d", "daily"]:
+                    multiplier = 1
+                    timespan = "day"
+                else:
+                    multiplier = 15
+                    timespan = "minute"
+                
+                start_str = start_date.strftime('%Y-%m-%d')
+                end_str = end_date.strftime('%Y-%m-%d')
+                
+                url = f"https://api.polygon.io/v2/aggs/ticker/{poly_ticker}/range/{multiplier}/{timespan}/{start_str}/{end_str}?adjusted=true&sort=asc&limit=50000&apiKey={api_key}"
                 
                 res = requests.get(url)
                 
-                # Error Handling (JSON vs CSV)
-                if res.text.startswith('{') or "Error" in res.text or "Information" in res.text:
-                    st.warning(f"⚠️ Alpha Vantage API Msg: {res.text[:100]}")
-                else:
-                    df_av = pd.read_csv(io.StringIO(res.text))
-                    
-                    # Robust Column Parsing
-                    if 'timestamp' in df_av.columns:
-                        df_av.rename(columns={'timestamp': 'datetime'}, inplace=True)
-                    elif 'time' in df_av.columns:
-                        df_av.rename(columns={'time': 'datetime'}, inplace=True)
+                if res.status_code == 429:
+                    st.warning("⚠️ Limite di chiamate Polygon raggiunto (5 al minuto). Attendi 60 secondi.")
+                elif res.status_code == 200:
+                    data = res.json()
+                    if data.get('resultsCount', 0) > 0 and 'results' in data:
+                        df_poly = pd.DataFrame(data['results'])
                         
-                    if 'datetime' in df_av.columns:
-                        rename_cols = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}
-                        df_av.rename(columns=rename_cols, inplace=True)
+                        rename_cols = {
+                            't': 'datetime',
+                            'o': 'Open',
+                            'h': 'High',
+                            'l': 'Low',
+                            'c': 'Close',
+                            'v': 'Volume'
+                        }
+                        df_poly.rename(columns=rename_cols, inplace=True)
                         
-                        if 'volume' in df_av.columns:
-                            df_av.rename(columns={'volume': 'Volume'}, inplace=True)
-                        else:
-                            df_av['Volume'] = 0
+                        if 'datetime' in df_poly.columns:
+                            df_poly['datetime'] = pd.to_datetime(df_poly['datetime'], unit='ms')
                             
-                        df_av['datetime'] = pd.to_datetime(df_av['datetime'])
-                        
-                        # Smart Date Truncation
-                        df_av = df_av[df_av['datetime'] <= pd.to_datetime(end_date)]
-                        
-                        if not df_av.empty:
-                            st.success("✅ Dati Forex scaricati tramite Alpha Vantage")
-                            df = df_av
+                            if not df_poly.empty:
+                                st.success("✅ Dati storici scaricati tramite Polygon.io (Deep History)")
+                                df = df_poly
             except Exception as e:
-                print(f"Alpha Vantage fetch failed: {e}")
+                print(f"Polygon.io fetch failed: {e}")
 
         # ENGINE 3: yfinance (Fallback)
         if df.empty:
@@ -3869,71 +3875,77 @@ elif menu == "🛠️ STRATEGY BUILDER":
             except Exception as e:
                 print(f"Alpaca fetch failed: {e}")
         
-        # ENGINE 2: Alpha Vantage (Primary for Forex and Indices)
-        if df.empty and (is_forex or is_index or (is_stock and days_requested > 60 and timeframe in ["1m", "5m", "15m", "1h"])):
+        # ENGINE 2: Polygon.io (Deep History)
+        if df.empty:
             try:
-                api_key = "GSG6LTBDGJE2H67M"
+                api_key = "XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1"
                 
-                # Robust Timeframe Mapping
-                tf_lower = timeframe.lower()
-                tf_map = {
-                    "1m": "1min", "1min": "1min",
-                    "5m": "5min", "5min": "5min",
-                    "15m": "15min", "15min": "15min",
-                    "1h": "60min", "60min": "60min",
-                    "1d": "Daily", "daily": "Daily"
-                }
-                interval = tf_map.get(tf_lower, "15min")
-                is_daily = (interval == "Daily")
-                
-                av_symbol = ticker.replace("=X", "").replace("^", "")
-                
+                # Ticker Mapping
                 if is_forex:
-                    base_ccy = av_symbol[:3]
-                    quote_ccy = av_symbol[3:6]
-                    if is_daily:
-                        url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={base_ccy}&to_symbol={quote_ccy}&outputsize=full&apikey={api_key}&datatype=csv"
+                    poly_ticker = f"C:{ticker.replace('=X', '')}"
+                elif is_crypto:
+                    poly_ticker = f"X:{ticker.replace('-', '')}"
+                elif is_index:
+                    if ticker == "^GSPC":
+                        poly_ticker = "I:SPX"
                     else:
-                        url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={base_ccy}&to_symbol={quote_ccy}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                        poly_ticker = f"I:{ticker.replace('^', '')}"
                 else:
-                    if is_daily:
-                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
-                    else:
-                        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                    poly_ticker = ticker
+                
+                # Timeframe Mapping
+                tf_lower = timeframe.lower()
+                if tf_lower in ["1m", "1min"]:
+                    multiplier = 1
+                    timespan = "minute"
+                elif tf_lower in ["5m", "5min"]:
+                    multiplier = 5
+                    timespan = "minute"
+                elif tf_lower in ["15m", "15min"]:
+                    multiplier = 15
+                    timespan = "minute"
+                elif tf_lower in ["1h", "60min"]:
+                    multiplier = 1
+                    timespan = "hour"
+                elif tf_lower in ["1d", "daily"]:
+                    multiplier = 1
+                    timespan = "day"
+                else:
+                    multiplier = 15
+                    timespan = "minute"
+                
+                start_str = start_date.strftime('%Y-%m-%d')
+                end_str = end_date.strftime('%Y-%m-%d')
+                
+                url = f"https://api.polygon.io/v2/aggs/ticker/{poly_ticker}/range/{multiplier}/{timespan}/{start_str}/{end_str}?adjusted=true&sort=asc&limit=50000&apiKey={api_key}"
                 
                 res = requests.get(url)
                 
-                # Error Handling (JSON vs CSV)
-                if res.text.startswith('{') or "Error" in res.text or "Information" in res.text:
-                    st.warning(f"⚠️ Alpha Vantage API Msg: {res.text[:100]}")
-                else:
-                    df_av = pd.read_csv(io.StringIO(res.text))
-                    
-                    # Robust Column Parsing
-                    if 'timestamp' in df_av.columns:
-                        df_av.rename(columns={'timestamp': 'datetime'}, inplace=True)
-                    elif 'time' in df_av.columns:
-                        df_av.rename(columns={'time': 'datetime'}, inplace=True)
+                if res.status_code == 429:
+                    st.warning("⚠️ Limite di chiamate Polygon raggiunto (5 al minuto). Attendi 60 secondi.")
+                elif res.status_code == 200:
+                    data = res.json()
+                    if data.get('resultsCount', 0) > 0 and 'results' in data:
+                        df_poly = pd.DataFrame(data['results'])
                         
-                    if 'datetime' in df_av.columns:
-                        rename_cols = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}
-                        df_av.rename(columns=rename_cols, inplace=True)
+                        rename_cols = {
+                            't': 'datetime',
+                            'o': 'Open',
+                            'h': 'High',
+                            'l': 'Low',
+                            'c': 'Close',
+                            'v': 'Volume'
+                        }
+                        df_poly.rename(columns=rename_cols, inplace=True)
                         
-                        if 'volume' in df_av.columns:
-                            df_av.rename(columns={'volume': 'Volume'}, inplace=True)
-                        else:
-                            df_av['Volume'] = 0
+                        if 'datetime' in df_poly.columns:
+                            df_poly['datetime'] = pd.to_datetime(df_poly['datetime'], unit='ms')
                             
-                        df_av['datetime'] = pd.to_datetime(df_av['datetime'])
-                        
-                        # Smart Date Truncation
-                        df_av = df_av[df_av['datetime'] <= pd.to_datetime(end_date)]
-                        
-                        if not df_av.empty:
-                            st.success("✅ Dati Forex scaricati tramite Alpha Vantage")
-                            df = df_av
+                            if not df_poly.empty:
+                                st.success("✅ Dati storici scaricati tramite Polygon.io (Deep History)")
+                                df = df_poly
             except Exception as e:
-                print(f"Alpha Vantage fetch failed: {e}")
+                print(f"Polygon.io fetch failed: {e}")
 
         # ENGINE 3: yfinance (Fallback)
         if df.empty:
