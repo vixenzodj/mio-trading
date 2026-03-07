@@ -833,8 +833,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         return None
 
     def apply_friction_post_process(trades_list, initial_capital, friction_pct):
-        if not trades_list or friction_pct == 0.0:
-            return trades_list, [initial_capital] + [t.get('balance', initial_capital) for t in trades_list if 'balance' in t]
+        if not trades_list:
+            return trades_list, [initial_capital]
             
         new_trades = []
         balance = initial_capital
@@ -846,20 +846,15 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             price = normalize_key(t_copy, ['price', 'Price', 'Entry Price', 'Exit Price']) or 0
             pnl = normalize_key(t_copy, ['pnl', 'PnL']) or 0
             
-            if "EXIT" in t_type:
-                friction_multiplier = 1 - (friction_pct / 100)
-                new_price = price * friction_multiplier
-                pnl = pnl * friction_multiplier
-                t_copy['price'] = new_price
-                t_copy['pnl'] = pnl
-                balance += pnl
-                t_copy['balance'] = balance
-                equity_curve.append(balance)
-            elif "ENTRY" in t_type:
-                friction_multiplier = 1 + (friction_pct / 100)
-                new_price = price * friction_multiplier
-                t_copy['price'] = new_price
-                
+            friction_multiplier = 1 - (friction_pct / 100)
+            new_price = price * friction_multiplier
+            pnl = pnl * friction_multiplier
+            t_copy['price'] = new_price
+            t_copy['pnl'] = pnl
+            balance += pnl
+            t_copy['balance'] = balance
+            equity_curve.append(balance)
+            
             new_trades.append(t_copy)
                 
         return new_trades, equity_curve
@@ -872,10 +867,10 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         df = pd.DataFrame(trades_list)
         df.columns = [str(c).lower() for c in df.columns]
         
-        if 'pnl' not in df.columns or 'type' not in df.columns:
+        if 'pnl' not in df.columns:
             return fallback
             
-        exits = df[df['type'].astype(str).str.contains('exit', na=False, case=False)]
+        exits = df[df['pnl'].notna()]
         if exits.empty:
             return fallback
             
