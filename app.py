@@ -178,8 +178,8 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
     
     headers = {
-        "APCA-API-KEY-ID": "PKQVMHYR25JUXQVLTEEBEKVIMV",
-        "APCA-API-SECRET-KEY": "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"
+        "APCA-API-KEY-ID": st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"),
+        "APCA-API-SECRET-KEY": st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7")
     }
     
     tf_map = {"1Min": "1Min", "5Min": "5Min", "15Min": "15Min", "1H": "1Hour", "1D": "1Day"}
@@ -250,6 +250,11 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     return pd.DataFrame()
 
 # --- NAVIGAZIONE ---
+st.sidebar.markdown("## 🔑 API KEYS")
+st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", value=st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"), type="password")
+st.session_state.alpaca_secret_key = st.sidebar.text_input("Alpaca Secret Key", value=st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"), type="password")
+st.sidebar.markdown("---")
+
 st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER"])
 
@@ -1028,81 +1033,95 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     # --- DATA FETCHING ENHANCED ---
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
-        """
-        Tries to fetch data from Alpaca first, falls back to yfinance if empty or error.
-        Ensures NO data truncation occurs.
-        """
+        import io
+        import requests
+        
         df = pd.DataFrame()
         
-        # 1. Try Alpaca
-        try:
-            # Convert timeframe to Alpaca format if needed
-            tf_alpaca = timeframe
-            if timeframe == "1D": tf_alpaca = "1Day"
-            elif timeframe == "1H": tf_alpaca = "1Hour"
-            elif timeframe == "15Min": tf_alpaca = "15Min"
-            elif timeframe == "5Min": tf_alpaca = "5Min"
-            
-            # Fetch full history without limits
-            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-        except Exception as e:
-            print(f"Alpaca fetch failed: {e}")
-
-        # 2. Fallback to yfinance if Alpaca failed or returned empty
-        if df.empty:
-            st.warning(f"⚠️ Dati Alpaca non disponibili per {ticker}. Tentativo con Yahoo Finance (storico più profondo).")
+        # Determine asset type
+        is_forex = "=X" in ticker
+        is_index = ticker.startswith("^") or ticker in ["FTSEMIB.MI"]
+        is_crypto = "-USD" in ticker
+        is_stock = not (is_forex or is_index or is_crypto)
+        
+        days_requested = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
+        
+        # ENGINE 1: Alpaca (Primary for US Stocks/ETFs)
+        if is_stock and not is_crypto:
             try:
-                # Convert timeframe to yfinance format
+                tf_alpaca = timeframe
+                if timeframe == "1D": tf_alpaca = "1Day"
+                elif timeframe == "1H": tf_alpaca = "1Hour"
+                elif timeframe == "15Min": tf_alpaca = "15Min"
+                elif timeframe == "5Min": tf_alpaca = "5Min"
+                
+                df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            except Exception as e:
+                print(f"Alpaca fetch failed: {e}")
+        
+        # ENGINE 2: Alpha Vantage (Primary for Forex and Indices)
+        if df.empty and (is_forex or is_index or (is_stock and days_requested > 60 and timeframe in ["5Min", "15Min", "1H"])):
+            try:
+                api_key = "GSG6LTBDGJE2H67M"
+                tf_map = {"5Min": "5min", "15Min": "15min", "1H": "60min", "1D": "Daily"}
+                interval = tf_map.get(timeframe, "15min")
+                av_symbol = ticker.replace("=X", "").replace("^", "")
+                
+                if timeframe == "1D":
+                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
+                else:
+                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                
+                res = requests.get(url)
+                df_av = pd.read_csv(io.StringIO(res.text))
+                
+                if 'timestamp' in df_av.columns:
+                    df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                    df_av['datetime'] = pd.to_datetime(df_av['datetime'])
+                    df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
+                    df = df_av
+            except Exception as e:
+                print(f"Alpha Vantage fetch failed: {e}")
+
+        # ENGINE 3: yfinance (Fallback)
+        if df.empty:
+            try:
                 tf_yf = "1d"
                 if timeframe == "1D": tf_yf = "1d"
                 elif timeframe == "1H": tf_yf = "1h"
                 elif timeframe == "15Min": tf_yf = "15m"
                 elif timeframe == "5Min": tf_yf = "5m"
                 
-                # yfinance download (Full Range)
-                df = yf.download(ticker, start=start_date, end=end_date, interval=tf_yf, progress=False)
+                actual_start = start_date
+                if tf_yf in ["5m", "15m", "1h"] and days_requested > 60:
+                    actual_start = end_date - timedelta(days=60)
+                    st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
                 
+                df = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
                 if not df.empty:
-                    # Standardize columns
                     df.reset_index(inplace=True)
-                    # Handle MultiIndex columns if present (yfinance update)
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
-                    
-                    # Rename to match system standard
                     rename_map = {
                         'Date': 'datetime', 'Datetime': 'datetime',
                         'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
                     }
                     df.rename(columns=rename_map, inplace=True)
-                    
-                    # Ensure datetime column exists
                     if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
                         df.reset_index(inplace=True)
                         df.rename(columns={df.index.name: 'datetime'}, inplace=True)
-                    
-                    # Filter by date just in case
                     df['datetime'] = pd.to_datetime(df['datetime'])
             except Exception as e:
                 st.error(f"Errore Yahoo Finance: {e}")
                 
         if not df.empty:
-            # Memory Optimization: Convert all float64 to float32 immediately
             cols = df.select_dtypes(include=['float64']).columns
             if not cols.empty:
                 df[cols] = df[cols].astype('float32')
-            
-            # Ensure datetime is datetime object
             if 'datetime' in df.columns:
                 df['datetime'] = pd.to_datetime(df['datetime'])
-            
-            # Sort by datetime
             df.sort_values('datetime', inplace=True)
-            
-            # Drop initial NaNs if any
             df.ffill().bfill(inplace=True)
-            
-            # Reset index
             df.reset_index(drop=True, inplace=True)
 
         return df
@@ -3781,31 +3800,91 @@ elif menu == "🛠️ STRATEGY BUILDER":
         return fig, prob_profit, risk_of_ruin, median_final_balance
 
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
+        import io
+        import requests
+        
         df = pd.DataFrame()
-        try:
-            tf_yf = "1d"
-            if timeframe == "1m": tf_yf = "1m"
-            elif timeframe == "5m": tf_yf = "5m"
-            elif timeframe == "15m": tf_yf = "15m"
-            elif timeframe == "1h": tf_yf = "1h"
-            elif timeframe == "1d": tf_yf = "1d"
-            
-            df = yf.download(ticker, start=start_date, end=end_date, interval=tf_yf, progress=False)
-            if not df.empty:
-                df.reset_index(inplace=True)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                rename_map = {
-                    'Date': 'datetime', 'Datetime': 'datetime',
-                    'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
-                }
-                df.rename(columns=rename_map, inplace=True)
-                if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
+        
+        # Determine asset type
+        is_forex = "=X" in ticker
+        is_index = ticker.startswith("^") or ticker in ["FTSEMIB.MI"]
+        is_crypto = "-USD" in ticker
+        is_stock = not (is_forex or is_index or is_crypto)
+        
+        days_requested = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
+        
+        # ENGINE 1: Alpaca (Primary for US Stocks/ETFs)
+        if is_stock and not is_crypto:
+            try:
+                tf_alpaca = timeframe
+                if timeframe == "1d": tf_alpaca = "1Day"
+                elif timeframe == "1h": tf_alpaca = "1Hour"
+                elif timeframe == "15m": tf_alpaca = "15Min"
+                elif timeframe == "5m": tf_alpaca = "5Min"
+                elif timeframe == "1m": tf_alpaca = "1Min"
+                
+                df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            except Exception as e:
+                print(f"Alpaca fetch failed: {e}")
+        
+        # ENGINE 2: Alpha Vantage (Primary for Forex and Indices)
+        if df.empty and (is_forex or is_index or (is_stock and days_requested > 60 and timeframe in ["1m", "5m", "15m", "1h"])):
+            try:
+                api_key = "GSG6LTBDGJE2H67M"
+                tf_map = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "1d": "Daily"}
+                interval = tf_map.get(timeframe, "15min")
+                av_symbol = ticker.replace("=X", "").replace("^", "")
+                
+                if timeframe == "1d":
+                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={av_symbol}&outputsize=full&apikey={api_key}&datatype=csv"
+                else:
+                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={av_symbol}&interval={interval}&outputsize=full&apikey={api_key}&datatype=csv"
+                
+                res = requests.get(url)
+                df_av = pd.read_csv(io.StringIO(res.text))
+                
+                if 'timestamp' in df_av.columns:
+                    df_av.rename(columns={'timestamp': 'datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                    df_av['datetime'] = pd.to_datetime(df_av['datetime'])
+                    df_av = df_av[(df_av['datetime'] >= pd.to_datetime(start_date)) & (df_av['datetime'] <= pd.to_datetime(end_date))]
+                    df = df_av
+            except Exception as e:
+                print(f"Alpha Vantage fetch failed: {e}")
+
+        # ENGINE 3: yfinance (Fallback)
+        if df.empty:
+            try:
+                tf_yf = "1d"
+                if timeframe == "1m": tf_yf = "1m"
+                elif timeframe == "5m": tf_yf = "5m"
+                elif timeframe == "15m": tf_yf = "15m"
+                elif timeframe == "1h": tf_yf = "1h"
+                elif timeframe == "1d": tf_yf = "1d"
+                
+                actual_start = start_date
+                if tf_yf in ["1m"] and days_requested > 7:
+                    actual_start = end_date - timedelta(days=7)
+                    st.warning("⚠️ yfinance supporta solo 7 giorni per il timeframe 1m. Date troncate.")
+                elif tf_yf in ["5m", "15m", "1h"] and days_requested > 60:
+                    actual_start = end_date - timedelta(days=60)
+                    st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
+                
+                df = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
+                if not df.empty:
                     df.reset_index(inplace=True)
-                    df.rename(columns={df.index.name: 'datetime'}, inplace=True)
-                df['datetime'] = pd.to_datetime(df['datetime'])
-        except Exception as e:
-            st.error(f"Error fetching data: {e}")
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    rename_map = {
+                        'Date': 'datetime', 'Datetime': 'datetime',
+                        'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
+                    }
+                    df.rename(columns=rename_map, inplace=True)
+                    if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
+                        df.reset_index(inplace=True)
+                        df.rename(columns={df.index.name: 'datetime'}, inplace=True)
+                    df['datetime'] = pd.to_datetime(df['datetime'])
+            except Exception as e:
+                st.error(f"Error fetching data from yfinance: {e}")
                 
         if not df.empty:
             cols = df.select_dtypes(include=['float64']).columns
