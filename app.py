@@ -10,7 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
-import boto3
+
 from botocore.exceptions import ClientError
 import os
 import io
