@@ -10,6 +10,19 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
+import boto3
+from botocore.exceptions import ClientError
+import os
+import io
+
+s3_client = boto3.client('s3',
+    endpoint_url='https://files.massive.com',
+    aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
+    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1'
+)
+MASSIVE_BUCKET = 'flatfiles'
+LOCAL_DB_DIR = 'local_database'
+os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
 # --- STRATEGY PARAMETER GRID ---
 STRATEGY_PARAM_GRID = {
@@ -253,6 +266,15 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
 st.sidebar.markdown("## 🔑 API KEYS")
 st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", value=st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"), type="password")
 st.session_state.alpaca_secret_key = st.sidebar.text_input("Alpaca Secret Key", value=st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"), type="password")
+st.sidebar.markdown("---")
+
+st.sidebar.markdown("## 📁 DATABASE LOCALE")
+uploaded_file = st.sidebar.file_uploader("Carica file CSV (Database Locale)", type=['csv'])
+if uploaded_file is not None:
+    file_path = os.path.join(LOCAL_DB_DIR, uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    st.sidebar.success(f"File {uploaded_file.name} salvato permanentemente nel Database Locale.")
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
@@ -1059,77 +1081,56 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             except Exception as e:
                 print(f"Alpaca fetch failed: {e}")
         
-        # ENGINE 2: Polygon.io (Deep History)
+        clean_ticker = ticker.replace('=X', '').replace('^', '')
+
+        # ENGINE 1: Massive Cloud
         if df.empty:
             try:
-                api_key = "XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1"
+                obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=f"{clean_ticker}.csv")
+                df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()))
                 
-                # Ticker Mapping
-                if is_forex:
-                    poly_ticker = f"C:{ticker.replace('=X', '')}"
-                elif is_crypto:
-                    poly_ticker = f"X:{ticker.replace('-', '')}"
-                elif is_index:
-                    if ticker == "^GSPC":
-                        poly_ticker = "I:SPX"
-                    else:
-                        poly_ticker = f"I:{ticker.replace('^', '')}"
-                else:
-                    poly_ticker = ticker
+                # Standardize columns
+                rename_map = {c: c.capitalize() for c in df_massive.columns if c.lower() in ['open', 'high', 'low', 'close', 'volume']}
+                if 'timestamp' in df_massive.columns: rename_map['timestamp'] = 'datetime'
+                elif 'time' in df_massive.columns: rename_map['time'] = 'datetime'
+                elif 'date' in df_massive.columns: rename_map['date'] = 'datetime'
                 
-                # Timeframe Mapping
-                tf_lower = timeframe.lower()
-                if tf_lower in ["1m", "1min"]:
-                    multiplier = 1
-                    timespan = "minute"
-                elif tf_lower in ["5m", "5min"]:
-                    multiplier = 5
-                    timespan = "minute"
-                elif tf_lower in ["15m", "15min"]:
-                    multiplier = 15
-                    timespan = "minute"
-                elif tf_lower in ["1h", "60min"]:
-                    multiplier = 1
-                    timespan = "hour"
-                elif tf_lower in ["1d", "daily"]:
-                    multiplier = 1
-                    timespan = "day"
-                else:
-                    multiplier = 15
-                    timespan = "minute"
+                df_massive.rename(columns=rename_map, inplace=True)
                 
-                start_str = start_date.strftime('%Y-%m-%d')
-                end_str = end_date.strftime('%Y-%m-%d')
-                
-                url = f"https://api.polygon.io/v2/aggs/ticker/{poly_ticker}/range/{multiplier}/{timespan}/{start_str}/{end_str}?adjusted=true&sort=asc&limit=50000&apiKey={api_key}"
-                
-                res = requests.get(url)
-                
-                if res.status_code == 429:
-                    st.warning("⚠️ Limite di chiamate Polygon raggiunto (5 al minuto). Attendi 60 secondi.")
-                elif res.status_code == 200:
-                    data = res.json()
-                    if data.get('resultsCount', 0) > 0 and 'results' in data:
-                        df_poly = pd.DataFrame(data['results'])
-                        
-                        rename_cols = {
-                            't': 'datetime',
-                            'o': 'Open',
-                            'h': 'High',
-                            'l': 'Low',
-                            'c': 'Close',
-                            'v': 'Volume'
-                        }
-                        df_poly.rename(columns=rename_cols, inplace=True)
-                        
-                        if 'datetime' in df_poly.columns:
-                            df_poly['datetime'] = pd.to_datetime(df_poly['datetime'], unit='ms')
-                            
-                            if not df_poly.empty:
-                                st.success("✅ Dati storici scaricati tramite Polygon.io (Deep History)")
-                                df = df_poly
+                if 'datetime' in df_massive.columns:
+                    df_massive['datetime'] = pd.to_datetime(df_massive['datetime'])
+                    df_massive = df_massive[(df_massive['datetime'] >= pd.to_datetime(start_date)) & (df_massive['datetime'] <= pd.to_datetime(end_date))]
+                    
+                    if not df_massive.empty:
+                        st.success("✅ Dati recuperati dai server cloud Massive.")
+                        df = df_massive
             except Exception as e:
-                print(f"Polygon.io fetch failed: {e}")
+                pass
+
+        # ENGINE 2: Local Database
+        if df.empty:
+            try:
+                local_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
+                if os.path.exists(local_path):
+                    df_local = pd.read_csv(local_path)
+                    
+                    # Standardize columns
+                    rename_map = {c: c.capitalize() for c in df_local.columns if c.lower() in ['open', 'high', 'low', 'close', 'volume']}
+                    if 'timestamp' in df_local.columns: rename_map['timestamp'] = 'datetime'
+                    elif 'time' in df_local.columns: rename_map['time'] = 'datetime'
+                    elif 'date' in df_local.columns: rename_map['date'] = 'datetime'
+                    
+                    df_local.rename(columns=rename_map, inplace=True)
+                    
+                    if 'datetime' in df_local.columns:
+                        df_local['datetime'] = pd.to_datetime(df_local['datetime'])
+                        df_local = df_local[(df_local['datetime'] >= pd.to_datetime(start_date)) & (df_local['datetime'] <= pd.to_datetime(end_date))]
+                        
+                        if not df_local.empty:
+                            st.success("📂 Dati recuperati dal Database Locale.")
+                            df = df_local
+            except Exception as e:
+                pass
 
         # ENGINE 3: yfinance (Fallback)
         if df.empty:
@@ -1145,22 +1146,31 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     actual_start = end_date - timedelta(days=60)
                     st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
                 
-                df = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
-                if not df.empty:
-                    df.reset_index(inplace=True)
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.get_level_values(0)
+                df_yf = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
+                if not df_yf.empty:
+                    df_yf.reset_index(inplace=True)
+                    if isinstance(df_yf.columns, pd.MultiIndex):
+                        df_yf.columns = df_yf.columns.get_level_values(0)
                     rename_map = {
                         'Date': 'datetime', 'Datetime': 'datetime',
                         'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
                     }
-                    df.rename(columns=rename_map, inplace=True)
-                    if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
-                        df.reset_index(inplace=True)
-                        df.rename(columns={df.index.name: 'datetime'}, inplace=True)
-                    df['datetime'] = pd.to_datetime(df['datetime'])
+                    df_yf.rename(columns=rename_map, inplace=True)
+                    if 'datetime' not in df_yf.columns and df_yf.index.name in ['Date', 'Datetime']:
+                        df_yf.reset_index(inplace=True)
+                        df_yf.rename(columns={df_yf.index.name: 'datetime'}, inplace=True)
+                    df_yf['datetime'] = pd.to_datetime(df_yf['datetime'])
+                    
+                    if not df_yf.empty:
+                        st.warning("⚠️ Dati presi da Yahoo Finance (Limiti applicati).")
+                        df = df_yf
             except Exception as e:
-                st.error(f"Errore Yahoo Finance: {e}")
+                pass
+                
+        # ENGINE 4: Fatal Error
+        if df.empty:
+            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Alpaca, Massive, Locale, Yahoo). Per favore, carica un file CSV manualmente usando l'apposito uploader per testare questo asset.")
+            st.stop()
                 
         if not df.empty:
             cols = df.select_dtypes(include=['float64']).columns
@@ -3875,77 +3885,56 @@ elif menu == "🛠️ STRATEGY BUILDER":
             except Exception as e:
                 print(f"Alpaca fetch failed: {e}")
         
-        # ENGINE 2: Polygon.io (Deep History)
+        clean_ticker = ticker.replace('=X', '').replace('^', '')
+
+        # ENGINE 1: Massive Cloud
         if df.empty:
             try:
-                api_key = "XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1"
+                obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=f"{clean_ticker}.csv")
+                df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()))
                 
-                # Ticker Mapping
-                if is_forex:
-                    poly_ticker = f"C:{ticker.replace('=X', '')}"
-                elif is_crypto:
-                    poly_ticker = f"X:{ticker.replace('-', '')}"
-                elif is_index:
-                    if ticker == "^GSPC":
-                        poly_ticker = "I:SPX"
-                    else:
-                        poly_ticker = f"I:{ticker.replace('^', '')}"
-                else:
-                    poly_ticker = ticker
+                # Standardize columns
+                rename_map = {c: c.capitalize() for c in df_massive.columns if c.lower() in ['open', 'high', 'low', 'close', 'volume']}
+                if 'timestamp' in df_massive.columns: rename_map['timestamp'] = 'datetime'
+                elif 'time' in df_massive.columns: rename_map['time'] = 'datetime'
+                elif 'date' in df_massive.columns: rename_map['date'] = 'datetime'
                 
-                # Timeframe Mapping
-                tf_lower = timeframe.lower()
-                if tf_lower in ["1m", "1min"]:
-                    multiplier = 1
-                    timespan = "minute"
-                elif tf_lower in ["5m", "5min"]:
-                    multiplier = 5
-                    timespan = "minute"
-                elif tf_lower in ["15m", "15min"]:
-                    multiplier = 15
-                    timespan = "minute"
-                elif tf_lower in ["1h", "60min"]:
-                    multiplier = 1
-                    timespan = "hour"
-                elif tf_lower in ["1d", "daily"]:
-                    multiplier = 1
-                    timespan = "day"
-                else:
-                    multiplier = 15
-                    timespan = "minute"
+                df_massive.rename(columns=rename_map, inplace=True)
                 
-                start_str = start_date.strftime('%Y-%m-%d')
-                end_str = end_date.strftime('%Y-%m-%d')
-                
-                url = f"https://api.polygon.io/v2/aggs/ticker/{poly_ticker}/range/{multiplier}/{timespan}/{start_str}/{end_str}?adjusted=true&sort=asc&limit=50000&apiKey={api_key}"
-                
-                res = requests.get(url)
-                
-                if res.status_code == 429:
-                    st.warning("⚠️ Limite di chiamate Polygon raggiunto (5 al minuto). Attendi 60 secondi.")
-                elif res.status_code == 200:
-                    data = res.json()
-                    if data.get('resultsCount', 0) > 0 and 'results' in data:
-                        df_poly = pd.DataFrame(data['results'])
-                        
-                        rename_cols = {
-                            't': 'datetime',
-                            'o': 'Open',
-                            'h': 'High',
-                            'l': 'Low',
-                            'c': 'Close',
-                            'v': 'Volume'
-                        }
-                        df_poly.rename(columns=rename_cols, inplace=True)
-                        
-                        if 'datetime' in df_poly.columns:
-                            df_poly['datetime'] = pd.to_datetime(df_poly['datetime'], unit='ms')
-                            
-                            if not df_poly.empty:
-                                st.success("✅ Dati storici scaricati tramite Polygon.io (Deep History)")
-                                df = df_poly
+                if 'datetime' in df_massive.columns:
+                    df_massive['datetime'] = pd.to_datetime(df_massive['datetime'])
+                    df_massive = df_massive[(df_massive['datetime'] >= pd.to_datetime(start_date)) & (df_massive['datetime'] <= pd.to_datetime(end_date))]
+                    
+                    if not df_massive.empty:
+                        st.success("✅ Dati recuperati dai server cloud Massive.")
+                        df = df_massive
             except Exception as e:
-                print(f"Polygon.io fetch failed: {e}")
+                pass
+
+        # ENGINE 2: Local Database
+        if df.empty:
+            try:
+                local_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
+                if os.path.exists(local_path):
+                    df_local = pd.read_csv(local_path)
+                    
+                    # Standardize columns
+                    rename_map = {c: c.capitalize() for c in df_local.columns if c.lower() in ['open', 'high', 'low', 'close', 'volume']}
+                    if 'timestamp' in df_local.columns: rename_map['timestamp'] = 'datetime'
+                    elif 'time' in df_local.columns: rename_map['time'] = 'datetime'
+                    elif 'date' in df_local.columns: rename_map['date'] = 'datetime'
+                    
+                    df_local.rename(columns=rename_map, inplace=True)
+                    
+                    if 'datetime' in df_local.columns:
+                        df_local['datetime'] = pd.to_datetime(df_local['datetime'])
+                        df_local = df_local[(df_local['datetime'] >= pd.to_datetime(start_date)) & (df_local['datetime'] <= pd.to_datetime(end_date))]
+                        
+                        if not df_local.empty:
+                            st.success("📂 Dati recuperati dal Database Locale.")
+                            df = df_local
+            except Exception as e:
+                pass
 
         # ENGINE 3: yfinance (Fallback)
         if df.empty:
@@ -3965,22 +3954,31 @@ elif menu == "🛠️ STRATEGY BUILDER":
                     actual_start = end_date - timedelta(days=60)
                     st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
                 
-                df = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
-                if not df.empty:
-                    df.reset_index(inplace=True)
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.get_level_values(0)
+                df_yf = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
+                if not df_yf.empty:
+                    df_yf.reset_index(inplace=True)
+                    if isinstance(df_yf.columns, pd.MultiIndex):
+                        df_yf.columns = df_yf.columns.get_level_values(0)
                     rename_map = {
                         'Date': 'datetime', 'Datetime': 'datetime',
                         'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'
                     }
-                    df.rename(columns=rename_map, inplace=True)
-                    if 'datetime' not in df.columns and df.index.name in ['Date', 'Datetime']:
-                        df.reset_index(inplace=True)
-                        df.rename(columns={df.index.name: 'datetime'}, inplace=True)
-                    df['datetime'] = pd.to_datetime(df['datetime'])
+                    df_yf.rename(columns=rename_map, inplace=True)
+                    if 'datetime' not in df_yf.columns and df_yf.index.name in ['Date', 'Datetime']:
+                        df_yf.reset_index(inplace=True)
+                        df_yf.rename(columns={df_yf.index.name: 'datetime'}, inplace=True)
+                    df_yf['datetime'] = pd.to_datetime(df_yf['datetime'])
+                    
+                    if not df_yf.empty:
+                        st.warning("⚠️ Dati presi da Yahoo Finance (Limiti applicati).")
+                        df = df_yf
             except Exception as e:
-                st.error(f"Error fetching data from yfinance: {e}")
+                pass
+                
+        # ENGINE 4: Fatal Error
+        if df.empty:
+            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Alpaca, Massive, Locale, Yahoo). Per favore, carica un file CSV manualmente usando l'apposito uploader per testare questo asset.")
+            st.stop()
                 
         if not df.empty:
             cols = df.select_dtypes(include=['float64']).columns
