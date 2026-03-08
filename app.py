@@ -294,7 +294,13 @@ today_str_format = today.strftime('%Y-%m-%d') # Per la cache
 
 if menu == "🏟️ DASHBOARD SINGOLA":
     if 'ticker_list' not in st.session_state:
-        st.session_state.ticker_list = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
+        base_tickers = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
+        if os.path.exists(LOCAL_DB_DIR):
+            local_files = [f.replace('.csv', '').upper() for f in os.listdir(LOCAL_DB_DIR) if f.endswith('.csv')]
+            for lf in local_files:
+                if lf not in base_tickers:
+                    base_tickers.insert(0, lf)
+        st.session_state.ticker_list = base_tickers
     
     new_asset = st.sidebar.text_input("➕ CARICA TICKER", "").upper().strip()
     if new_asset and new_asset not in st.session_state.ticker_list:
@@ -1142,9 +1148,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 elif timeframe == "5Min": tf_yf = "5m"
                 
                 actual_start = start_date
-                if tf_yf in ["5m", "15m", "1h"] and days_requested > 60:
+                if tf_yf in ["5m", "15m"] and days_requested > 60:
                     actual_start = end_date - timedelta(days=60)
                     st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
+                elif tf_yf == "1h" and days_requested > 730:
+                    actual_start = end_date - timedelta(days=730)
+                    st.warning(f"⚠️ yfinance supporta solo 730 giorni per il timeframe 1h. Date troncate.")
                 
                 df_yf = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
                 if not df_yf.empty:
@@ -1180,7 +1189,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 df['datetime'] = pd.to_datetime(df['datetime'])
             df.sort_values('datetime', inplace=True)
             df.ffill().bfill(inplace=True)
-            df.reset_index(drop=True, inplace=True)
+            df.set_index('datetime', drop=False, inplace=True)
 
         return df
 
@@ -1191,19 +1200,23 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             df_check = fetch_data_smart(ticker, timeframe, start_date, end_date)
             
             if not df_check.empty:
-                # Check actual date range
-                min_date = df_check['datetime'].min().date()
-                max_date = df_check['datetime'].max().date()
                 count = len(df_check)
-                
-                st.success(f"✅ Dati Trovati! {count} candele disponibili.")
-                st.info(f"📅 Range Disponibile: {min_date} -> {max_date}")
-                
-                if min_date > start_date:
-                    st.warning(f"⚠️ Attenzione: I dati iniziano dal {min_date}, successivi alla data richiesta {start_date}.")
-                
-                st.session_state.backtest_data = df_check
-                st.session_state.backtest_ticker = ticker
+                if count < 100:
+                    st.error(f"❌ Attenzione: Dati insufficienti per un backtest affidabile ({count} candele). Minimo richiesto: 100 candele.")
+                    st.session_state.backtest_data = None
+                else:
+                    # Check actual date range
+                    min_date = df_check['datetime'].min().date()
+                    max_date = df_check['datetime'].max().date()
+                    
+                    st.success(f"✅ Dati Trovati! {count} candele disponibili.")
+                    st.info(f"📅 Range Disponibile: {min_date} -> {max_date}")
+                    
+                    if min_date > start_date:
+                        st.warning(f"⚠️ Attenzione: I dati iniziano dal {min_date}, successivi alla data richiesta {start_date}.")
+                    
+                    st.session_state.backtest_data = df_check
+                    st.session_state.backtest_ticker = ticker
             else:
                 st.error(f"❌ Nessun dato trovato per {ticker} nel range selezionato. Prova a cambiare date o ticker.")
                 st.session_state.backtest_data = None
@@ -3950,9 +3963,12 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 if tf_yf in ["1m"] and days_requested > 7:
                     actual_start = end_date - timedelta(days=7)
                     st.warning("⚠️ yfinance supporta solo 7 giorni per il timeframe 1m. Date troncate.")
-                elif tf_yf in ["5m", "15m", "1h"] and days_requested > 60:
+                elif tf_yf in ["5m", "15m"] and days_requested > 60:
                     actual_start = end_date - timedelta(days=60)
                     st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
+                elif tf_yf == "1h" and days_requested > 730:
+                    actual_start = end_date - timedelta(days=730)
+                    st.warning(f"⚠️ yfinance supporta solo 730 giorni per il timeframe 1h. Date troncate.")
                 
                 df_yf = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
                 if not df_yf.empty:
@@ -3988,7 +4004,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 df['datetime'] = pd.to_datetime(df['datetime'])
             df.sort_values('datetime', inplace=True)
             df.ffill().bfill(inplace=True)
-            df.reset_index(drop=True, inplace=True)
+            df.set_index('datetime', drop=False, inplace=True)
 
         return df
 
