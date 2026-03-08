@@ -15,13 +15,15 @@ from botocore.exceptions import ClientError
 import os
 import io
 
-from botocore.config import Config
+import gzip
+from botocore.client import Config
 
-session = boto3.Session(
+s3_client = boto3.client('s3',
+    endpoint_url='https://files.massive.com',
     aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
-    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1'
+    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
+    config=Config(signature_version='s3v4')
 )
-s3_client = session.client('s3', endpoint_url='https://files.massive.com', config=Config(signature_version='s3v4'))
 MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
@@ -264,408 +266,19 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
         
     return pd.DataFrame()
 
-def normalize_key(d, possible_keys):
-    for k in d.keys():
-        if k.lower() in [pk.lower() for pk in possible_keys]:
-            return d[k]
-    return None
-
-def apply_friction_post_process(trades_list, initial_capital, friction_pct):
-    if not trades_list:
-        return trades_list, [initial_capital]
-        
-    new_trades = []
-    balance = initial_capital
-    equity_curve = [balance]
-    
-    for t in trades_list:
-        t_copy = dict(t)
-        t_type = str(normalize_key(t_copy, ['type', 'Type']) or '').upper()
-        price = normalize_key(t_copy, ['price', 'Price', 'Entry Price', 'Exit Price']) or 0
-        pnl = normalize_key(t_copy, ['pnl', 'PnL']) or 0
-        
-        friction_multiplier = 1 - (friction_pct / 100)
-        new_price = price * friction_multiplier
-        pnl = pnl * friction_multiplier
-        t_copy['price'] = new_price
-        t_copy['pnl'] = pnl
-        balance += pnl
-        t_copy['balance'] = balance
-        equity_curve.append(balance)
-        
-        new_trades.append(t_copy)
-            
-    return new_trades, equity_curve
-
-def calculate_advanced_metrics(trades_list):
-    fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
-    if not trades_list:
-        return fallback
-        
-    df = pd.DataFrame(trades_list)
-    df.columns = [str(c).lower() for c in df.columns]
-    
-    if 'pnl' not in df.columns:
-        return fallback
-        
-    exits = df[df['pnl'].notna()]
-    if exits.empty:
-        return fallback
-        
-    wins = exits[exits['pnl'] > 0]['pnl']
-    losses = exits[exits['pnl'] < 0]['pnl']
-    
-    win_rate = len(wins) / len(exits)
-    avg_win = wins.mean() if not wins.empty else 0
-    avg_loss = abs(losses.mean()) if not losses.empty else 0
-    expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
-    profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
-    
-    total_profit_abs = exits['pnl'].sum()
-    
-    bal_col = 'balance' if 'balance' in df.columns else None
-    max_dd = 0
-    max_dd_abs = 0
-    if bal_col:
-        curve = df[bal_col].tolist()
-        peak = curve[0]
-        for val in curve:
-            if val > peak: peak = val
-            dd = (peak - val) / peak if peak > 0 else 0
-            dd_abs = peak - val
-            if dd > max_dd: max_dd = dd
-            if dd_abs > max_dd_abs: max_dd_abs = dd_abs
-            
-    return {
-        'expectancy': expectancy,
-        'profit_factor': profit_factor,
-        'max_drawdown': max_dd * 100,
-        'win_rate': win_rate * 100,
-        'total_profit_abs': total_profit_abs,
-        'max_dd_abs': max_dd_abs
-    }
-
-def run_monte_carlo(trades_list, initial_capital, simulations=1000):
-    import plotly.graph_objects as go
-    import numpy as np
-    import pandas as pd
-    
-    if not trades_list:
-        return None
-        
-    df_res = pd.DataFrame(trades_list)
-    if 'pnl' in df_res.columns:
-        pnls = df_res[df_res['pnl'].notna()]['pnl'].values
-    else:
-        return None
-        
-    n_trades = len(pnls)
-    if n_trades == 0:
-        return None
-        
-    # Fixed forward-horizon
-    sim_length = min(50, n_trades)
-    
-    # Vectorized Monte Carlo: Sample with replacement
-    random_indices = np.random.randint(0, n_trades, size=(simulations, sim_length))
-    simulated_pnls = pnls[random_indices]
-    
-    # Calculate equity curves
-    equity_curves = np.cumsum(simulated_pnls, axis=1) + initial_capital
-    
-    # Prepend initial capital to the beginning of each curve
-    starting_capital = np.full((simulations, 1), initial_capital)
-    equity_curves = np.hstack((starting_capital, equity_curves))
-    
-    # Calculate median curve
-    median_curve = np.median(equity_curves, axis=0)
-    
-    # Calculate quantitative analytics
-    final_balances = equity_curves[:, -1]
-    prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
-    
-    # Risk of Ruin: equity drops below initial_capital * 0.80 at any point
-    ruin_threshold = initial_capital * 0.80
-    ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
-    risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
-    
-    median_final_balance = np.median(final_balances)
-    
-    # Visualization with Plotly
-    fig = go.Figure()
-    
-    # Performance optimization: Plot all 1000 lines as a single trace separated by NaNs
-    # This prevents Plotly from crashing the browser when rendering 1000 individual traces
-    x_base = np.arange(sim_length + 1)
-    x_all = np.tile(np.append(x_base, np.nan), simulations)
-    y_all = np.hstack((equity_curves, np.full((simulations, 1), np.nan))).flatten()
-    
-    # Add all simulated paths (Gray, low opacity)
-    fig.add_trace(go.Scatter(
-        x=x_all,
-        y=y_all,
-        mode='lines',
-        line=dict(color='gray', width=1),
-        opacity=0.1,
-        showlegend=False,
-        hoverinfo='skip'
-    ))
-    
-    # Add Median Curve (Gold, bold)
-    fig.add_trace(go.Scatter(
-        x=x_base,
-        y=median_curve,
-        mode='lines',
-        line=dict(color='gold', width=3),
-        name='Median (50th Percentile)'
-    ))
-    
-    fig.update_layout(
-        title='🔬 Monte Carlo Robustness Analysis (Forward 50 Trades)',
-        xaxis_title='Trade Number',
-        yaxis_title='Equity ($)',
-        template='plotly_dark',
-        hovermode='x unified',
-        margin=dict(l=40, r=40, t=50, b=40)
-    )
-    
-    return fig, prob_profit, risk_of_ruin, median_final_balance
-
-# Engine Selection
-engine_choice = st.radio("Seleziona Motore di Backtesting:", 
-                         ["🧬 MOTORE A: GEX & Options Hybrid Simulator", 
-                          "📈 MOTORE B: Technical Strategy Hub (Pure Trading)"], 
-                         horizontal=True)
-
-# Common Inputs
-c1, c2, c3, c4 = st.columns(4)
-with c1: 
-    # Ticker Selection with Predefined List + Custom
-    PREDEFINED_TICKERS = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "TSLA", "NVDA", "AMD", "AMZN", "GOOGL", "META", "NFLX"]
-    
-    # Add local database files
-    if os.path.exists(LOCAL_DB_DIR):
-        local_files = [f[:-4].upper() for f in os.listdir(LOCAL_DB_DIR) if f.lower().endswith('.csv')]
-        if local_files:
-            PREDEFINED_TICKERS.extend(list(set(local_files)))
-            
-    ticker_select = st.selectbox("Seleziona Ticker", ["Seleziona..."] + PREDEFINED_TICKERS + ["Inserisci Manualmente"])
-    
-    if ticker_select == "Inserisci Manualmente":
-        ticker = st.text_input("Inserisci Simbolo Ticker", value="SPY").upper()
-    elif ticker_select != "Seleziona...":
-        ticker = ticker_select
-    else:
-        ticker = "SPY" # Default
-
-with c2: timeframe = st.selectbox("Timeframe", ["1D", "1H", "15Min", "5Min"], index=0)
-with c3: 
-    start_date = st.date_input("Data Inizio", value=datetime.now() - timedelta(days=365*2))
-with c4: 
-    end_date = st.date_input("Data Fine", value=datetime.now())
-    initial_capital = st.number_input("Capitale Iniziale ($)", value=10000)
-
-# Session State for Data Verification
-if 'backtest_data' not in st.session_state:
-    st.session_state.backtest_data = None
-if 'backtest_ticker' not in st.session_state:
-    st.session_state.backtest_ticker = None
-
-# --- DATA FETCHING ENHANCED ---
-def process_dataframe(df, start_date, end_date, ticker=None):
-    if df.empty:
-        return df
-
-    # Filtro Ticker
-    if ticker and 'ticker' in df.columns:
-        clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
-        df = df[df['ticker'].astype(str).str.upper() == clean_ticker]
-
-    # Rinomina Colonne
-    df.columns = [str(c).lower() for c in df.columns]
-    
-    rename_map = {
-        'open': 'Open',
-        'high': 'High',
-        'low': 'Low',
-        'close': 'Close',
-        'volume': 'Volume',
-        'vol': 'Volume',
-        'adj close': 'Adj Close'
-    }
-    df.rename(columns=rename_map, inplace=True)
-
-    # Gestione Timestamp Massive (window_start) e altri formati
-    if 'window_start' in df.columns:
-        df['datetime'] = pd.to_datetime(df['window_start'], unit='ns')
-    elif 'date' in df.columns:
-        if 'time' in df.columns:
-             df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
-        else:
-             df['datetime'] = pd.to_datetime(df['date'])
-    elif 'timestamp' in df.columns:
-        df['datetime'] = pd.to_datetime(df['timestamp'])
-        
-    # Fallback: se index è datetime
-    if 'datetime' not in df.columns and isinstance(df.index, pd.DatetimeIndex):
-        df['datetime'] = df.index.to_series()
-        
-    # Se abbiamo datetime, procediamo
-    if 'datetime' in df.columns:
-        # Ensure datetime type
-        df['datetime'] = pd.to_datetime(df['datetime'], utc=True).dt.tz_localize(None)
-        
-        # Estensione Temporale
-        sd = pd.to_datetime(start_date)
-        ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
-        
-        df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
-        
-        # Index e Sort
-        df.sort_values('datetime', inplace=True)
-        df.set_index('datetime', drop=False, inplace=True)
-    else:
-        return pd.DataFrame()
-
-    # Ensure numeric
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-    if 'Close' in df.columns:
-        df.dropna(subset=['Close'], inplace=True)
-
-    return df
-
-def fetch_data_smart(ticker, timeframe, start_date, end_date):
-    df = pd.DataFrame()
-    clean_ticker = ticker.replace('=X', '').replace('^', '')
-    
-    # Livello 1 (Local)
-    possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
-    local_path = None
-    for pf in possible_files:
-        p = os.path.join(LOCAL_DB_DIR, pf)
-        if os.path.exists(p):
-            local_path = p
-            break
-            
-    if local_path:
-        try:
-            df_local = pd.read_csv(local_path)
-            df = process_dataframe(df_local, start_date, end_date, ticker)
-            if not df.empty:
-                st.success(f"📂 Dati recuperati dal Database Locale: {local_path}")
-                return df
-        except Exception as e:
-            st.error(f"❌ Errore lettura Database Locale: {e}")
-
-    # Livello 2 (Massive)
-    if df.empty:
-        try:
-            prefix = 'global_forex' if '=X' in ticker else 'us_stocks_sip'
-            st.info(f"☁️ Ricerca su Massive S3 ({prefix})...")
-            
-            paginator = s3_client.get_paginator('list_objects_v2')
-            pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
-            
-            found_key = None
-            for page in pages:
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        key = obj['Key']
-                        if key.endswith('.csv.gz') and (clean_ticker in key):
-                            found_key = key
-                            break
-                if found_key:
-                    break
-            
-            if found_key:
-                st.info(f"⬇️ Scaricamento {found_key}...")
-                obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
-                df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
-                
-                # Caching
-                cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
-                df_massive.to_csv(cache_path, index=False)
-                st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
-                
-                df = process_dataframe(df_massive, start_date, end_date, ticker)
-                if not df.empty:
-                    return df
-            else:
-                st.warning(f"⚠️ Nessun file trovato su Massive per {ticker}")
-
-        except Exception as e:
-            st.error(f"❌ Errore Massive S3: {e}")
-
-    # Livello 3 (Yahoo)
-    if df.empty:
-        try:
-            st.info("🌐 Tentativo download da Yahoo Finance...")
-            df_yf = yf.download(ticker, start=start_date, end=end_date, interval="1d", progress=False)
-            
-            if not df_yf.empty:
-                if isinstance(df_yf.columns, pd.MultiIndex):
-                    df_yf.columns = df_yf.columns.get_level_values(0)
-                df_yf.reset_index(inplace=True)
-                
-                df = process_dataframe(df_yf, start_date, end_date, ticker)
-                if not df.empty:
-                    st.success("✅ Dati recuperati da Yahoo Finance.")
-                    return df
-        except Exception as e:
-            st.error(f"❌ Errore Yahoo Finance: {e}")
-
-    if df.empty:
-        st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Locale, Massive, Yahoo).")
-        st.stop()
-        
-    return df
-
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
 st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", value=st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"), type="password")
 st.session_state.alpaca_secret_key = st.sidebar.text_input("Alpaca Secret Key", value=st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"), type="password")
-
-if st.sidebar.button("🔌 Testa Connessione Massive S3"):
-    try:
-        s3_client.head_bucket(Bucket=MASSIVE_BUCKET)
-        st.sidebar.success("✅ Connessione Riuscita a Massive S3!")
-    except Exception as e:
-        st.sidebar.error(f"❌ Errore di Connessione: {e}")
-
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 📁 DATABASE LOCALE")
-
-# Scanner File Locali
-local_files = [f for f in os.listdir(LOCAL_DB_DIR) if f.endswith('.csv') or f.endswith('.CSV')]
-if local_files:
-    clean_names = [f.replace('.csv', '').replace('.CSV', '').upper() for f in local_files]
-    st.sidebar.info(f"✅ Asset pronti all'uso: {', '.join(clean_names)}")
-else:
-    st.sidebar.warning("Nessun file nel database locale.")
-
 uploaded_file = st.sidebar.file_uploader("Carica file CSV (Database Locale)", type=['csv'])
 if uploaded_file is not None:
-    # Standardizza nome file: tutto maiuscolo
-    std_name = uploaded_file.name.upper()
-    file_path = os.path.join(LOCAL_DB_DIR, std_name)
-    
-    if os.path.exists(file_path):
-        st.sidebar.warning(f"Il file {std_name} esiste già. Verrà sovrascritto.")
-        
+    file_path = os.path.join(LOCAL_DB_DIR, uploaded_file.name)
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    st.sidebar.success(f"File {std_name} salvato permanentemente nel Database Locale.")
-
-if st.sidebar.button("🗑️ Pulisci Database Locale"):
-    for f in os.listdir(LOCAL_DB_DIR):
-        if f.endswith('.csv') or f.endswith('.CSV'):
-            os.remove(os.path.join(LOCAL_DB_DIR, f))
-    st.sidebar.success("Database Locale svuotato con successo!")
-    st.rerun()
+    st.sidebar.success(f"File {uploaded_file.name} salvato permanentemente nel Database Locale.")
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
@@ -685,13 +298,7 @@ today_str_format = today.strftime('%Y-%m-%d') # Per la cache
 
 if menu == "🏟️ DASHBOARD SINGOLA":
     if 'ticker_list' not in st.session_state:
-        base_tickers = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
-        if os.path.exists(LOCAL_DB_DIR):
-            local_files = [f.replace('.csv', '').upper() for f in os.listdir(LOCAL_DB_DIR) if f.endswith('.csv')]
-            for lf in local_files:
-                if lf not in base_tickers:
-                    base_tickers.insert(0, lf)
-        st.session_state.ticker_list = base_tickers
+        st.session_state.ticker_list = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
     
     new_asset = st.sidebar.text_input("➕ CARICA TICKER", "").upper().strip()
     if new_asset and new_asset not in st.session_state.ticker_list:
@@ -1250,6 +857,396 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     st.sidebar.markdown("### 🛡️ Risk & Robustness")
     friction_pct = st.sidebar.slider("Execution Friction (%)", 0.00, 0.50, 0.00, 0.01)
 
+    def normalize_key(d, possible_keys):
+        for k in d.keys():
+            if k.lower() in [pk.lower() for pk in possible_keys]:
+                return d[k]
+        return None
+
+    def apply_friction_post_process(trades_list, initial_capital, friction_pct):
+        if not trades_list:
+            return trades_list, [initial_capital]
+            
+        new_trades = []
+        balance = initial_capital
+        equity_curve = [balance]
+        
+        for t in trades_list:
+            t_copy = dict(t)
+            t_type = str(normalize_key(t_copy, ['type', 'Type']) or '').upper()
+            price = normalize_key(t_copy, ['price', 'Price', 'Entry Price', 'Exit Price']) or 0
+            pnl = normalize_key(t_copy, ['pnl', 'PnL']) or 0
+            
+            friction_multiplier = 1 - (friction_pct / 100)
+            new_price = price * friction_multiplier
+            pnl = pnl * friction_multiplier
+            t_copy['price'] = new_price
+            t_copy['pnl'] = pnl
+            balance += pnl
+            t_copy['balance'] = balance
+            equity_curve.append(balance)
+            
+            new_trades.append(t_copy)
+                
+        return new_trades, equity_curve
+
+    def calculate_advanced_metrics(trades_list):
+        fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
+        if not trades_list:
+            return fallback
+            
+        df = pd.DataFrame(trades_list)
+        df.columns = [str(c).lower() for c in df.columns]
+        
+        if 'pnl' not in df.columns:
+            return fallback
+            
+        exits = df[df['pnl'].notna()]
+        if exits.empty:
+            return fallback
+            
+        wins = exits[exits['pnl'] > 0]['pnl']
+        losses = exits[exits['pnl'] < 0]['pnl']
+        
+        win_rate = len(wins) / len(exits)
+        avg_win = wins.mean() if not wins.empty else 0
+        avg_loss = abs(losses.mean()) if not losses.empty else 0
+        expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+        profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
+        
+        total_profit_abs = exits['pnl'].sum()
+        
+        bal_col = 'balance' if 'balance' in df.columns else None
+        max_dd = 0
+        max_dd_abs = 0
+        if bal_col:
+            curve = df[bal_col].tolist()
+            peak = curve[0]
+            for val in curve:
+                if val > peak: peak = val
+                dd = (peak - val) / peak if peak > 0 else 0
+                dd_abs = peak - val
+                if dd > max_dd: max_dd = dd
+                if dd_abs > max_dd_abs: max_dd_abs = dd_abs
+                
+        return {
+            'expectancy': expectancy,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_dd * 100,
+            'win_rate': win_rate * 100,
+            'total_profit_abs': total_profit_abs,
+            'max_dd_abs': max_dd_abs
+        }
+
+    def run_monte_carlo(trades_list, initial_capital, simulations=1000):
+        import plotly.graph_objects as go
+        import numpy as np
+        import pandas as pd
+        
+        if not trades_list:
+            return None
+            
+        df_res = pd.DataFrame(trades_list)
+        if 'pnl' in df_res.columns:
+            pnls = df_res[df_res['pnl'].notna()]['pnl'].values
+        else:
+            return None
+            
+        n_trades = len(pnls)
+        if n_trades == 0:
+            return None
+            
+        # Fixed forward-horizon
+        sim_length = min(50, n_trades)
+        
+        # Vectorized Monte Carlo: Sample with replacement
+        random_indices = np.random.randint(0, n_trades, size=(simulations, sim_length))
+        simulated_pnls = pnls[random_indices]
+        
+        # Calculate equity curves
+        equity_curves = np.cumsum(simulated_pnls, axis=1) + initial_capital
+        
+        # Prepend initial capital to the beginning of each curve
+        starting_capital = np.full((simulations, 1), initial_capital)
+        equity_curves = np.hstack((starting_capital, equity_curves))
+        
+        # Calculate median curve
+        median_curve = np.median(equity_curves, axis=0)
+        
+        # Calculate quantitative analytics
+        final_balances = equity_curves[:, -1]
+        prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
+        
+        # Risk of Ruin: equity drops below initial_capital * 0.80 at any point
+        ruin_threshold = initial_capital * 0.80
+        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
+        risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
+        
+        median_final_balance = np.median(final_balances)
+        
+        # Visualization with Plotly
+        fig = go.Figure()
+        
+        # Performance optimization: Plot all 1000 lines as a single trace separated by NaNs
+        # This prevents Plotly from crashing the browser when rendering 1000 individual traces
+        x_base = np.arange(sim_length + 1)
+        x_all = np.tile(np.append(x_base, np.nan), simulations)
+        y_all = np.hstack((equity_curves, np.full((simulations, 1), np.nan))).flatten()
+        
+        # Add all simulated paths (Gray, low opacity)
+        fig.add_trace(go.Scatter(
+            x=x_all,
+            y=y_all,
+            mode='lines',
+            line=dict(color='gray', width=1),
+            opacity=0.1,
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Add Median Curve (Gold, bold)
+        fig.add_trace(go.Scatter(
+            x=x_base,
+            y=median_curve,
+            mode='lines',
+            line=dict(color='gold', width=3),
+            name='Median (50th Percentile)'
+        ))
+        
+        fig.update_layout(
+            title='🔬 Monte Carlo Robustness Analysis (Forward 50 Trades)',
+            xaxis_title='Trade Number',
+            yaxis_title='Equity ($)',
+            template='plotly_dark',
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        
+        return fig, prob_profit, risk_of_ruin, median_final_balance
+    
+    # Engine Selection
+    engine_choice = st.radio("Seleziona Motore di Backtesting:", 
+                             ["🧬 MOTORE A: GEX & Options Hybrid Simulator", 
+                              "📈 MOTORE B: Technical Strategy Hub (Pure Trading)"], 
+                             horizontal=True)
+    
+    # Common Inputs
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: 
+        # Ticker Selection with Predefined List + Custom
+        PREDEFINED_TICKERS = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "TSLA", "NVDA", "AMD", "AMZN", "GOOGL", "META", "NFLX"]
+        ticker_select = st.selectbox("Seleziona Ticker", ["Seleziona..."] + PREDEFINED_TICKERS + ["Inserisci Manualmente"])
+        
+        if ticker_select == "Inserisci Manualmente":
+            ticker = st.text_input("Inserisci Simbolo Ticker", value="SPY").upper()
+        elif ticker_select != "Seleziona...":
+            ticker = ticker_select
+        else:
+            ticker = "SPY" # Default
+
+    with c2: timeframe = st.selectbox("Timeframe", ["1D", "1H", "15Min", "5Min"], index=0)
+    with c3: 
+        start_date = st.date_input("Data Inizio", value=datetime.now() - timedelta(days=365*2))
+    with c4: 
+        end_date = st.date_input("Data Fine", value=datetime.now())
+        initial_capital = st.number_input("Capitale Iniziale ($)", value=10000)
+
+    # Session State for Data Verification
+    if 'backtest_data' not in st.session_state:
+        st.session_state.backtest_data = None
+    if 'backtest_ticker' not in st.session_state:
+        st.session_state.backtest_ticker = None
+
+    # --- DATA FETCHING ENHANCED ---
+    def process_dataframe(df, start_date, end_date, ticker=None):
+        if df.empty:
+            return df.reset_index(drop=True)
+
+        # 1. Reset Index se DatetimeIndex
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+
+        # 2. Standardizzazione Nomi Colonne
+        df.columns = [str(c).lower().strip() for c in df.columns]
+        
+        rename_map = {
+            'open': 'Open',
+            'high': 'High',
+            'low': 'Low',
+            'close': 'Close',
+            'volume': 'Volume',
+            'vol': 'Volume',
+            'adj close': 'Adj Close',
+            'window_start': 'datetime',
+            'date': 'datetime',
+            'time': 'datetime',
+            'timestamp': 'datetime'
+        }
+        df.rename(columns=rename_map, inplace=True)
+
+        # 3. Gestione Datetime
+        if 'datetime' not in df.columns:
+            # Cerca colonne che potrebbero contenere date
+            for col in df.columns:
+                if 'date' in col or 'time' in col:
+                    df.rename(columns={col: 'datetime'}, inplace=True)
+                    break
+        
+        if 'datetime' in df.columns:
+            # Force datetime conversion
+            df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+            df.dropna(subset=['datetime'], inplace=True)
+        else:
+            return pd.DataFrame() # Senza data non possiamo fare nulla
+
+        # 4. Filtro Temporale
+        sd = pd.to_datetime(start_date)
+        ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+        df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
+
+        # 5. Filtro Ticker (se presente)
+        if ticker and 'ticker' in df.columns:
+            clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
+            # Pulizia colonna ticker
+            df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
+            df = df[df['ticker'] == clean_ticker]
+
+        # 6. Conversione Numerica Forzata
+        cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
+        for col in cols_to_numeric:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # 7. Pulizia Final
+        if 'Close' in df.columns:
+            df.dropna(subset=['Close'], inplace=True)
+        
+        # 8. Ordinamento e Reset Index Finale
+        df.sort_values('datetime', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+        return df
+
+    def get_asset_type(ticker):
+        if '=X' in ticker:
+            return 'FOREX'
+        elif ticker.startswith('^') or ticker in ["FTSEMIB.MI"]:
+            return 'INDEX'
+        elif '-USD' in ticker:
+            return 'CRYPTO'
+        else:
+            return 'STOCK'
+
+    def fetch_data_smart(ticker, timeframe, start_date, end_date):
+        df = pd.DataFrame()
+        clean_ticker = ticker.replace('=X', '').replace('^', '')
+        asset_type = get_asset_type(ticker)
+        
+        # Livello 1: Database Locale (Priorità Assoluta per Cache)
+        possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
+        local_path = None
+        for pf in possible_files:
+            p = os.path.join(LOCAL_DB_DIR, pf)
+            if os.path.exists(p):
+                local_path = p
+                break
+                
+        if local_path:
+            try:
+                df_local = pd.read_csv(local_path)
+                df = process_dataframe(df_local, start_date, end_date, ticker)
+                if not df.empty:
+                    st.success(f"📂 Dati recuperati dal Database Locale: {local_path}")
+                    return df
+            except Exception as e:
+                st.error(f"❌ Errore lettura Database Locale: {e}")
+
+        # Routing Logica
+        if asset_type == 'STOCK':
+            # TENTATIVO 1: ALPACA (Obbligatorio per Azioni USA)
+            try:
+                st.info(f"🦙 Tentativo Alpaca API per {ticker}...")
+                # Mappatura Timeframe Alpaca
+                tf_alpaca = timeframe
+                if timeframe == "1D": tf_alpaca = "1Day"
+                elif timeframe == "1H": tf_alpaca = "1Hour"
+                elif timeframe == "15Min": tf_alpaca = "15Min"
+                elif timeframe == "5Min": tf_alpaca = "5Min"
+                
+                df = fetch_alpaca_history(ticker, tf_alpaca, str(start_date), str(end_date))
+                
+                if not df.empty:
+                    df = process_dataframe(df, start_date, end_date, ticker)
+                    if not df.empty:
+                        st.success("✅ Dati recuperati da Alpaca Markets.")
+                        return df
+                else:
+                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback.")
+            except Exception as e:
+                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback.")
+
+        elif asset_type in ['FOREX', 'INDEX']:
+            # TENTATIVO 1: MASSIVE S3 (Obbligatorio per Forex/Indici)
+            try:
+                prefix = 'global_forex/' if asset_type == 'FOREX' else 'us_stocks_sip/'
+                st.info(f"☁️ Ricerca su Massive S3 ({prefix}) per {ticker}...")
+                
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
+                
+                found_key = None
+                for page in pages:
+                    if 'Contents' in page:
+                        for obj in page['Contents']:
+                            key = obj['Key']
+                            if key.endswith('.csv.gz') and (clean_ticker in key):
+                                found_key = key
+                                break
+                    if found_key:
+                        break
+                
+                if found_key:
+                    st.info(f"⬇️ Scaricamento {found_key}...")
+                    obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
+                    
+                    # Decompressione GZIP in memoria
+                    with gzip.GzipFile(fileobj=io.BytesIO(obj['Body'].read())) as gz:
+                        df_massive = pd.read_csv(gz)
+                    
+                    # Caching
+                    cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
+                    df_massive.to_csv(cache_path, index=False)
+                    st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
+                    
+                    df = process_dataframe(df_massive, start_date, end_date, ticker)
+                    if not df.empty:
+                        return df
+                else:
+                    st.warning(f"⚠️ Nessun file trovato su Massive per {ticker}")
+
+            except Exception as e:
+                st.error(f"❌ Errore Massive S3: {e}")
+
+        # FALLBACK FINALE: YAHOO FINANCE (Per tutti se i metodi sopra falliscono)
+        if df.empty:
+            try:
+                st.info("🌐 Tentativo download da Yahoo Finance (Fallback)...")
+                df_yf = fetch_yahoo_history(ticker, timeframe, str(start_date), str(end_date))
+                
+                if not df_yf.empty:
+                    df = process_dataframe(df_yf, start_date, end_date, ticker)
+                    if not df.empty:
+                        st.success("✅ Dati recuperati da Yahoo Finance.")
+                        return df
+            except Exception as e:
+                st.error(f"❌ Errore Yahoo Finance: {e}")
+
+        if df.empty:
+            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Locale, Alpaca, Massive, Yahoo).")
+            st.stop()
+            
+        return df
+
     # Data Verification Step
     st.markdown("---")
     if st.button("🔍 Verifica Disponibilità Dati Storici"):
@@ -1257,23 +1254,19 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             df_check = fetch_data_smart(ticker, timeframe, start_date, end_date)
             
             if not df_check.empty:
+                # Check actual date range
+                min_date = df_check['datetime'].min().date()
+                max_date = df_check['datetime'].max().date()
                 count = len(df_check)
-                if count < 100:
-                    st.error(f"❌ Attenzione: Dati insufficienti per un backtest affidabile ({count} candele). Minimo richiesto: 100 candele.")
-                    st.session_state.backtest_data = None
-                else:
-                    # Check actual date range
-                    min_date = df_check['datetime'].min().date()
-                    max_date = df_check['datetime'].max().date()
-                    
-                    st.success(f"✅ Dati Trovati! {count} candele disponibili.")
-                    st.info(f"📅 Range Disponibile: {min_date} -> {max_date}")
-                    
-                    if min_date > start_date:
-                        st.warning(f"⚠️ Attenzione: I dati iniziano dal {min_date}, successivi alla data richiesta {start_date}.")
-                    
-                    st.session_state.backtest_data = df_check
-                    st.session_state.backtest_ticker = ticker
+                
+                st.success(f"✅ Dati Trovati! {count} candele disponibili.")
+                st.info(f"📅 Range Disponibile: {min_date} -> {max_date}")
+                
+                if min_date > start_date:
+                    st.warning(f"⚠️ Attenzione: I dati iniziano dal {min_date}, successivi alla data richiesta {start_date}.")
+                
+                st.session_state.backtest_data = df_check
+                st.session_state.backtest_ticker = ticker
             else:
                 st.error(f"❌ Nessun dato trovato per {ticker} nel range selezionato. Prova a cambiare date o ticker.")
                 st.session_state.backtest_data = None
@@ -3747,17 +3740,9 @@ elif menu == "🛠️ STRATEGY BUILDER":
     ticker_choices = [
         "EURUSD=X (Forex)", "GBPUSD=X (Forex)", "USDJPY=X (Forex)", "EURGBP=X (Forex)",
         "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
-        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)"
+        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
+        "--- INSERIMENTO MANUALE ---"
     ]
-    
-    # Add local database files
-    if os.path.exists(LOCAL_DB_DIR):
-        local_files = [f[:-4].upper() + " (Local)" for f in os.listdir(LOCAL_DB_DIR) if f.lower().endswith('.csv')]
-        if local_files:
-            ticker_choices.extend(list(set(local_files)))
-            
-    ticker_choices.append("--- INSERIMENTO MANUALE ---")
-    
     selected_ticker = st.sidebar.selectbox("Ticker", ticker_choices, index=4)
     if selected_ticker == "--- INSERIMENTO MANUALE ---":
         ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
@@ -3779,6 +3764,350 @@ elif menu == "🛠️ STRATEGY BUILDER":
     
     timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"], index=1)
     
+    # Duplicate necessary functions
+    def normalize_key(d, possible_keys):
+        for k in d.keys():
+            if k.lower() in [pk.lower() for pk in possible_keys]:
+                return d[k]
+        return None
+
+    def apply_friction_post_process(trades_list, initial_capital, friction_pct):
+        if not trades_list:
+            return trades_list, [initial_capital]
+            
+        new_trades = []
+        balance = initial_capital
+        equity_curve = [balance]
+        
+        for t in trades_list:
+            t_copy = dict(t)
+            t_type = str(normalize_key(t_copy, ['type', 'Type']) or '').upper()
+            price = normalize_key(t_copy, ['price', 'Price', 'Entry Price', 'Exit Price']) or 0
+            pnl = normalize_key(t_copy, ['pnl', 'PnL']) or 0
+            
+            friction_multiplier = 1 - (friction_pct / 100)
+            new_price = price * friction_multiplier
+            pnl = pnl * friction_multiplier
+            t_copy['price'] = new_price
+            t_copy['pnl'] = pnl
+            balance += pnl
+            t_copy['balance'] = balance
+            equity_curve.append(balance)
+            
+            new_trades.append(t_copy)
+                
+        return new_trades, equity_curve
+
+    def calculate_advanced_metrics(trades_list):
+        fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
+        if not trades_list:
+            return fallback
+            
+        df = pd.DataFrame(trades_list)
+        df.columns = [str(c).lower() for c in df.columns]
+        
+        if 'pnl' not in df.columns:
+            return fallback
+            
+        exits = df[df['pnl'].notna()]
+        if exits.empty:
+            return fallback
+            
+        wins = exits[exits['pnl'] > 0]['pnl']
+        losses = exits[exits['pnl'] < 0]['pnl']
+        
+        win_rate = len(wins) / len(exits)
+        avg_win = wins.mean() if not wins.empty else 0
+        avg_loss = abs(losses.mean()) if not losses.empty else 0
+        expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+        profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
+        
+        total_profit_abs = exits['pnl'].sum()
+        
+        bal_col = 'balance' if 'balance' in df.columns else None
+        max_dd = 0
+        max_dd_abs = 0
+        if bal_col:
+            curve = df[bal_col].tolist()
+            peak = curve[0]
+            for val in curve:
+                if val > peak: peak = val
+                dd = (peak - val) / peak if peak > 0 else 0
+                dd_abs = peak - val
+                if dd > max_dd: max_dd = dd
+                if dd_abs > max_dd_abs: max_dd_abs = dd_abs
+                
+        return {
+            'expectancy': expectancy,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_dd * 100,
+            'win_rate': win_rate * 100,
+            'total_profit_abs': total_profit_abs,
+            'max_dd_abs': max_dd_abs
+        }
+
+    def run_monte_carlo(trades_list, initial_capital, simulations=1000):
+        import plotly.graph_objects as go
+        import numpy as np
+        import pandas as pd
+        
+        if not trades_list:
+            return None
+            
+        df_res = pd.DataFrame(trades_list)
+        if 'pnl' in df_res.columns:
+            pnls = df_res[df_res['pnl'].notna()]['pnl'].values
+        else:
+            return None
+            
+        n_trades = len(pnls)
+        if n_trades == 0:
+            return None
+            
+        sim_length = min(50, n_trades)
+        
+        random_indices = np.random.randint(0, n_trades, size=(simulations, sim_length))
+        simulated_pnls = pnls[random_indices]
+        
+        equity_curves = np.cumsum(simulated_pnls, axis=1) + initial_capital
+        
+        starting_capital = np.full((simulations, 1), initial_capital)
+        equity_curves = np.hstack((starting_capital, equity_curves))
+        
+        median_curve = np.median(equity_curves, axis=0)
+        
+        final_balances = equity_curves[:, -1]
+        prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
+        
+        ruin_threshold = initial_capital * 0.80
+        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
+        risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
+        
+        median_final_balance = np.median(final_balances)
+        
+        fig = go.Figure()
+        
+        x_base = np.arange(sim_length + 1)
+        x_all = np.tile(np.append(x_base, np.nan), simulations)
+        y_all = np.hstack((equity_curves, np.full((simulations, 1), np.nan))).flatten()
+        
+        fig.add_trace(go.Scatter(
+            x=x_all,
+            y=y_all,
+            mode='lines',
+            line=dict(color='gray', width=1),
+            opacity=0.1,
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=x_base,
+            y=median_curve,
+            mode='lines',
+            line=dict(color='gold', width=3),
+            name='Median (50th Percentile)'
+        ))
+        
+        fig.update_layout(
+            title='🔬 Monte Carlo Robustness Analysis (Forward 50 Trades)',
+            xaxis_title='Trade Number',
+            yaxis_title='Equity ($)',
+            template='plotly_dark',
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        
+        return fig, prob_profit, risk_of_ruin, median_final_balance
+
+    def process_dataframe(df, start_date, end_date, ticker=None):
+        if df.empty:
+            return df.reset_index(drop=True)
+
+        # 1. Reset Index se DatetimeIndex
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+
+        # 2. Standardizzazione Nomi Colonne
+        df.columns = [str(c).lower().strip() for c in df.columns]
+        
+        rename_map = {
+            'open': 'Open',
+            'high': 'High',
+            'low': 'Low',
+            'close': 'Close',
+            'volume': 'Volume',
+            'vol': 'Volume',
+            'adj close': 'Adj Close',
+            'window_start': 'datetime',
+            'date': 'datetime',
+            'time': 'datetime',
+            'timestamp': 'datetime'
+        }
+        df.rename(columns=rename_map, inplace=True)
+
+        # 3. Gestione Datetime
+        if 'datetime' not in df.columns:
+            # Cerca colonne che potrebbero contenere date
+            for col in df.columns:
+                if 'date' in col or 'time' in col:
+                    df.rename(columns={col: 'datetime'}, inplace=True)
+                    break
+        
+        if 'datetime' in df.columns:
+            # Force datetime conversion
+            df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+            df.dropna(subset=['datetime'], inplace=True)
+        else:
+            return pd.DataFrame() # Senza data non possiamo fare nulla
+
+        # 4. Filtro Temporale
+        sd = pd.to_datetime(start_date)
+        ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+        df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
+
+        # 5. Filtro Ticker (se presente)
+        if ticker and 'ticker' in df.columns:
+            clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
+            # Pulizia colonna ticker
+            df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
+            df = df[df['ticker'] == clean_ticker]
+
+        # 6. Conversione Numerica Forzata
+        cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
+        for col in cols_to_numeric:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # 7. Pulizia Final
+        if 'Close' in df.columns:
+            df.dropna(subset=['Close'], inplace=True)
+        
+        # 8. Ordinamento e Reset Index Finale
+        df.sort_values('datetime', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+        return df
+
+    def get_asset_type(ticker):
+        if '=X' in ticker:
+            return 'FOREX'
+        elif ticker.startswith('^') or ticker in ["FTSEMIB.MI"]:
+            return 'INDEX'
+        elif '-USD' in ticker:
+            return 'CRYPTO'
+        else:
+            return 'STOCK'
+
+    def fetch_data_smart(ticker, timeframe, start_date, end_date):
+        df = pd.DataFrame()
+        clean_ticker = ticker.replace('=X', '').replace('^', '')
+        asset_type = get_asset_type(ticker)
+        
+        # Livello 1: Database Locale (Priorità Assoluta per Cache)
+        possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
+        local_path = None
+        for pf in possible_files:
+            p = os.path.join(LOCAL_DB_DIR, pf)
+            if os.path.exists(p):
+                local_path = p
+                break
+                
+        if local_path:
+            try:
+                df_local = pd.read_csv(local_path)
+                df = process_dataframe(df_local, start_date, end_date, ticker)
+                if not df.empty:
+                    st.success(f"📂 Dati recuperati dal Database Locale: {local_path}")
+                    return df
+            except Exception as e:
+                st.error(f"❌ Errore lettura Database Locale: {e}")
+
+        # Routing Logica
+        if asset_type == 'STOCK':
+            # TENTATIVO 1: ALPACA (Obbligatorio per Azioni USA)
+            try:
+                st.info(f"🦙 Tentativo Alpaca API per {ticker}...")
+                # Mappatura Timeframe Alpaca
+                tf_alpaca = timeframe
+                if timeframe == "1D": tf_alpaca = "1Day"
+                elif timeframe == "1H": tf_alpaca = "1Hour"
+                elif timeframe == "15Min": tf_alpaca = "15Min"
+                elif timeframe == "5Min": tf_alpaca = "5Min"
+                
+                df = fetch_alpaca_history(ticker, tf_alpaca, str(start_date), str(end_date))
+                
+                if not df.empty:
+                    df = process_dataframe(df, start_date, end_date, ticker)
+                    if not df.empty:
+                        st.success("✅ Dati recuperati da Alpaca Markets.")
+                        return df
+                else:
+                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback.")
+            except Exception as e:
+                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback.")
+
+        elif asset_type in ['FOREX', 'INDEX']:
+            # TENTATIVO 1: MASSIVE S3 (Obbligatorio per Forex/Indici)
+            try:
+                prefix = 'global_forex/' if asset_type == 'FOREX' else 'us_stocks_sip/'
+                st.info(f"☁️ Ricerca su Massive S3 ({prefix}) per {ticker}...")
+                
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
+                
+                found_key = None
+                for page in pages:
+                    if 'Contents' in page:
+                        for obj in page['Contents']:
+                            key = obj['Key']
+                            if key.endswith('.csv.gz') and (clean_ticker in key):
+                                found_key = key
+                                break
+                    if found_key:
+                        break
+                
+                if found_key:
+                    st.info(f"⬇️ Scaricamento {found_key}...")
+                    obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
+                    
+                    # Decompressione GZIP in memoria
+                    with gzip.GzipFile(fileobj=io.BytesIO(obj['Body'].read())) as gz:
+                        df_massive = pd.read_csv(gz)
+                    
+                    # Caching
+                    cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
+                    df_massive.to_csv(cache_path, index=False)
+                    st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
+                    
+                    df = process_dataframe(df_massive, start_date, end_date, ticker)
+                    if not df.empty:
+                        return df
+                else:
+                    st.warning(f"⚠️ Nessun file trovato su Massive per {ticker}")
+
+            except Exception as e:
+                st.error(f"❌ Errore Massive S3: {e}")
+
+        # FALLBACK FINALE: YAHOO FINANCE (Per tutti se i metodi sopra falliscono)
+        if df.empty:
+            try:
+                st.info("🌐 Tentativo download da Yahoo Finance (Fallback)...")
+                df_yf = fetch_yahoo_history(ticker, timeframe, str(start_date), str(end_date))
+                
+                if not df_yf.empty:
+                    df = process_dataframe(df_yf, start_date, end_date, ticker)
+                    if not df.empty:
+                        st.success("✅ Dati recuperati da Yahoo Finance.")
+                        return df
+            except Exception as e:
+                st.error(f"❌ Errore Yahoo Finance: {e}")
+
+        if df.empty:
+            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Locale, Alpaca, Massive, Yahoo).")
+            st.stop()
+            
+        return df
 
     def run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct):
         trades = []
@@ -3942,6 +4271,14 @@ elif menu == "🛠️ STRATEGY BUILDER":
         with st.spinner("Fetching data and running strategy..."):
             df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
+                # --- FIX ORDINAMENTO E DATETIME ---
+                if isinstance(df.index, pd.DatetimeIndex):
+                    df = df.reset_index()
+                
+                if 'datetime' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['datetime'])
+                # ----------------------------------
+
                 trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
                 
                 if trades:
