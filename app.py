@@ -113,6 +113,22 @@ def get_greeks_pro(df, S, r=0.045):
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
+def get_clean_ticker(ticker, provider):
+    """
+    Pulisce il ticker in base al provider dati.
+    """
+    if provider == 'MASSIVE':
+        # Rimuove =X e ^ per Massive (es: EURUSD=X -> EURUSD, ^SPX -> SPX)
+        return ticker.replace('=X', '').replace('^', '').upper()
+    elif provider == 'ALPACA':
+        # Alpaca vuole ticker puliti (es: TSLA, SPY)
+        return ticker.replace('^', '').replace('=X', '').upper()
+    elif provider == 'YAHOO':
+        # Yahoo mantiene i suffissi (es: EURUSD=X, ^SPX)
+        return ticker.upper()
+    return ticker.upper()
+
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker, dates):
     t = yf.Ticker(ticker)
     frames = []
@@ -265,6 +281,276 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
         return df
         
     return pd.DataFrame()
+
+# --- GLOBAL UTILS ---
+@st.cache_data(ttl=60, show_spinner=False)
+def get_clean_ticker(ticker, provider):
+    """
+    Pulisce il ticker in base al provider dati.
+    """
+    if provider == 'MASSIVE':
+        # Rimuove =X e ^ per Massive (es: EURUSD=X -> EURUSD, ^SPX -> SPX)
+        return ticker.replace('=X', '').replace('^', '').upper()
+    elif provider == 'ALPACA':
+        # Alpaca vuole ticker puliti (es: TSLA, SPY)
+        return ticker.replace('^', '').replace('=X', '').upper()
+    elif provider == 'YAHOO':
+        # Yahoo mantiene i suffissi (es: EURUSD=X, ^SPX)
+        return ticker.upper()
+    return ticker.upper()
+
+def get_asset_type(ticker):
+    if '=X' in ticker:
+        return 'FOREX'
+    elif ticker.startswith('^') or ticker in ["FTSEMIB.MI"]:
+        return 'INDEX'
+    elif '-USD' in ticker:
+        return 'CRYPTO'
+    else:
+        return 'STOCK'
+
+def process_dataframe(df, start_date, end_date, ticker=None):
+    if df.empty:
+        return pd.DataFrame()
+
+    # 1. UNIFICAZIONE: Rinomina colonna temporale in datetime
+    if isinstance(df.index, pd.DatetimeIndex):
+        df = df.reset_index()
+    
+    # Standardizzazione nomi colonne
+    df.columns = [str(c).lower().strip() for c in df.columns]
+    
+    rename_map = {
+        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
+        'volume': 'Volume', 'vol': 'Volume', 'adj close': 'Adj Close',
+        'window_start': 'datetime', 'date': 'datetime', 'time': 'datetime', 
+        'timestamp': 'datetime', 't': 'datetime'
+    }
+    df.rename(columns=rename_map, inplace=True)
+    
+    # Fallback per colonne non mappate esplicitamente ma contenenti "date" o "time"
+    if 'datetime' not in df.columns:
+        for col in df.columns:
+            if 'date' in col or 'time' in col:
+                df.rename(columns={col: 'datetime'}, inplace=True)
+                break
+    
+    if 'datetime' not in df.columns:
+        return pd.DataFrame()
+
+    # 2. FORMATO: Assicurati che df['datetime'] sia un oggetto pd.to_datetime
+    df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+    df.dropna(subset=['datetime'], inplace=True)
+
+    # Filtro Temporale (Opzionale ma utile)
+    sd = pd.to_datetime(start_date)
+    ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+    df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
+
+    # Filtro Ticker (se presente)
+    if ticker and 'ticker' in df.columns:
+        clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
+        df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
+        df = df[df['ticker'] == clean_ticker]
+
+    # 5. CONVERSIONE: Forza tutte le colonne di prezzo a float64
+    cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
+    for col in cols_to_numeric:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # 4. PULIZIA: Rimuovi le righe dove Open, High, Low, o Close sono NaN o uguali a zero
+    req_cols = ['Open', 'High', 'Low', 'Close']
+    existing_cols = [c for c in req_cols if c in df.columns]
+    
+    if existing_cols:
+        df.dropna(subset=existing_cols, inplace=True)
+        for col in existing_cols:
+            df = df[df[col] != 0]
+
+    # 3. INDEX: Rendi datetime l'indice del DataFrame e ordinalo in modo crescente
+    df.set_index('datetime', drop=False, inplace=True)
+    df.sort_index(ascending=True, inplace=True)
+    
+    return df
+
+def fetch_data_smart(ticker, timeframe, start_date, end_date):
+    df = pd.DataFrame()
+    
+    # 1. IDENTIFICAZIONE TIPO ASSET
+    is_forex = '=X' in ticker
+    
+    # 2. DATABASE LOCALE (Priorità Assoluta per Cache)
+    clean_ticker_generic = ticker.replace('=X', '').replace('^', '')
+    possible_files = [f"{clean_ticker_generic}.csv", f"{clean_ticker_generic}.CSV", f"{clean_ticker_generic.lower()}.csv"]
+    local_path = None
+    for pf in possible_files:
+        p = os.path.join(LOCAL_DB_DIR, pf)
+        if os.path.exists(p):
+            local_path = p
+            break
+            
+    if local_path:
+        try:
+            df_local = pd.read_csv(local_path)
+            df = process_dataframe(df_local, start_date, end_date, ticker)
+            if not df.empty:
+                st.success(f"📂 Dati recuperati dal Database Locale: {local_path}")
+                return df
+        except Exception as e:
+            st.error(f"❌ Errore lettura Database Locale: {e}")
+
+    # 3. ROUTING LOGICA
+    
+    # --- FOREX (MASSIVE) ---
+    if is_forex:
+        provider = 'MASSIVE'
+        clean_ticker = get_clean_ticker(ticker, provider)
+        prefix = 'global_forex/'
+        
+        try:
+            st.info(f"☁️ Ricerca su Massive S3 ({prefix}) per {clean_ticker}...")
+            
+            paginator = s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
+            
+            found_key = None
+            target_filename = f"{clean_ticker}.csv.gz".lower() 
+            
+            for page in pages:
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        key = obj['Key']
+                        filename = key.split('/')[-1].lower()
+                        # Confronto case-insensitive robusto
+                        if filename == target_filename or \
+                           (filename.startswith(clean_ticker.lower()) and (filename.endswith('.csv') or filename.endswith('.csv.gz'))):
+                            found_key = key
+                            break
+                if found_key:
+                    break
+            
+            if found_key:
+                st.info(f"⬇️ Scaricamento {found_key}...")
+                obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
+                
+                # Gestione decompressione
+                if found_key.endswith('.gz'):
+                    with gzip.GzipFile(fileobj=io.BytesIO(obj['Body'].read())) as gz:
+                        df_massive = pd.read_csv(gz)
+                else:
+                    df_massive = pd.read_csv(obj['Body'])
+                
+                # Caching
+                cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
+                df_massive.to_csv(cache_path, index=False)
+                st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
+                
+                df = process_dataframe(df_massive, start_date, end_date, ticker)
+                if not df.empty:
+                    return df
+            else:
+                st.sidebar.error(f"⚠️ Massive: File {clean_ticker} non trovato in {prefix}")
+
+        except Exception as e:
+            st.error(f"❌ Errore Massive S3: {e}")
+
+    # --- AZIONI (ALPACA -> MASSIVE -> YAHOO) ---
+    else:
+        # A. TENTATIVO ALPACA
+        try:
+            clean_ticker_alpaca = get_clean_ticker(ticker, 'ALPACA')
+            st.info(f"🦙 Tentativo Alpaca API per {clean_ticker_alpaca}...")
+            
+            # Mappatura Timeframe Alpaca
+            tf_alpaca = timeframe
+            if timeframe == "1D": tf_alpaca = "1Day"
+            elif timeframe == "1H": tf_alpaca = "1Hour"
+            elif timeframe == "15Min": tf_alpaca = "15Min"
+            elif timeframe == "5Min": tf_alpaca = "5Min"
+            
+            df = fetch_alpaca_history(clean_ticker_alpaca, tf_alpaca, str(start_date), str(end_date))
+            
+            if not df.empty:
+                df = process_dataframe(df, start_date, end_date, ticker)
+                if not df.empty:
+                    st.success("✅ Dati recuperati da Alpaca Markets.")
+                    return df
+            else:
+                st.warning("⚠️ Alpaca non ha restituito dati. Provo Massive S3...")
+        except Exception as e:
+            st.warning(f"⚠️ Errore Alpaca: {e}. Provo Massive S3...")
+
+        # B. TENTATIVO MASSIVE (STOCKS)
+        if df.empty:
+            provider = 'MASSIVE'
+            clean_ticker = get_clean_ticker(ticker, provider)
+            prefix = 'us_stocks_sip/'
+            
+            try:
+                st.info(f"☁️ Ricerca su Massive S3 ({prefix}) per {clean_ticker}...")
+                
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
+                
+                found_key = None
+                target_filename = f"{clean_ticker}.csv.gz".lower()
+                
+                for page in pages:
+                    if 'Contents' in page:
+                        for obj in page['Contents']:
+                            key = obj['Key']
+                            filename = key.split('/')[-1].lower()
+                            if filename == target_filename or \
+                               (filename.startswith(clean_ticker.lower()) and (filename.endswith('.csv') or filename.endswith('.csv.gz'))):
+                                found_key = key
+                                break
+                    if found_key:
+                        break
+                
+                if found_key:
+                    st.info(f"⬇️ Scaricamento {found_key}...")
+                    obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
+                    
+                    if found_key.endswith('.gz'):
+                        with gzip.GzipFile(fileobj=io.BytesIO(obj['Body'].read())) as gz:
+                            df_massive = pd.read_csv(gz)
+                    else:
+                        df_massive = pd.read_csv(obj['Body'])
+                    
+                    cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
+                    df_massive.to_csv(cache_path, index=False)
+                    st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
+                    
+                    df = process_dataframe(df_massive, start_date, end_date, ticker)
+                    if not df.empty:
+                        return df
+                else:
+                    st.sidebar.error(f"⚠️ Massive: File {clean_ticker} non trovato in {prefix}")
+
+            except Exception as e:
+                st.error(f"❌ Errore Massive S3: {e}")
+
+    # 4. FALLBACK FINALE: YAHOO FINANCE
+    if df.empty:
+        try:
+            clean_ticker_yahoo = get_clean_ticker(ticker, 'YAHOO')
+            st.info(f"🌐 Tentativo download da Yahoo Finance (Fallback) per {clean_ticker_yahoo}...")
+            df_yf = fetch_yahoo_history(clean_ticker_yahoo, timeframe, str(start_date), str(end_date))
+            
+            if not df_yf.empty:
+                df = process_dataframe(df_yf, start_date, end_date, ticker)
+                if not df.empty:
+                    st.success("✅ Dati recuperati da Yahoo Finance.")
+                    return df
+        except Exception as e:
+            st.error(f"❌ Errore Yahoo Finance: {e}")
+
+    if df.empty:
+        st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Locale, Alpaca, Massive, Yahoo).")
+        st.stop()
+        
+    return df
 
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
@@ -1057,193 +1343,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     if 'backtest_ticker' not in st.session_state:
         st.session_state.backtest_ticker = None
 
-    # --- DATA FETCHING ENHANCED ---
-    def process_dataframe(df, start_date, end_date, ticker=None):
-        if df.empty:
-            return pd.DataFrame()
 
-        # 1. UNIFICAZIONE: Rinomina colonna temporale in datetime
-        # Se l'indice è DatetimeIndex, lo convertiamo in colonna per uniformità iniziale
-        if isinstance(df.index, pd.DatetimeIndex):
-            df = df.reset_index()
-        
-        # Standardizzazione nomi colonne
-        df.columns = [str(c).lower().strip() for c in df.columns]
-        
-        rename_map = {
-            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
-            'volume': 'Volume', 'vol': 'Volume', 'adj close': 'Adj Close',
-            'window_start': 'datetime', 'date': 'datetime', 'time': 'datetime', 
-            'timestamp': 'datetime', 't': 'datetime'
-        }
-        df.rename(columns=rename_map, inplace=True)
-        
-        # Fallback per colonne non mappate esplicitamente ma contenenti "date" o "time"
-        if 'datetime' not in df.columns:
-            for col in df.columns:
-                if 'date' in col or 'time' in col:
-                    df.rename(columns={col: 'datetime'}, inplace=True)
-                    break
-        
-        if 'datetime' not in df.columns:
-            return pd.DataFrame()
-
-        # 2. FORMATO: Assicurati che df['datetime'] sia un oggetto pd.to_datetime
-        df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
-        df.dropna(subset=['datetime'], inplace=True)
-
-        # Filtro Temporale (Opzionale ma utile)
-        sd = pd.to_datetime(start_date)
-        ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
-        df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
-
-        # Filtro Ticker (se presente)
-        if ticker and 'ticker' in df.columns:
-            clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
-            df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
-            df = df[df['ticker'] == clean_ticker]
-
-        # 5. CONVERSIONE: Forza tutte le colonne di prezzo a float64
-        cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
-        for col in cols_to_numeric:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        # 4. PULIZIA: Rimuovi le righe dove Open, High, Low, o Close sono NaN o uguali a zero
-        req_cols = ['Open', 'High', 'Low', 'Close']
-        existing_cols = [c for c in req_cols if c in df.columns]
-        
-        if existing_cols:
-            df.dropna(subset=existing_cols, inplace=True)
-            for col in existing_cols:
-                df = df[df[col] != 0]
-
-        # 3. INDEX: Rendi datetime l'indice del DataFrame e ordinalo in modo crescente
-        df.set_index('datetime', drop=False, inplace=True)
-        df.sort_index(ascending=True, inplace=True)
-        
-        return df
-
-    def get_asset_type(ticker):
-        if '=X' in ticker:
-            return 'FOREX'
-        elif ticker.startswith('^') or ticker in ["FTSEMIB.MI"]:
-            return 'INDEX'
-        elif '-USD' in ticker:
-            return 'CRYPTO'
-        else:
-            return 'STOCK'
-
-    def fetch_data_smart(ticker, timeframe, start_date, end_date):
-        df = pd.DataFrame()
-        clean_ticker = ticker.replace('=X', '').replace('^', '')
-        
-        # 1. IDENTIFICAZIONE: Se il ticker NON ha '=X', è una AZIONE
-        is_forex = '=X' in ticker
-        
-        # 2. DATABASE LOCALE (Priorità Assoluta per Cache)
-        possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
-        local_path = None
-        for pf in possible_files:
-            p = os.path.join(LOCAL_DB_DIR, pf)
-            if os.path.exists(p):
-                local_path = p
-                break
-                
-        if local_path:
-            try:
-                df_local = pd.read_csv(local_path)
-                df = process_dataframe(df_local, start_date, end_date, ticker)
-                if not df.empty:
-                    st.success(f"📂 Dati recuperati dal Database Locale: {local_path}")
-                    return df
-            except Exception as e:
-                st.error(f"❌ Errore lettura Database Locale: {e}")
-
-        # 3. ROUTING LOGICA
-        if not is_forex:
-            # AZIONE -> ALPACA
-            try:
-                st.info(f"🦙 Tentativo Alpaca API per {ticker}...")
-                # Mappatura Timeframe Alpaca
-                tf_alpaca = timeframe
-                if timeframe == "1D": tf_alpaca = "1Day"
-                elif timeframe == "1H": tf_alpaca = "1Hour"
-                elif timeframe == "15Min": tf_alpaca = "15Min"
-                elif timeframe == "5Min": tf_alpaca = "5Min"
-                
-                df = fetch_alpaca_history(ticker, tf_alpaca, str(start_date), str(end_date))
-                
-                if not df.empty:
-                    df = process_dataframe(df, start_date, end_date, ticker)
-                    if not df.empty:
-                        st.success("✅ Dati recuperati da Alpaca Markets.")
-                        return df
-                else:
-                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback (Yahoo).")
-            except Exception as e:
-                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback (Yahoo).")
-        
-        else:
-            # FOREX -> MASSIVE
-            try:
-                st.info(f"☁️ Ricerca su Massive S3 (global_forex/) per {ticker}...")
-                
-                paginator = s3_client.get_paginator('list_objects_v2')
-                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix='global_forex/')
-                
-                found_key = None
-                for page in pages:
-                    if 'Contents' in page:
-                        for obj in page['Contents']:
-                            key = obj['Key']
-                            if key.endswith('.csv.gz') and (clean_ticker in key):
-                                found_key = key
-                                break
-                    if found_key:
-                        break
-                
-                if found_key:
-                    st.info(f"⬇️ Scaricamento {found_key}...")
-                    obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
-                    
-                    # Decompressione GZIP in memoria
-                    with gzip.GzipFile(fileobj=io.BytesIO(obj['Body'].read())) as gz:
-                        df_massive = pd.read_csv(gz)
-                    
-                    # Caching
-                    cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
-                    df_massive.to_csv(cache_path, index=False)
-                    st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
-                    
-                    df = process_dataframe(df_massive, start_date, end_date, ticker)
-                    if not df.empty:
-                        return df
-                else:
-                    st.warning(f"⚠️ Nessun file trovato su Massive per {ticker}")
-
-            except Exception as e:
-                st.error(f"❌ Errore Massive S3: {e}")
-
-        # 4. FALLBACK FINALE: YAHOO FINANCE
-        if df.empty:
-            try:
-                st.info("🌐 Tentativo download da Yahoo Finance (Fallback)...")
-                df_yf = fetch_yahoo_history(ticker, timeframe, str(start_date), str(end_date))
-                
-                if not df_yf.empty:
-                    df = process_dataframe(df_yf, start_date, end_date, ticker)
-                    if not df.empty:
-                        st.success("✅ Dati recuperati da Yahoo Finance.")
-                        return df
-            except Exception as e:
-                st.error(f"❌ Errore Yahoo Finance: {e}")
-
-        if df.empty:
-            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Locale, Alpaca, Massive, Yahoo).")
-            st.stop()
-            
-        return df
 
     # Data Verification Step
     st.markdown("---")
@@ -3918,192 +4018,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
         
         return fig, prob_profit, risk_of_ruin, median_final_balance
 
-    def process_dataframe(df, start_date, end_date, ticker=None):
-        if df.empty:
-            return pd.DataFrame()
 
-        # 1. UNIFICAZIONE: Rinomina colonna temporale in datetime
-        # Se l'indice è DatetimeIndex, lo convertiamo in colonna per uniformità iniziale
-        if isinstance(df.index, pd.DatetimeIndex):
-            df = df.reset_index()
-        
-        # Standardizzazione nomi colonne
-        df.columns = [str(c).lower().strip() for c in df.columns]
-        
-        rename_map = {
-            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
-            'volume': 'Volume', 'vol': 'Volume', 'adj close': 'Adj Close',
-            'window_start': 'datetime', 'date': 'datetime', 'time': 'datetime', 
-            'timestamp': 'datetime', 't': 'datetime'
-        }
-        df.rename(columns=rename_map, inplace=True)
-        
-        # Fallback per colonne non mappate esplicitamente ma contenenti "date" o "time"
-        if 'datetime' not in df.columns:
-            for col in df.columns:
-                if 'date' in col or 'time' in col:
-                    df.rename(columns={col: 'datetime'}, inplace=True)
-                    break
-        
-        if 'datetime' not in df.columns:
-            return pd.DataFrame()
-
-        # 2. FORMATO: Assicurati che df['datetime'] sia un oggetto pd.to_datetime
-        df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
-        df.dropna(subset=['datetime'], inplace=True)
-
-        # Filtro Temporale (Opzionale ma utile)
-        sd = pd.to_datetime(start_date)
-        ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
-        df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
-
-        # Filtro Ticker (se presente)
-        if ticker and 'ticker' in df.columns:
-            clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
-            df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
-            df = df[df['ticker'] == clean_ticker]
-
-        # 5. CONVERSIONE: Forza tutte le colonne di prezzo a float64
-        cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
-        for col in cols_to_numeric:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        # 4. PULIZIA: Rimuovi le righe dove Open, High, Low, o Close sono NaN o uguali a zero
-        req_cols = ['Open', 'High', 'Low', 'Close']
-        existing_cols = [c for c in req_cols if c in df.columns]
-        
-        if existing_cols:
-            df.dropna(subset=existing_cols, inplace=True)
-            for col in existing_cols:
-                df = df[df[col] != 0]
-
-        # 3. INDEX: Rendi datetime l'indice del DataFrame e ordinalo in modo crescente
-        df.set_index('datetime', drop=False, inplace=True)
-        df.sort_index(ascending=True, inplace=True)
-        
-        return df
-
-    def get_asset_type(ticker):
-        if '=X' in ticker:
-            return 'FOREX'
-        elif ticker.startswith('^') or ticker in ["FTSEMIB.MI"]:
-            return 'INDEX'
-        elif '-USD' in ticker:
-            return 'CRYPTO'
-        else:
-            return 'STOCK'
-
-    def fetch_data_smart(ticker, timeframe, start_date, end_date):
-        df = pd.DataFrame()
-        clean_ticker = ticker.replace('=X', '').replace('^', '')
-        
-        # 1. IDENTIFICAZIONE: Se il ticker NON ha '=X', è una AZIONE
-        is_forex = '=X' in ticker
-        
-        # 2. DATABASE LOCALE (Priorità Assoluta per Cache)
-        possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
-        local_path = None
-        for pf in possible_files:
-            p = os.path.join(LOCAL_DB_DIR, pf)
-            if os.path.exists(p):
-                local_path = p
-                break
-                
-        if local_path:
-            try:
-                df_local = pd.read_csv(local_path)
-                df = process_dataframe(df_local, start_date, end_date, ticker)
-                if not df.empty:
-                    st.success(f"📂 Dati recuperati dal Database Locale: {local_path}")
-                    return df
-            except Exception as e:
-                st.error(f"❌ Errore lettura Database Locale: {e}")
-
-        # 3. ROUTING LOGICA
-        if not is_forex:
-            # AZIONE -> ALPACA
-            try:
-                st.info(f"🦙 Tentativo Alpaca API per {ticker}...")
-                # Mappatura Timeframe Alpaca
-                tf_alpaca = timeframe
-                if timeframe == "1D": tf_alpaca = "1Day"
-                elif timeframe == "1H": tf_alpaca = "1Hour"
-                elif timeframe == "15Min": tf_alpaca = "15Min"
-                elif timeframe == "5Min": tf_alpaca = "5Min"
-                
-                df = fetch_alpaca_history(ticker, tf_alpaca, str(start_date), str(end_date))
-                
-                if not df.empty:
-                    df = process_dataframe(df, start_date, end_date, ticker)
-                    if not df.empty:
-                        st.success("✅ Dati recuperati da Alpaca Markets.")
-                        return df
-                else:
-                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback (Yahoo).")
-            except Exception as e:
-                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback (Yahoo).")
-        
-        else:
-            # FOREX -> MASSIVE
-            try:
-                st.info(f"☁️ Ricerca su Massive S3 (global_forex/) per {ticker}...")
-                
-                paginator = s3_client.get_paginator('list_objects_v2')
-                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix='global_forex/')
-                
-                found_key = None
-                for page in pages:
-                    if 'Contents' in page:
-                        for obj in page['Contents']:
-                            key = obj['Key']
-                            if key.endswith('.csv.gz') and (clean_ticker in key):
-                                found_key = key
-                                break
-                    if found_key:
-                        break
-                
-                if found_key:
-                    st.info(f"⬇️ Scaricamento {found_key}...")
-                    obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=found_key)
-                    
-                    # Decompressione GZIP in memoria
-                    with gzip.GzipFile(fileobj=io.BytesIO(obj['Body'].read())) as gz:
-                        df_massive = pd.read_csv(gz)
-                    
-                    # Caching
-                    cache_path = os.path.join(LOCAL_DB_DIR, f"{clean_ticker}.csv")
-                    df_massive.to_csv(cache_path, index=False)
-                    st.success(f"✅ Dati scaricati da Massive e salvati in cache: {cache_path}")
-                    
-                    df = process_dataframe(df_massive, start_date, end_date, ticker)
-                    if not df.empty:
-                        return df
-                else:
-                    st.warning(f"⚠️ Nessun file trovato su Massive per {ticker}")
-
-            except Exception as e:
-                st.error(f"❌ Errore Massive S3: {e}")
-
-        # 4. FALLBACK FINALE: YAHOO FINANCE
-        if df.empty:
-            try:
-                st.info("🌐 Tentativo download da Yahoo Finance (Fallback)...")
-                df_yf = fetch_yahoo_history(ticker, timeframe, str(start_date), str(end_date))
-                
-                if not df_yf.empty:
-                    df = process_dataframe(df_yf, start_date, end_date, ticker)
-                    if not df.empty:
-                        st.success("✅ Dati recuperati da Yahoo Finance.")
-                        return df
-            except Exception as e:
-                st.error(f"❌ Errore Yahoo Finance: {e}")
-
-        if df.empty:
-            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Locale, Alpaca, Massive, Yahoo).")
-            st.stop()
-            
-        return df
 
     def run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct):
         trades = []
