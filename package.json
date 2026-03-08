@@ -9,11 +9,10 @@
     "start": "streamlit run app.py --server.port 3000 --server.address 0.0.0.0"
   },
   "dependencies": {
-
+    "boto3": "^0.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
-    
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
