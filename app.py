@@ -15,10 +15,13 @@ from botocore.exceptions import ClientError
 import os
 import io
 
+from botocore.config import Config
+
 s3_client = boto3.client('s3',
     endpoint_url='https://files.massive.com',
     aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
-    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1'
+    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
+    config=Config(signature_version='s3v4')
 )
 MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
@@ -266,6 +269,14 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
 st.sidebar.markdown("## 🔑 API KEYS")
 st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", value=st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"), type="password")
 st.session_state.alpaca_secret_key = st.sidebar.text_input("Alpaca Secret Key", value=st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"), type="password")
+
+if st.sidebar.button("🔌 Testa Connessione Massive S3"):
+    try:
+        s3_client.head_bucket(Bucket=MASSIVE_BUCKET)
+        st.sidebar.success("✅ Connessione Riuscita a Massive S3!")
+    except Exception as e:
+        st.sidebar.error(f"❌ Errore di Connessione: {e}")
+
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 📁 DATABASE LOCALE")
@@ -1045,6 +1056,13 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     with c1: 
         # Ticker Selection with Predefined List + Custom
         PREDEFINED_TICKERS = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "TSLA", "NVDA", "AMD", "AMZN", "GOOGL", "META", "NFLX"]
+        
+        # Add local database files
+        if os.path.exists(LOCAL_DB_DIR):
+            local_files = [f[:-4].upper() for f in os.listdir(LOCAL_DB_DIR) if f.lower().endswith('.csv')]
+            if local_files:
+                PREDEFINED_TICKERS.extend(list(set(local_files)))
+                
         ticker_select = st.selectbox("Seleziona Ticker", ["Seleziona..."] + PREDEFINED_TICKERS + ["Inserisci Manualmente"])
         
         if ticker_select == "Inserisci Manualmente":
@@ -3736,9 +3754,17 @@ elif menu == "🛠️ STRATEGY BUILDER":
     ticker_choices = [
         "EURUSD=X (Forex)", "GBPUSD=X (Forex)", "USDJPY=X (Forex)", "EURGBP=X (Forex)",
         "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
-        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
-        "--- INSERIMENTO MANUALE ---"
+        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)"
     ]
+    
+    # Add local database files
+    if os.path.exists(LOCAL_DB_DIR):
+        local_files = [f[:-4].upper() + " (Local)" for f in os.listdir(LOCAL_DB_DIR) if f.lower().endswith('.csv')]
+        if local_files:
+            ticker_choices.extend(list(set(local_files)))
+            
+    ticker_choices.append("--- INSERIMENTO MANUALE ---")
+    
     selected_ticker = st.sidebar.selectbox("Ticker", ticker_choices, index=4)
     if selected_ticker == "--- INSERIMENTO MANUALE ---":
         ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
