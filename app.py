@@ -1060,71 +1060,68 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     # --- DATA FETCHING ENHANCED ---
     def process_dataframe(df, start_date, end_date, ticker=None):
         if df.empty:
-            return df.reset_index(drop=True)
+            return pd.DataFrame()
 
-        # 1. Reset Index se DatetimeIndex
+        # 1. UNIFICAZIONE: Rinomina colonna temporale in datetime
+        # Se l'indice è DatetimeIndex, lo convertiamo in colonna per uniformità iniziale
         if isinstance(df.index, pd.DatetimeIndex):
             df = df.reset_index()
-
-        # 2. Standardizzazione Nomi Colonne
+        
+        # Standardizzazione nomi colonne
         df.columns = [str(c).lower().strip() for c in df.columns]
         
         rename_map = {
-            'open': 'Open',
-            'high': 'High',
-            'low': 'Low',
-            'close': 'Close',
-            'volume': 'Volume',
-            'vol': 'Volume',
-            'adj close': 'Adj Close',
-            'window_start': 'datetime',
-            'date': 'datetime',
-            'time': 'datetime',
-            'timestamp': 'datetime'
+            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
+            'volume': 'Volume', 'vol': 'Volume', 'adj close': 'Adj Close',
+            'window_start': 'datetime', 'date': 'datetime', 'time': 'datetime', 
+            'timestamp': 'datetime', 't': 'datetime'
         }
         df.rename(columns=rename_map, inplace=True)
-
-        # 3. Gestione Datetime
+        
+        # Fallback per colonne non mappate esplicitamente ma contenenti "date" o "time"
         if 'datetime' not in df.columns:
-            # Cerca colonne che potrebbero contenere date
             for col in df.columns:
                 if 'date' in col or 'time' in col:
                     df.rename(columns={col: 'datetime'}, inplace=True)
                     break
         
-        if 'datetime' in df.columns:
-            # Force datetime conversion
-            df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
-            df.dropna(subset=['datetime'], inplace=True)
-        else:
-            return pd.DataFrame() # Senza data non possiamo fare nulla
+        if 'datetime' not in df.columns:
+            return pd.DataFrame()
 
-        # 4. Filtro Temporale
+        # 2. FORMATO: Assicurati che df['datetime'] sia un oggetto pd.to_datetime
+        df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+        df.dropna(subset=['datetime'], inplace=True)
+
+        # Filtro Temporale (Opzionale ma utile)
         sd = pd.to_datetime(start_date)
         ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
         df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
 
-        # 5. Filtro Ticker (se presente)
+        # Filtro Ticker (se presente)
         if ticker and 'ticker' in df.columns:
             clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
-            # Pulizia colonna ticker
             df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
             df = df[df['ticker'] == clean_ticker]
 
-        # 6. Conversione Numerica Forzata
+        # 5. CONVERSIONE: Forza tutte le colonne di prezzo a float64
         cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
         for col in cols_to_numeric:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # 7. Pulizia Final
-        if 'Close' in df.columns:
-            df.dropna(subset=['Close'], inplace=True)
+        # 4. PULIZIA: Rimuovi le righe dove Open, High, Low, o Close sono NaN o uguali a zero
+        req_cols = ['Open', 'High', 'Low', 'Close']
+        existing_cols = [c for c in req_cols if c in df.columns]
         
-        # 8. Ordinamento e Reset Index Finale
-        df.sort_values('datetime', inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        if existing_cols:
+            df.dropna(subset=existing_cols, inplace=True)
+            for col in existing_cols:
+                df = df[df[col] != 0]
 
+        # 3. INDEX: Rendi datetime l'indice del DataFrame e ordinalo in modo crescente
+        df.set_index('datetime', drop=False, inplace=True)
+        df.sort_index(ascending=True, inplace=True)
+        
         return df
 
     def get_asset_type(ticker):
@@ -1140,9 +1137,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
         df = pd.DataFrame()
         clean_ticker = ticker.replace('=X', '').replace('^', '')
-        asset_type = get_asset_type(ticker)
         
-        # Livello 1: Database Locale (Priorità Assoluta per Cache)
+        # 1. IDENTIFICAZIONE: Se il ticker NON ha '=X', è una AZIONE
+        is_forex = '=X' in ticker
+        
+        # 2. DATABASE LOCALE (Priorità Assoluta per Cache)
         possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
         local_path = None
         for pf in possible_files:
@@ -1161,9 +1160,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             except Exception as e:
                 st.error(f"❌ Errore lettura Database Locale: {e}")
 
-        # Routing Logica
-        if asset_type == 'STOCK':
-            # TENTATIVO 1: ALPACA (Obbligatorio per Azioni USA)
+        # 3. ROUTING LOGICA
+        if not is_forex:
+            # AZIONE -> ALPACA
             try:
                 st.info(f"🦙 Tentativo Alpaca API per {ticker}...")
                 # Mappatura Timeframe Alpaca
@@ -1181,18 +1180,17 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         st.success("✅ Dati recuperati da Alpaca Markets.")
                         return df
                 else:
-                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback.")
+                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback (Yahoo).")
             except Exception as e:
-                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback.")
-
-        elif asset_type in ['FOREX', 'INDEX']:
-            # TENTATIVO 1: MASSIVE S3 (Obbligatorio per Forex/Indici)
+                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback (Yahoo).")
+        
+        else:
+            # FOREX -> MASSIVE
             try:
-                prefix = 'global_forex/' if asset_type == 'FOREX' else 'us_stocks_sip/'
-                st.info(f"☁️ Ricerca su Massive S3 ({prefix}) per {ticker}...")
+                st.info(f"☁️ Ricerca su Massive S3 (global_forex/) per {ticker}...")
                 
                 paginator = s3_client.get_paginator('list_objects_v2')
-                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
+                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix='global_forex/')
                 
                 found_key = None
                 for page in pages:
@@ -1227,7 +1225,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             except Exception as e:
                 st.error(f"❌ Errore Massive S3: {e}")
 
-        # FALLBACK FINALE: YAHOO FINANCE (Per tutti se i metodi sopra falliscono)
+        # 4. FALLBACK FINALE: YAHOO FINANCE
         if df.empty:
             try:
                 st.info("🌐 Tentativo download da Yahoo Finance (Fallback)...")
@@ -3922,71 +3920,68 @@ elif menu == "🛠️ STRATEGY BUILDER":
 
     def process_dataframe(df, start_date, end_date, ticker=None):
         if df.empty:
-            return df.reset_index(drop=True)
+            return pd.DataFrame()
 
-        # 1. Reset Index se DatetimeIndex
+        # 1. UNIFICAZIONE: Rinomina colonna temporale in datetime
+        # Se l'indice è DatetimeIndex, lo convertiamo in colonna per uniformità iniziale
         if isinstance(df.index, pd.DatetimeIndex):
             df = df.reset_index()
-
-        # 2. Standardizzazione Nomi Colonne
+        
+        # Standardizzazione nomi colonne
         df.columns = [str(c).lower().strip() for c in df.columns]
         
         rename_map = {
-            'open': 'Open',
-            'high': 'High',
-            'low': 'Low',
-            'close': 'Close',
-            'volume': 'Volume',
-            'vol': 'Volume',
-            'adj close': 'Adj Close',
-            'window_start': 'datetime',
-            'date': 'datetime',
-            'time': 'datetime',
-            'timestamp': 'datetime'
+            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
+            'volume': 'Volume', 'vol': 'Volume', 'adj close': 'Adj Close',
+            'window_start': 'datetime', 'date': 'datetime', 'time': 'datetime', 
+            'timestamp': 'datetime', 't': 'datetime'
         }
         df.rename(columns=rename_map, inplace=True)
-
-        # 3. Gestione Datetime
+        
+        # Fallback per colonne non mappate esplicitamente ma contenenti "date" o "time"
         if 'datetime' not in df.columns:
-            # Cerca colonne che potrebbero contenere date
             for col in df.columns:
                 if 'date' in col or 'time' in col:
                     df.rename(columns={col: 'datetime'}, inplace=True)
                     break
         
-        if 'datetime' in df.columns:
-            # Force datetime conversion
-            df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
-            df.dropna(subset=['datetime'], inplace=True)
-        else:
-            return pd.DataFrame() # Senza data non possiamo fare nulla
+        if 'datetime' not in df.columns:
+            return pd.DataFrame()
 
-        # 4. Filtro Temporale
+        # 2. FORMATO: Assicurati che df['datetime'] sia un oggetto pd.to_datetime
+        df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+        df.dropna(subset=['datetime'], inplace=True)
+
+        # Filtro Temporale (Opzionale ma utile)
         sd = pd.to_datetime(start_date)
         ed = pd.to_datetime(end_date) + pd.Timedelta(days=1)
         df = df[(df['datetime'] >= sd) & (df['datetime'] < ed)]
 
-        # 5. Filtro Ticker (se presente)
+        # Filtro Ticker (se presente)
         if ticker and 'ticker' in df.columns:
             clean_ticker = str(ticker).replace('=X', '').replace('^', '').upper()
-            # Pulizia colonna ticker
             df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
             df = df[df['ticker'] == clean_ticker]
 
-        # 6. Conversione Numerica Forzata
+        # 5. CONVERSIONE: Forza tutte le colonne di prezzo a float64
         cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
         for col in cols_to_numeric:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # 7. Pulizia Final
-        if 'Close' in df.columns:
-            df.dropna(subset=['Close'], inplace=True)
+        # 4. PULIZIA: Rimuovi le righe dove Open, High, Low, o Close sono NaN o uguali a zero
+        req_cols = ['Open', 'High', 'Low', 'Close']
+        existing_cols = [c for c in req_cols if c in df.columns]
         
-        # 8. Ordinamento e Reset Index Finale
-        df.sort_values('datetime', inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        if existing_cols:
+            df.dropna(subset=existing_cols, inplace=True)
+            for col in existing_cols:
+                df = df[df[col] != 0]
 
+        # 3. INDEX: Rendi datetime l'indice del DataFrame e ordinalo in modo crescente
+        df.set_index('datetime', drop=False, inplace=True)
+        df.sort_index(ascending=True, inplace=True)
+        
         return df
 
     def get_asset_type(ticker):
@@ -4002,9 +3997,11 @@ elif menu == "🛠️ STRATEGY BUILDER":
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
         df = pd.DataFrame()
         clean_ticker = ticker.replace('=X', '').replace('^', '')
-        asset_type = get_asset_type(ticker)
         
-        # Livello 1: Database Locale (Priorità Assoluta per Cache)
+        # 1. IDENTIFICAZIONE: Se il ticker NON ha '=X', è una AZIONE
+        is_forex = '=X' in ticker
+        
+        # 2. DATABASE LOCALE (Priorità Assoluta per Cache)
         possible_files = [f"{clean_ticker}.csv", f"{clean_ticker}.CSV", f"{clean_ticker.lower()}.csv"]
         local_path = None
         for pf in possible_files:
@@ -4023,9 +4020,9 @@ elif menu == "🛠️ STRATEGY BUILDER":
             except Exception as e:
                 st.error(f"❌ Errore lettura Database Locale: {e}")
 
-        # Routing Logica
-        if asset_type == 'STOCK':
-            # TENTATIVO 1: ALPACA (Obbligatorio per Azioni USA)
+        # 3. ROUTING LOGICA
+        if not is_forex:
+            # AZIONE -> ALPACA
             try:
                 st.info(f"🦙 Tentativo Alpaca API per {ticker}...")
                 # Mappatura Timeframe Alpaca
@@ -4043,18 +4040,17 @@ elif menu == "🛠️ STRATEGY BUILDER":
                         st.success("✅ Dati recuperati da Alpaca Markets.")
                         return df
                 else:
-                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback.")
+                    st.warning("⚠️ Alpaca non ha restituito dati. Passaggio al fallback (Yahoo).")
             except Exception as e:
-                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback.")
-
-        elif asset_type in ['FOREX', 'INDEX']:
-            # TENTATIVO 1: MASSIVE S3 (Obbligatorio per Forex/Indici)
+                st.warning(f"⚠️ Errore Alpaca: {e}. Passaggio al fallback (Yahoo).")
+        
+        else:
+            # FOREX -> MASSIVE
             try:
-                prefix = 'global_forex/' if asset_type == 'FOREX' else 'us_stocks_sip/'
-                st.info(f"☁️ Ricerca su Massive S3 ({prefix}) per {ticker}...")
+                st.info(f"☁️ Ricerca su Massive S3 (global_forex/) per {ticker}...")
                 
                 paginator = s3_client.get_paginator('list_objects_v2')
-                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix=prefix)
+                pages = paginator.paginate(Bucket=MASSIVE_BUCKET, Prefix='global_forex/')
                 
                 found_key = None
                 for page in pages:
@@ -4089,7 +4085,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
             except Exception as e:
                 st.error(f"❌ Errore Massive S3: {e}")
 
-        # FALLBACK FINALE: YAHOO FINANCE (Per tutti se i metodi sopra falliscono)
+        # 4. FALLBACK FINALE: YAHOO FINANCE
         if df.empty:
             try:
                 st.info("🌐 Tentativo download da Yahoo Finance (Fallback)...")
