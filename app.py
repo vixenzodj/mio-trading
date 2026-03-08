@@ -339,7 +339,11 @@ def process_dataframe(df, start_date, end_date, ticker=None):
         return pd.DataFrame()
 
     # 2. FORMATO: Assicurati che df['datetime'] sia un oggetto pd.to_datetime
-    df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+    if pd.api.types.is_numeric_dtype(df['datetime']):
+        df['datetime'] = pd.to_datetime(df['datetime'], unit='ns', utc=True).dt.tz_localize(None)
+    else:
+        df['datetime'] = pd.to_datetime(df['datetime'], utc=True, errors='coerce').dt.tz_localize(None)
+    
     df.dropna(subset=['datetime'], inplace=True)
 
     # Filtro Temporale (Opzionale ma utile)
@@ -4183,8 +4187,15 @@ elif menu == "🛠️ STRATEGY BUILDER":
             df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
                 # --- FIX ORDINAMENTO E DATETIME ---
+                # Rimuovi colonne duplicate
+                df = df.loc[:, ~df.columns.duplicated()]
+
                 if isinstance(df.index, pd.DatetimeIndex):
-                    df = df.reset_index()
+                    if 'datetime' in df.columns:
+                        df = df.reset_index(drop=True)
+                    else:
+                        df.index.name = 'datetime'
+                        df = df.reset_index()
                 
                 if 'datetime' in df.columns:
                     df['datetime'] = pd.to_datetime(df['datetime'])
