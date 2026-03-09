@@ -1073,24 +1073,61 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         clean_ticker = ticker.replace('=X', '').replace('^', '')
 
         # Helper to standardize dataframe
-        def standardize_df(df_raw, start, end):
-            if df_raw.empty: return df_raw
-            rename_map = {c: c.capitalize() for c in df_raw.columns if c.lower() in ['open', 'high', 'low', 'close', 'volume']}
-            if 'timestamp' in df_raw.columns: rename_map['timestamp'] = 'datetime'
-            elif 'time' in df_raw.columns: rename_map['time'] = 'datetime'
-            elif 'date' in df_raw.columns: rename_map['date'] = 'datetime'
-            elif 'Date' in df_raw.columns: rename_map['Date'] = 'datetime'
-            elif 'Datetime' in df_raw.columns: rename_map['Datetime'] = 'datetime'
-            
-            df_raw.rename(columns=rename_map, inplace=True)
-            if 'datetime' not in df_raw.columns and df_raw.index.name in ['Date', 'Datetime', 'datetime', 'time', 'timestamp']:
-                df_raw.reset_index(inplace=True)
-                df_raw.rename(columns={df_raw.index.name: 'datetime'}, inplace=True)
+        def process_dataframe(df, ticker, start_date, end_date):
+            if df.empty:
+                return df
                 
-            if 'datetime' in df_raw.columns:
-                df_raw['datetime'] = pd.to_datetime(df_raw['datetime'])
-                df_raw = df_raw[(df_raw['datetime'] >= pd.to_datetime(start)) & (df_raw['datetime'] <= pd.to_datetime(end))]
-            return df_raw
+            # --- MASSIVE S3 DATA HARMONIZATION ---
+            if 'window_start' in df.columns:
+                df['datetime'] = pd.to_datetime(df['window_start'], unit='ns')
+                if 'ticker' in df.columns:
+                    df = df[df['ticker'] == ticker]
+                    
+            # --- EXISTING NORMALIZATION LOGIC ---
+            # Standardize columns
+            rename_map = {}
+            for c in df.columns:
+                cl = str(c).lower()
+                if cl in ['open', 'high', 'low', 'close', 'volume']:
+                    rename_map[c] = cl.capitalize()
+                elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                    rename_map[c] = 'datetime'
+                    
+            df.rename(columns=rename_map, inplace=True)
+            
+            if 'datetime' not in df.columns:
+                if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
+                    df.reset_index(inplace=True)
+                    df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
+                else:
+                    st.error("❌ Errore: Colonna data non trovata nel file CSV.")
+                    return pd.DataFrame()
+                    
+            # Force numeric on OHLC and ensure they are float
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+                    
+            # Drop rows where Close is NaN
+            if 'Close' in df.columns:
+                df.dropna(subset=['Close'], inplace=True)
+                
+            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+            df.dropna(subset=['datetime'], inplace=True)
+            
+            # Filter by date
+            df = df[(df['datetime'] >= pd.to_datetime(start_date)) & (df['datetime'] <= pd.to_datetime(end_date))]
+            
+            if not df.empty and len(df) > 1:
+                df.sort_values('datetime', ascending=True, inplace=True)
+                diffs = df['datetime'].diff()
+                max_gap = diffs.max()
+                if pd.notnull(max_gap) and max_gap > pd.Timedelta(days=3):
+                    st.warning(f"⚠️ Attenzione: Rilevato un buco temporale nei dati di {max_gap.days} giorni.")
+                    
+                df.set_index('datetime', drop=False, inplace=True)
+                
+            return df
 
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
@@ -1117,7 +1154,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         
                 if obj:
                     df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
-                    df = standardize_df(df_massive, start_date, end_date)
+                    df = process_dataframe(df_massive, ticker, start_date, end_date)
                     if not df.empty:
                         st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
                 else:
@@ -1167,7 +1204,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         if isinstance(df_yf.columns, pd.MultiIndex):
                             df_yf.columns = df_yf.columns.get_level_values(0)
                         df_yf.reset_index(inplace=True)
-                        df = standardize_df(df_yf, start_date, end_date)
+                        df = process_dataframe(df_yf, ticker, start_date, end_date)
                         if not df.empty:
                             st.warning("⚠️ Dati presi da Yahoo Finance (Limiti applicati).")
                 except Exception as e:
@@ -1186,7 +1223,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         
                 if local_path:
                     df_local = pd.read_csv(local_path)
-                    df = standardize_df(df_local, start_date, end_date)
+                    df = process_dataframe(df_local, ticker, start_date, end_date)
                     if not df.empty:
                         st.success("📂 Dati recuperati dal Database Locale.")
             except Exception as e:
