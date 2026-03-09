@@ -13,14 +13,18 @@ import requests
 import boto3
 from botocore.exceptions import ClientError
 import os
-import io
+from botocore.config import Config
 import gzip
+import io
 
-s3_client = boto3.client(
+session = boto3.Session(
+    aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
+    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
+)
+s3_client = session.client(
     's3',
     endpoint_url='https://files.massive.com',
-    aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
-    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1'
+    config=Config(signature_version='s3v4'),
 )
 MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
@@ -3743,7 +3747,6 @@ elif menu == "🛠️ STRATEGY BUILDER":
     ]
     
     standard_tickers = [
-        "EURUSD=X (Forex)", "GBPUSD=X (Forex)", "USDJPY=X (Forex)", "EURGBP=X (Forex)",
         "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
         "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
         "--- INSERIMENTO MANUALE ---"
