@@ -11,14 +11,17 @@ from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 import os
 import io
+import gzip
 
 s3_client = boto3.client('s3',
     endpoint_url='https://files.massive.com',
     aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
-    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1'
+    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
+    config=Config(signature_version='s3v4')
 )
 MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
@@ -302,7 +305,7 @@ today_str_format = today.strftime('%Y-%m-%d') # Per la cache
 
 if menu == "🏟️ DASHBOARD SINGOLA":
     if 'ticker_list' not in st.session_state:
-        base_tickers = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
+        base_tickers = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "ES=F", "NQ=F", "GC=F", "CL=F"]
         if os.path.exists(LOCAL_DB_DIR):
             local_files = [f.replace('.csv', '').upper() for f in os.listdir(LOCAL_DB_DIR) if f.endswith('.csv')]
             for lf in local_files:
@@ -3734,14 +3737,13 @@ elif menu == "🛠️ STRATEGY BUILDER":
     # Ticker and Date Range
     st.sidebar.markdown("### 📈 Selezione Asset")
     ticker_choices = [
-        "EURUSD=X (Forex)", "GBPUSD=X (Forex)", "USDJPY=X (Forex)", "EURGBP=X (Forex)",
-        "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
-        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+        "ES=F (S&P 500 Futures)", "NQ=F (Nasdaq Futures)", "GC=F (Gold)", "CL=F (Crude Oil)",
         "--- INSERIMENTO MANUALE ---"
     ]
-    selected_ticker = st.sidebar.selectbox("Ticker", ticker_choices, index=4)
+    selected_ticker = st.sidebar.selectbox("Ticker", ticker_choices, index=0)
     if selected_ticker == "--- INSERIMENTO MANUALE ---":
-        ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
+        ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="EURUSD").upper()
     else:
         ticker = selected_ticker.split(" ")[0]
         
