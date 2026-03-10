@@ -21,15 +21,10 @@ session = boto3.Session(
     aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
     aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
 )
-
-# 2. Crea il client FORZANDO il 'Path Style' (Questo risolve il 403)
 s3_client = session.client(
     's3',
     endpoint_url='https://files.massive.com',
-    config=Config(
-        signature_version='s3v4',
-        s3={'addressing_style': 'path'} # <--- QUESTA È LA CHIAVE CHE MANCAVA!
-    ),
+    config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
 )
 MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
@@ -1147,11 +1142,13 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
             try:
-                possible_keys = [f"global_forex/{clean_ticker}.csv.gz", f"global_forex/{clean_ticker}.CSV.GZ", f"global_forex/{clean_ticker.lower()}.csv.gz"]
+                possible_keys = [f"global_forex/{clean_ticker}.csv.gz", f"global_forex/{clean_ticker}.csv"]
                 obj = None
+                successful_key = None
                 for key in possible_keys:
                     try:
                         obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=key)
+                        successful_key = key
                         break
                     except ClientError as e:
                         error_code = e.response['Error']['Code']
@@ -1167,8 +1164,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         st.error(f"❌ Errore imprevisto S3: {e}")
                         break
                         
-                if obj:
-                    df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
+                if obj and successful_key:
+                    if successful_key.endswith('.gz'):
+                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
+                    else:
+                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()))
                     df = process_dataframe(df_massive, ticker, start_date, end_date)
                     if not df.empty:
                         st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
@@ -2537,7 +2537,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                         entry_price = opens[entry_idx] # Entry at Open T+1
                         atr_val = atrs[idx] # ATR at Signal Candle
                         
-                        if np.isnan(atr_val) or atr_val == 0: continue
+                        if np.isnan(atr_val) or atr_val == 0:
+                            atr_val = entry_price * 0.01  # Fallback: 1% del prezzo se ATR è rotto
 
                         sl_dist = atr_val * 1.5 # Fixed as per original
                         
@@ -2828,8 +2829,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 atr_val = atrs[idx]
                 
                 if np.isnan(atr_val) or atr_val == 0: 
+                    atr_val = entry_price * 0.01
                     diag['skipped_invalid_atr'] += 1
-                    continue
                 
                 sl_dist = atr_val * sl_atr_mult
                 
@@ -4028,11 +4029,13 @@ elif menu == "🛠️ STRATEGY BUILDER":
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
             try:
-                possible_keys = [f"global_forex/{clean_ticker}.csv.gz", f"global_forex/{clean_ticker}.CSV.GZ", f"global_forex/{clean_ticker.lower()}.csv.gz"]
+                possible_keys = [f"global_forex/{clean_ticker}.csv.gz", f"global_forex/{clean_ticker}.csv"]
                 obj = None
+                successful_key = None
                 for key in possible_keys:
                     try:
                         obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=key)
+                        successful_key = key
                         break
                     except ClientError as e:
                         error_code = e.response['Error']['Code']
@@ -4048,8 +4051,11 @@ elif menu == "🛠️ STRATEGY BUILDER":
                         st.error(f"❌ Errore imprevisto S3: {e}")
                         break
                         
-                if obj:
-                    df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
+                if obj and successful_key:
+                    if successful_key.endswith('.gz'):
+                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
+                    else:
+                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()))
                     df = process_dataframe(df_massive, ticker, start_date, end_date)
                     if not df.empty:
                         st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
