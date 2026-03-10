@@ -1142,7 +1142,12 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
             try:
-                possible_keys = [f"global_forex/{clean_ticker}.csv.gz", f"global_forex/{clean_ticker}.csv"]
+                possible_keys = [
+                    f"global_forex/{clean_ticker}.csv.gz",
+                    f"global_forex/{clean_ticker.lower()}.csv.gz",
+                    f"global_forex/{clean_ticker}.csv",
+                    f"global_forex/{clean_ticker.lower()}.csv"
+                ]
                 obj = None
                 successful_key = None
                 for key in possible_keys:
@@ -4029,7 +4034,12 @@ elif menu == "🛠️ STRATEGY BUILDER":
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
             try:
-                possible_keys = [f"global_forex/{clean_ticker}.csv.gz", f"global_forex/{clean_ticker}.csv"]
+                possible_keys = [
+                    f"global_forex/{clean_ticker}.csv.gz",
+                    f"global_forex/{clean_ticker.lower()}.csv.gz",
+                    f"global_forex/{clean_ticker}.csv",
+                    f"global_forex/{clean_ticker.lower()}.csv"
+                ]
                 obj = None
                 successful_key = None
                 for key in possible_keys:
@@ -4154,6 +4164,9 @@ elif menu == "🛠️ STRATEGY BUILDER":
             return trades
             
         df = df.copy()
+        
+        if df['datetime'].dt.tz is not None:
+            df['datetime'] = df['datetime'].dt.tz_localize(None)
         
         # Ensure no data is dropped after indicator calculations (Massive data depth support)
         df.ffill(inplace=True)
