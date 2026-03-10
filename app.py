@@ -1086,38 +1086,44 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 df['datetime'] = pd.to_datetime(df['window_start'], unit='ns')
                 if 'ticker' in df.columns:
                     df = df[df['ticker'] == ticker]
-                    
-            # --- EXISTING NORMALIZATION LOGIC ---
-            # Standardize columns
-            rename_map = {}
-            for c in df.columns:
-                cl = str(c).lower()
-                if cl in ['open', 'high', 'low', 'close', 'volume']:
-                    rename_map[c] = cl.capitalize()
-                elif cl in ['date', 'timestamp', 'time', 'datetime']:
-                    rename_map[c] = 'datetime'
-                    
-            df.rename(columns=rename_map, inplace=True)
-            
-            if 'datetime' not in df.columns:
-                if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
-                    df.reset_index(inplace=True)
-                    df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
-                else:
-                    st.error("❌ Errore: Colonna data non trovata nel file CSV.")
-                    return pd.DataFrame()
-                    
-            # Force numeric on OHLC and ensure they are float
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-                    
-            # Drop rows where Close is NaN
-            if 'Close' in df.columns:
-                df.dropna(subset=['Close'], inplace=True)
                 
-            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-            df.dropna(subset=['datetime'], inplace=True)
+                rename_map = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}
+                df.rename(columns=rename_map, inplace=True)
+                
+                df.dropna(subset=['datetime'], inplace=True)
+                df.sort_values('datetime', ascending=True, inplace=True)
+            else:
+                # --- EXISTING NORMALIZATION LOGIC ---
+                # Standardize columns
+                rename_map = {}
+                for c in df.columns:
+                    cl = str(c).lower()
+                    if cl in ['open', 'high', 'low', 'close', 'volume']:
+                        rename_map[c] = cl.capitalize()
+                    elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                        rename_map[c] = 'datetime'
+                        
+                df.rename(columns=rename_map, inplace=True)
+                
+                if 'datetime' not in df.columns:
+                    if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
+                        df.reset_index(inplace=True)
+                        df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
+                    else:
+                        st.error("❌ Errore: Colonna data non trovata nel file CSV.")
+                        return pd.DataFrame()
+                        
+                # Force numeric on OHLC and ensure they are float
+                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+                        
+                # Drop rows where Close is NaN
+                if 'Close' in df.columns:
+                    df.dropna(subset=['Close'], inplace=True)
+                    
+                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                df.dropna(subset=['datetime'], inplace=True)
             
             # Filter by date
             df = df[(df['datetime'] >= pd.to_datetime(start_date)) & (df['datetime'] <= pd.to_datetime(end_date))]
@@ -3961,38 +3967,44 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 df['datetime'] = pd.to_datetime(df['window_start'], unit='ns')
                 if 'ticker' in df.columns:
                     df = df[df['ticker'] == ticker]
-                    
-            # --- EXISTING NORMALIZATION LOGIC ---
-            # Standardize columns
-            rename_map = {}
-            for c in df.columns:
-                cl = str(c).lower()
-                if cl in ['open', 'high', 'low', 'close', 'volume']:
-                    rename_map[c] = cl.capitalize()
-                elif cl in ['date', 'timestamp', 'time', 'datetime']:
-                    rename_map[c] = 'datetime'
-                    
-            df.rename(columns=rename_map, inplace=True)
-            
-            if 'datetime' not in df.columns:
-                if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
-                    df.reset_index(inplace=True)
-                    df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
-                else:
-                    st.error("❌ Errore: Colonna data non trovata nel file CSV.")
-                    return pd.DataFrame()
-                    
-            # Force numeric on OHLC and ensure they are float
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-                    
-            # Drop rows where Close is NaN
-            if 'Close' in df.columns:
-                df.dropna(subset=['Close'], inplace=True)
                 
-            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-            df.dropna(subset=['datetime'], inplace=True)
+                rename_map = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}
+                df.rename(columns=rename_map, inplace=True)
+                
+                df.dropna(subset=['datetime'], inplace=True)
+                df.sort_values('datetime', ascending=True, inplace=True)
+            else:
+                # --- EXISTING NORMALIZATION LOGIC ---
+                # Standardize columns
+                rename_map = {}
+                for c in df.columns:
+                    cl = str(c).lower()
+                    if cl in ['open', 'high', 'low', 'close', 'volume']:
+                        rename_map[c] = cl.capitalize()
+                    elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                        rename_map[c] = 'datetime'
+                        
+                df.rename(columns=rename_map, inplace=True)
+                
+                if 'datetime' not in df.columns:
+                    if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
+                        df.reset_index(inplace=True)
+                        df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
+                    else:
+                        st.error("❌ Errore: Colonna data non trovata nel file CSV.")
+                        return pd.DataFrame()
+                        
+                # Force numeric on OHLC and ensure they are float
+                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+                        
+                # Drop rows where Close is NaN
+                if 'Close' in df.columns:
+                    df.dropna(subset=['Close'], inplace=True)
+                    
+                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                df.dropna(subset=['datetime'], inplace=True)
             
             # Filter by date
             df = df[(df['datetime'] >= pd.to_datetime(start_date)) & (df['datetime'] <= pd.to_datetime(end_date))]
