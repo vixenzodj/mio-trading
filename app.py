@@ -21,10 +21,15 @@ session = boto3.Session(
     aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
     aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
 )
+
+# 2. Crea il client FORZANDO il 'Path Style' (Questo risolve il 403)
 s3_client = session.client(
     's3',
     endpoint_url='https://files.massive.com',
-    config=Config(signature_version='s3v4'),
+    config=Config(
+        signature_version='s3v4',
+        s3={'addressing_style': 'path'} # <--- QUESTA È LA CHIAVE CHE MANCAVA!
+    ),
 )
 MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
