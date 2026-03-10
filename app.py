@@ -4143,6 +4143,11 @@ elif menu == "🛠️ STRATEGY BUILDER":
             return trades
             
         df = df.copy()
+        
+        # Ensure no data is dropped after indicator calculations (Massive data depth support)
+        df.ffill(inplace=True)
+        df.fillna(0, inplace=True)
+        
         df['date'] = df['datetime'].dt.date
         df['time'] = df['datetime'].dt.time
         
@@ -4173,9 +4178,10 @@ elif menu == "🛠️ STRATEGY BUILDER":
                         orb_high = orb_data['High'].max()
                         orb_low = orb_data['Low'].min()
             
-            for idx, row in group.iterrows():
-                current_time = row['time']
-                current_datetime = row['datetime']
+            # Use itertuples for performance on large datasets (Massive support)
+            for row in group.itertuples():
+                current_time = row.time
+                current_datetime = row.datetime
                 
                 is_trading_time = start_time <= current_time <= end_time
                 
@@ -4185,20 +4191,20 @@ elif menu == "🛠️ STRATEGY BUILDER":
                     exit_price = 0
                     
                     if position_type == 'LONG':
-                        if row['Low'] <= sl_price:
+                        if row.Low <= sl_price:
                             exit_triggered = True
                             exit_type = "SL"
                             exit_price = sl_price
-                        elif row['High'] >= tp_price:
+                        elif row.High >= tp_price:
                             exit_triggered = True
                             exit_type = "TP"
                             exit_price = tp_price
                     elif position_type == 'SHORT':
-                        if row['High'] >= sl_price:
+                        if row.High >= sl_price:
                             exit_triggered = True
                             exit_type = "SL"
                             exit_price = sl_price
-                        elif row['Low'] <= tp_price:
+                        elif row.Low <= tp_price:
                             exit_triggered = True
                             exit_type = "TP"
                             exit_price = tp_price
@@ -4206,11 +4212,11 @@ elif menu == "🛠️ STRATEGY BUILDER":
                     if not exit_triggered and eod_close and current_time >= end_time:
                         exit_triggered = True
                         exit_type = "EOD"
-                        exit_price = row['Close']
+                        exit_price = row.Close
                     elif not exit_triggered and not is_trading_time:
                         exit_triggered = True
                         exit_type = "Out of Time"
-                        exit_price = row['Close']
+                        exit_price = row.Close
                     
                     if exit_triggered:
                         pnl = (exit_price - entry_price) if position_type == 'LONG' else (entry_price - exit_price)
@@ -4235,16 +4241,16 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 if not in_position and is_trading_time:
                     if orb_enabled and orb_high is not None and orb_low is not None:
                         if current_datetime >= orb_end_time:
-                            if row['High'] > orb_high:
+                            if row.High > orb_high:
                                 in_position = True
                                 position_type = 'LONG'
-                                entry_price = max(row['Open'], orb_high)
+                                entry_price = max(row.Open, orb_high)
                                 entry_time = current_datetime
                                 
                                 if sl_mode == "Fixed %":
                                     sl_price = entry_price * (1 - fixed_sl_pct / 100)
                                 else:
-                                    sl_price = row['Low']
+                                    sl_price = row.Low
                                     if sl_price >= entry_price:
                                         sl_price = entry_price * 0.999
                                         
@@ -4254,16 +4260,16 @@ elif menu == "🛠️ STRATEGY BUILDER":
                                 risk_per_unit = entry_price - sl_price
                                 size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
                                 
-                            elif row['Low'] < orb_low:
+                            elif row.Low < orb_low:
                                 in_position = True
                                 position_type = 'SHORT'
-                                entry_price = min(row['Open'], orb_low)
+                                entry_price = min(row.Open, orb_low)
                                 entry_time = current_datetime
                                 
                                 if sl_mode == "Fixed %":
                                     sl_price = entry_price * (1 + fixed_sl_pct / 100)
                                 else:
-                                    sl_price = row['High']
+                                    sl_price = row.High
                                     if sl_price <= entry_price:
                                         sl_price = entry_price * 1.001
                                         
@@ -4277,13 +4283,13 @@ elif menu == "🛠️ STRATEGY BUILDER":
                         if current_time >= start_time:
                             in_position = True
                             position_type = 'LONG'
-                            entry_price = row['Close']
+                            entry_price = row.Close
                             entry_time = current_datetime
                             
                             if sl_mode == "Fixed %":
                                 sl_price = entry_price * (1 - fixed_sl_pct / 100)
                             else:
-                                sl_price = row['Low']
+                                sl_price = row.Low
                                 if sl_price >= entry_price:
                                     sl_price = entry_price * 0.999
                                     
