@@ -1064,6 +1064,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         import io
         import gzip
         import requests
+        from datetime import timedelta
         
         df = pd.DataFrame()
         
@@ -1142,23 +1143,35 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
             try:
-                possible_keys = [
-                    f"global_forex/{clean_ticker}.csv.gz",
-                    f"global_forex/{clean_ticker.lower()}.csv.gz",
-                    f"global_forex/{clean_ticker}.csv",
-                    f"global_forex/{clean_ticker.lower()}.csv"
-                ]
-                obj = None
-                successful_key = None
-                for key in possible_keys:
+                # Iteriamo attraverso ogni singolo giorno tra start_date e end_date
+                current_date = pd.to_datetime(start_date)
+                end_date_dt = pd.to_datetime(end_date)
+                
+                daily_dfs = []
+                
+                while current_date <= end_date_dt:
+                    # Costruiamo dinamicamente la chiave S3
+                    s3_key = f"global_forex/minute_aggs_v1/{current_date.strftime('%Y')}/{current_date.strftime('%m')}/{current_date.strftime('%Y-%m-%d')}.csv.gz"
+                    
                     try:
-                        obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=key)
-                        successful_key = key
-                        break
+                        # Scarichiamo e decomprimiamo il file in memoria
+                        obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=s3_key)
+                        
+                        # Trasformiamo il CSV in un DataFrame temporaneo
+                        df_temp = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
+                        
+                        # Filtriamo subito il DataFrame mantenendo solo le righe dove la colonna del ticker corrisponde a clean_ticker
+                        if 'ticker' in df_temp.columns:
+                            df_temp = df_temp[df_temp['ticker'] == clean_ticker]
+                        
+                        if not df_temp.empty:
+                            daily_dfs.append(df_temp)
+                            
                     except ClientError as e:
                         error_code = e.response['Error']['Code']
                         if error_code == 'NoSuchKey':
-                            continue
+                            # Se il file non esiste (es. weekend), ignoriamo l'errore senza far crashare il programma
+                            pass
                         elif error_code in ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch']:
                             st.error(f"❌ Errore di autenticazione Massive S3: {e}")
                             break
@@ -1166,24 +1179,25 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             st.error(f"❌ Errore S3: {e}")
                             break
                     except Exception as e:
-                        st.error(f"❌ Errore imprevisto S3: {e}")
-                        break
+                        st.error(f"❌ Errore imprevisto S3 durante il download di {s3_key}: {e}")
                         
-                if obj and successful_key:
-                    if successful_key.endswith('.gz'):
-                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
-                    else:
-                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()))
+                    # Passiamo al giorno successivo
+                    current_date += timedelta(days=1)
+                
+                # Uniamo tutti i giorni in un unico DataFrame finale
+                if daily_dfs:
+                    df_massive = pd.concat(daily_dfs, ignore_index=True)
                     df = process_dataframe(df_massive, ticker, start_date, end_date)
                     if not df.empty:
                         st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
                 else:
-                    st.info(f"ℹ️ File non trovato nel Bucket Massive per {ticker}.")
+                    st.info(f"ℹ️ Nessun dato trovato nel Bucket Massive per {ticker} nel periodo selezionato.")
+                    
             except Exception as e:
-                st.error(f"❌ Errore di connessione a Massive S3: {e}")
+                st.error(f"❌ Errore generale nella logica Massive S3: {e}")
 
-        # ROUTE 2: Stock/Index -> Alpaca / Yahoo Finance
-        if df.empty and not is_forex:
+        # ROUTE 2: Stock/Index/Forex -> Alpaca / Yahoo Finance
+        if df.empty:
             # ENGINE 1: Alpaca (Primary for US Stocks/ETFs)
             if is_stock and not is_crypto:
                 try:
@@ -3956,6 +3970,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
         import io
         import gzip
         import requests
+        from datetime import timedelta
         
         df = pd.DataFrame()
         
@@ -4034,23 +4049,35 @@ elif menu == "🛠️ STRATEGY BUILDER":
         # ROUTE 1: Forex/Derivative -> Massive S3
         if is_forex:
             try:
-                possible_keys = [
-                    f"global_forex/{clean_ticker}.csv.gz",
-                    f"global_forex/{clean_ticker.lower()}.csv.gz",
-                    f"global_forex/{clean_ticker}.csv",
-                    f"global_forex/{clean_ticker.lower()}.csv"
-                ]
-                obj = None
-                successful_key = None
-                for key in possible_keys:
+                # Iteriamo attraverso ogni singolo giorno tra start_date e end_date
+                current_date = pd.to_datetime(start_date)
+                end_date_dt = pd.to_datetime(end_date)
+                
+                daily_dfs = []
+                
+                while current_date <= end_date_dt:
+                    # Costruiamo dinamicamente la chiave S3
+                    s3_key = f"global_forex/minute_aggs_v1/{current_date.strftime('%Y')}/{current_date.strftime('%m')}/{current_date.strftime('%Y-%m-%d')}.csv.gz"
+                    
                     try:
-                        obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=key)
-                        successful_key = key
-                        break
+                        # Scarichiamo e decomprimiamo il file in memoria
+                        obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=s3_key)
+                        
+                        # Trasformiamo il CSV in un DataFrame temporaneo
+                        df_temp = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
+                        
+                        # Filtriamo subito il DataFrame mantenendo solo le righe dove la colonna del ticker corrisponde a clean_ticker
+                        if 'ticker' in df_temp.columns:
+                            df_temp = df_temp[df_temp['ticker'] == clean_ticker]
+                        
+                        if not df_temp.empty:
+                            daily_dfs.append(df_temp)
+                            
                     except ClientError as e:
                         error_code = e.response['Error']['Code']
                         if error_code == 'NoSuchKey':
-                            continue
+                            # Se il file non esiste (es. weekend), ignoriamo l'errore senza far crashare il programma
+                            pass
                         elif error_code in ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch']:
                             st.error(f"❌ Errore di autenticazione Massive S3: {e}")
                             break
@@ -4058,24 +4085,25 @@ elif menu == "🛠️ STRATEGY BUILDER":
                             st.error(f"❌ Errore S3: {e}")
                             break
                     except Exception as e:
-                        st.error(f"❌ Errore imprevisto S3: {e}")
-                        break
+                        st.error(f"❌ Errore imprevisto S3 durante il download di {s3_key}: {e}")
                         
-                if obj and successful_key:
-                    if successful_key.endswith('.gz'):
-                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
-                    else:
-                        df_massive = pd.read_csv(io.BytesIO(obj['Body'].read()))
+                    # Passiamo al giorno successivo
+                    current_date += timedelta(days=1)
+                
+                # Uniamo tutti i giorni in un unico DataFrame finale
+                if daily_dfs:
+                    df_massive = pd.concat(daily_dfs, ignore_index=True)
                     df = process_dataframe(df_massive, ticker, start_date, end_date)
                     if not df.empty:
                         st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
                 else:
-                    st.info(f"ℹ️ File non trovato nel Bucket Massive per {ticker}.")
+                    st.info(f"ℹ️ Nessun dato trovato nel Bucket Massive per {ticker} nel periodo selezionato.")
+                    
             except Exception as e:
-                st.error(f"❌ Errore di connessione a Massive S3: {e}")
+                st.error(f"❌ Errore generale nella logica Massive S3: {e}")
 
-        # ROUTE 2: Stock/Index -> Alpaca / Yahoo Finance
-        if df.empty and not is_forex:
+        # ROUTE 2: Stock/Index/Forex -> Alpaca / Yahoo Finance
+        if df.empty:
             # ENGINE 1: Alpaca (Primary for US Stocks/ETFs)
             if is_stock and not is_crypto:
                 try:
