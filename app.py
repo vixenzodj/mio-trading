@@ -10,23 +10,9 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
-import boto3
-from botocore.exceptions import ClientError
 import os
-from botocore.config import Config
-import gzip
-import io
+from histdatacom import downloader
 
-session = boto3.Session(
-    aws_access_key_id='fc19982d-d244-499b-823a-710891d5757e',
-    aws_secret_access_key='XE4AM3OmmVZpjqXhfOXzxmREDpvYbuo1',
-)
-s3_client = session.client(
-    's3',
-    endpoint_url='https://files.massive.com',
-    config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
-)
-MASSIVE_BUCKET = 'flatfiles'
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
@@ -1061,8 +1047,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     # --- DATA FETCHING ENHANCED ---
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
-        import io
-        import gzip
         import requests
         from datetime import timedelta
         
@@ -1082,49 +1066,37 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             if df.empty:
                 return df
                 
-            # --- MASSIVE S3 DATA HARMONIZATION ---
-            if 'window_start' in df.columns:
-                df['datetime'] = pd.to_datetime(df['window_start'], unit='ns')
-                if 'ticker' in df.columns:
-                    df = df[df['ticker'] == ticker]
-                
-                rename_map = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}
-                df.rename(columns=rename_map, inplace=True)
-                
-                df.dropna(subset=['datetime'], inplace=True)
-                df.sort_values('datetime', ascending=True, inplace=True)
-            else:
-                # --- EXISTING NORMALIZATION LOGIC ---
-                # Standardize columns
-                rename_map = {}
-                for c in df.columns:
-                    cl = str(c).lower()
-                    if cl in ['open', 'high', 'low', 'close', 'volume']:
-                        rename_map[c] = cl.capitalize()
-                    elif cl in ['date', 'timestamp', 'time', 'datetime']:
-                        rename_map[c] = 'datetime'
-                        
-                df.rename(columns=rename_map, inplace=True)
-                
-                if 'datetime' not in df.columns:
-                    if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
-                        df.reset_index(inplace=True)
-                        df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
-                    else:
-                        st.error("❌ Errore: Colonna data non trovata nel file CSV.")
-                        return pd.DataFrame()
-                        
-                # Force numeric on OHLC and ensure they are float
-                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-                        
-                # Drop rows where Close is NaN
-                if 'Close' in df.columns:
-                    df.dropna(subset=['Close'], inplace=True)
+            # --- EXISTING NORMALIZATION LOGIC ---
+            # Standardize columns
+            rename_map = {}
+            for c in df.columns:
+                cl = str(c).lower()
+                if cl in ['open', 'high', 'low', 'close', 'volume']:
+                    rename_map[c] = cl.capitalize()
+                elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                    rename_map[c] = 'datetime'
                     
-                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-                df.dropna(subset=['datetime'], inplace=True)
+            df.rename(columns=rename_map, inplace=True)
+            
+            if 'datetime' not in df.columns:
+                if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
+                    df.reset_index(inplace=True)
+                    df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
+                else:
+                    st.error("❌ Errore: Colonna data non trovata nel file CSV.")
+                    return pd.DataFrame()
+                    
+            # Force numeric on OHLC and ensure they are float
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+                    
+            # Drop rows where Close is NaN
+            if 'Close' in df.columns:
+                df.dropna(subset=['Close'], inplace=True)
+                
+            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+            df.dropna(subset=['datetime'], inplace=True)
             
             # Filter by date
             df = df[(df['datetime'] >= pd.to_datetime(start_date)) & (df['datetime'] <= pd.to_datetime(end_date))]
@@ -1140,77 +1112,95 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
             return df
 
-        # ROUTE 1: Forex/Derivative -> Massive S3
+        # ROUTE 1: Forex/Derivative -> histdatacom
         if is_forex:
             try:
-                # Iteriamo attraverso ogni singolo giorno tra start_date e end_date
-                current_date = pd.to_datetime(start_date)
-                end_date_dt = pd.to_datetime(end_date)
+                import os
+                import glob
+                from histdatacom import downloader
                 
-                daily_dfs = []
+                start_dt = pd.to_datetime(start_date)
+                end_dt = pd.to_datetime(end_date)
                 
-                while current_date <= end_date_dt:
-                    # Costruiamo dinamicamente la chiave S3
-                    s3_key = f"global_forex/minute_aggs_v1/{current_date.strftime('%Y')}/{current_date.strftime('%m')}/{current_date.strftime('%Y-%m-%d')}.csv.gz"
-                    
+                current_dt = start_dt.replace(day=1)
+                months_to_download = []
+                while current_dt <= end_dt:
+                    months_to_download.append((current_dt.year, current_dt.month))
+                    if current_dt.month == 12:
+                        current_dt = current_dt.replace(year=current_dt.year + 1, month=1)
+                    else:
+                        current_dt = current_dt.replace(month=current_dt.month + 1)
+                
+                histdata_dir = os.path.join(LOCAL_DB_DIR, 'histdata')
+                os.makedirs(histdata_dir, exist_ok=True)
+                
+                pair = clean_ticker.lower()
+                
+                for y, m in months_to_download:
                     try:
-                        # Scarichiamo e decomprimiamo il file in memoria
-                        obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=s3_key)
-                        
-                        # Trasformiamo il CSV in un DataFrame temporaneo
-                        df_temp = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
-                        
-                        # Filtriamo subito il DataFrame mantenendo solo le righe dove la colonna del ticker corrisponde a clean_ticker
-                        if 'ticker' in df_temp.columns:
-                            df_temp = df_temp[df_temp['ticker'] == clean_ticker]
-                        
-                        if not df_temp.empty:
-                            daily_dfs.append(df_temp)
-                            
-                    except ClientError as e:
-                        error_code = e.response['Error']['Code']
-                        if error_code == 'NoSuchKey':
-                            # Se il file non esiste (es. weekend), ignoriamo l'errore senza far crashare il programma
-                            pass
-                        elif error_code in ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch']:
-                            st.error(f"❌ Errore di autenticazione Massive S3: {e}")
-                            break
-                        else:
-                            st.error(f"❌ Errore S3: {e}")
-                            break
+                        downloader.download(pair=pair, year=str(y), month=str(m), timeframe='M1', format='ascii', output_directory=histdata_dir)
                     except Exception as e:
-                        st.error(f"❌ Errore imprevisto S3 durante il download di {s3_key}: {e}")
-                        
-                    # Passiamo al giorno successivo
-                    current_date += timedelta(days=1)
+                        st.warning(f"Impossibile scaricare dati per {pair} {y}-{m}: {e}")
                 
-                # Uniamo tutti i giorni in un unico DataFrame finale
-                if daily_dfs:
-                    df_massive = pd.concat(daily_dfs, ignore_index=True)
-                    df = process_dataframe(df_massive, ticker, start_date, end_date)
-                    if not df.empty:
-                        st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
+                search_pattern = os.path.join(histdata_dir, f"DAT_ASCII_{pair.upper()}_M1_*.csv")
+                csv_files = glob.glob(search_pattern)
+                
+                if csv_files:
+                    dfs = []
+                    for file in csv_files:
+                        try:
+                            temp_df = pd.read_csv(file, sep=';', header=None, names=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                            dfs.append(temp_df)
+                        except Exception as e:
+                            st.warning(f"Errore nella lettura del file {file}: {e}")
+                            
+                    if dfs:
+                        df_histdata = pd.concat(dfs, ignore_index=True)
+                        df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], format='%Y%m%d %H%M%S', errors='coerce')
+                        df_histdata.rename(columns={'Datetime': 'datetime'}, inplace=True)
+                        
+                        df = process_dataframe(df_histdata, ticker, start_date, end_date)
+                        
+                        if not df.empty:
+                            if timeframe not in ['1m', '1Min']:
+                                resample_map = {
+                                    '5m': '5T', '5Min': '5T',
+                                    '15m': '15T', '15Min': '15T',
+                                    '1h': 'H', '1H': 'H',
+                                    '1d': 'D', '1D': 'D'
+                                }
+                                freq = resample_map.get(timeframe, 'D')
+                                
+                                df = df.resample(freq).agg({
+                                    'Open': 'first',
+                                    'High': 'max',
+                                    'Low': 'min',
+                                    'Close': 'last',
+                                    'Volume': 'sum'
+                                }).dropna()
+                                
+                                df['datetime'] = df.index
+                            
+                            st.success("✅ Dati recuperati tramite histdatacom.")
                 else:
-                    st.info(f"ℹ️ Nessun dato trovato nel Bucket Massive per {ticker} nel periodo selezionato.")
-                    
+                    st.info(f"ℹ️ Nessun dato trovato per {ticker} nel periodo selezionato tramite histdatacom.")
             except Exception as e:
-                st.error(f"❌ Errore generale nella logica Massive S3: {e}")
+                st.error(f"❌ Errore generale nella logica histdatacom: {e}")
 
-        # ROUTE 2: Stock/Index/Forex -> Alpaca / Yahoo Finance
-        if df.empty:
-            # ENGINE 1: Alpaca (Primary for US Stocks/ETFs)
-            if is_stock and not is_crypto:
-                try:
-                    tf_alpaca = timeframe
-                    if timeframe == "1d" or timeframe == "1D": tf_alpaca = "1Day"
-                    elif timeframe == "1h" or timeframe == "1H": tf_alpaca = "1Hour"
-                    elif timeframe == "15m" or timeframe == "15Min": tf_alpaca = "15Min"
-                    elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
-                    elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
-                    
-                    df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-                except Exception as e:
-                    st.error(f"Alpaca fetch failed: {e}")
+        # ROUTE 2: Non-Forex -> Alpaca / Yahoo Finance
+        if not is_forex:
+            # ENGINE 1: Alpaca (Primary for Stocks/Indices/Crypto)
+            try:
+                tf_alpaca = timeframe
+                if timeframe == "1d" or timeframe == "1D": tf_alpaca = "1Day"
+                elif timeframe == "1h" or timeframe == "1H": tf_alpaca = "1Hour"
+                elif timeframe == "15m" or timeframe == "15Min": tf_alpaca = "15Min"
+                elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
+                elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
+                
+                df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            except Exception as e:
+                st.error(f"Alpaca fetch failed: {e}")
             
             # ENGINE 2: yfinance (Fallback)
             if df.empty:
@@ -1265,7 +1255,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
         # ENGINE 4: Fatal Error
         if df.empty:
-            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Alpaca, Massive, Locale, Yahoo). Per favore, carica un file CSV manualmente usando l'apposito uploader per testare questo asset.")
+            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Alpaca, HistData, Locale, Yahoo). Per favore, carica un file CSV manualmente usando l'apposito uploader per testare questo asset.")
             st.stop()
                 
         if not df.empty:
@@ -3967,8 +3957,6 @@ elif menu == "🛠️ STRATEGY BUILDER":
         return fig, prob_profit, risk_of_ruin, median_final_balance
 
     def fetch_data_smart(ticker, timeframe, start_date, end_date):
-        import io
-        import gzip
         import requests
         from datetime import timedelta
         
@@ -3988,49 +3976,37 @@ elif menu == "🛠️ STRATEGY BUILDER":
             if df.empty:
                 return df
                 
-            # --- MASSIVE S3 DATA HARMONIZATION ---
-            if 'window_start' in df.columns:
-                df['datetime'] = pd.to_datetime(df['window_start'], unit='ns')
-                if 'ticker' in df.columns:
-                    df = df[df['ticker'] == ticker]
-                
-                rename_map = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}
-                df.rename(columns=rename_map, inplace=True)
-                
-                df.dropna(subset=['datetime'], inplace=True)
-                df.sort_values('datetime', ascending=True, inplace=True)
-            else:
-                # --- EXISTING NORMALIZATION LOGIC ---
-                # Standardize columns
-                rename_map = {}
-                for c in df.columns:
-                    cl = str(c).lower()
-                    if cl in ['open', 'high', 'low', 'close', 'volume']:
-                        rename_map[c] = cl.capitalize()
-                    elif cl in ['date', 'timestamp', 'time', 'datetime']:
-                        rename_map[c] = 'datetime'
-                        
-                df.rename(columns=rename_map, inplace=True)
-                
-                if 'datetime' not in df.columns:
-                    if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
-                        df.reset_index(inplace=True)
-                        df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
-                    else:
-                        st.error("❌ Errore: Colonna data non trovata nel file CSV.")
-                        return pd.DataFrame()
-                        
-                # Force numeric on OHLC and ensure they are float
-                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-                        
-                # Drop rows where Close is NaN
-                if 'Close' in df.columns:
-                    df.dropna(subset=['Close'], inplace=True)
+            # --- EXISTING NORMALIZATION LOGIC ---
+            # Standardize columns
+            rename_map = {}
+            for c in df.columns:
+                cl = str(c).lower()
+                if cl in ['open', 'high', 'low', 'close', 'volume']:
+                    rename_map[c] = cl.capitalize()
+                elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                    rename_map[c] = 'datetime'
                     
-                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-                df.dropna(subset=['datetime'], inplace=True)
+            df.rename(columns=rename_map, inplace=True)
+            
+            if 'datetime' not in df.columns:
+                if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
+                    df.reset_index(inplace=True)
+                    df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
+                else:
+                    st.error("❌ Errore: Colonna data non trovata nel file CSV.")
+                    return pd.DataFrame()
+                    
+            # Force numeric on OHLC and ensure they are float
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+                    
+            # Drop rows where Close is NaN
+            if 'Close' in df.columns:
+                df.dropna(subset=['Close'], inplace=True)
+                
+            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+            df.dropna(subset=['datetime'], inplace=True)
             
             # Filter by date
             df = df[(df['datetime'] >= pd.to_datetime(start_date)) & (df['datetime'] <= pd.to_datetime(end_date))]
@@ -4046,77 +4022,95 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 
             return df
 
-        # ROUTE 1: Forex/Derivative -> Massive S3
+        # ROUTE 1: Forex/Derivative -> histdatacom
         if is_forex:
             try:
-                # Iteriamo attraverso ogni singolo giorno tra start_date e end_date
-                current_date = pd.to_datetime(start_date)
-                end_date_dt = pd.to_datetime(end_date)
+                import os
+                import glob
+                from histdatacom import downloader
                 
-                daily_dfs = []
+                start_dt = pd.to_datetime(start_date)
+                end_dt = pd.to_datetime(end_date)
                 
-                while current_date <= end_date_dt:
-                    # Costruiamo dinamicamente la chiave S3
-                    s3_key = f"global_forex/minute_aggs_v1/{current_date.strftime('%Y')}/{current_date.strftime('%m')}/{current_date.strftime('%Y-%m-%d')}.csv.gz"
-                    
+                current_dt = start_dt.replace(day=1)
+                months_to_download = []
+                while current_dt <= end_dt:
+                    months_to_download.append((current_dt.year, current_dt.month))
+                    if current_dt.month == 12:
+                        current_dt = current_dt.replace(year=current_dt.year + 1, month=1)
+                    else:
+                        current_dt = current_dt.replace(month=current_dt.month + 1)
+                
+                histdata_dir = os.path.join(LOCAL_DB_DIR, 'histdata')
+                os.makedirs(histdata_dir, exist_ok=True)
+                
+                pair = clean_ticker.lower()
+                
+                for y, m in months_to_download:
                     try:
-                        # Scarichiamo e decomprimiamo il file in memoria
-                        obj = s3_client.get_object(Bucket=MASSIVE_BUCKET, Key=s3_key)
-                        
-                        # Trasformiamo il CSV in un DataFrame temporaneo
-                        df_temp = pd.read_csv(io.BytesIO(obj['Body'].read()), compression='gzip')
-                        
-                        # Filtriamo subito il DataFrame mantenendo solo le righe dove la colonna del ticker corrisponde a clean_ticker
-                        if 'ticker' in df_temp.columns:
-                            df_temp = df_temp[df_temp['ticker'] == clean_ticker]
-                        
-                        if not df_temp.empty:
-                            daily_dfs.append(df_temp)
-                            
-                    except ClientError as e:
-                        error_code = e.response['Error']['Code']
-                        if error_code == 'NoSuchKey':
-                            # Se il file non esiste (es. weekend), ignoriamo l'errore senza far crashare il programma
-                            pass
-                        elif error_code in ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch']:
-                            st.error(f"❌ Errore di autenticazione Massive S3: {e}")
-                            break
-                        else:
-                            st.error(f"❌ Errore S3: {e}")
-                            break
+                        downloader.download(pair=pair, year=str(y), month=str(m), timeframe='M1', format='ascii', output_directory=histdata_dir)
                     except Exception as e:
-                        st.error(f"❌ Errore imprevisto S3 durante il download di {s3_key}: {e}")
-                        
-                    # Passiamo al giorno successivo
-                    current_date += timedelta(days=1)
+                        st.warning(f"Impossibile scaricare dati per {pair} {y}-{m}: {e}")
                 
-                # Uniamo tutti i giorni in un unico DataFrame finale
-                if daily_dfs:
-                    df_massive = pd.concat(daily_dfs, ignore_index=True)
-                    df = process_dataframe(df_massive, ticker, start_date, end_date)
-                    if not df.empty:
-                        st.success("✅ Dati recuperati dai server cloud Massive (Forex/Derivati).")
+                search_pattern = os.path.join(histdata_dir, f"DAT_ASCII_{pair.upper()}_M1_*.csv")
+                csv_files = glob.glob(search_pattern)
+                
+                if csv_files:
+                    dfs = []
+                    for file in csv_files:
+                        try:
+                            temp_df = pd.read_csv(file, sep=';', header=None, names=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                            dfs.append(temp_df)
+                        except Exception as e:
+                            st.warning(f"Errore nella lettura del file {file}: {e}")
+                            
+                    if dfs:
+                        df_histdata = pd.concat(dfs, ignore_index=True)
+                        df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], format='%Y%m%d %H%M%S', errors='coerce')
+                        df_histdata.rename(columns={'Datetime': 'datetime'}, inplace=True)
+                        
+                        df = process_dataframe(df_histdata, ticker, start_date, end_date)
+                        
+                        if not df.empty:
+                            if timeframe not in ['1m', '1Min']:
+                                resample_map = {
+                                    '5m': '5T', '5Min': '5T',
+                                    '15m': '15T', '15Min': '15T',
+                                    '1h': 'H', '1H': 'H',
+                                    '1d': 'D', '1D': 'D'
+                                }
+                                freq = resample_map.get(timeframe, 'D')
+                                
+                                df = df.resample(freq).agg({
+                                    'Open': 'first',
+                                    'High': 'max',
+                                    'Low': 'min',
+                                    'Close': 'last',
+                                    'Volume': 'sum'
+                                }).dropna()
+                                
+                                df['datetime'] = df.index
+                            
+                            st.success("✅ Dati recuperati tramite histdatacom.")
                 else:
-                    st.info(f"ℹ️ Nessun dato trovato nel Bucket Massive per {ticker} nel periodo selezionato.")
-                    
+                    st.info(f"ℹ️ Nessun dato trovato per {ticker} nel periodo selezionato tramite histdatacom.")
             except Exception as e:
-                st.error(f"❌ Errore generale nella logica Massive S3: {e}")
+                st.error(f"❌ Errore generale nella logica histdatacom: {e}")
 
-        # ROUTE 2: Stock/Index/Forex -> Alpaca / Yahoo Finance
-        if df.empty:
-            # ENGINE 1: Alpaca (Primary for US Stocks/ETFs)
-            if is_stock and not is_crypto:
-                try:
-                    tf_alpaca = timeframe
-                    if timeframe == "1d" or timeframe == "1D": tf_alpaca = "1Day"
-                    elif timeframe == "1h" or timeframe == "1H": tf_alpaca = "1Hour"
-                    elif timeframe == "15m" or timeframe == "15Min": tf_alpaca = "15Min"
-                    elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
-                    elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
-                    
-                    df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-                except Exception as e:
-                    st.error(f"Alpaca fetch failed: {e}")
+        # ROUTE 2: Non-Forex -> Alpaca / Yahoo Finance
+        if not is_forex:
+            # ENGINE 1: Alpaca (Primary for Stocks/Indices/Crypto)
+            try:
+                tf_alpaca = timeframe
+                if timeframe == "1d" or timeframe == "1D": tf_alpaca = "1Day"
+                elif timeframe == "1h" or timeframe == "1H": tf_alpaca = "1Hour"
+                elif timeframe == "15m" or timeframe == "15Min": tf_alpaca = "15Min"
+                elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
+                elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
+                
+                df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            except Exception as e:
+                st.error(f"Alpaca fetch failed: {e}")
             
             # ENGINE 2: yfinance (Fallback)
             if df.empty:
@@ -4171,7 +4165,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 
         # ENGINE 4: Fatal Error
         if df.empty:
-            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Alpaca, Massive, Locale, Yahoo). Per favore, carica un file CSV manualmente usando l'apposito uploader per testare questo asset.")
+            st.error("❌ ERRORE CRITICO: Dati non trovati in nessun motore (Alpaca, HistData, Locale, Yahoo). Per favore, carica un file CSV manualmente usando l'apposito uploader per testare questo asset.")
             st.stop()
                 
         if not df.empty:
@@ -4196,7 +4190,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
         if df['datetime'].dt.tz is not None:
             df['datetime'] = df['datetime'].dt.tz_localize(None)
         
-        # Ensure no data is dropped after indicator calculations (Massive data depth support)
+        # Ensure no data is dropped after indicator calculations (Deep data support)
         df.ffill(inplace=True)
         df.fillna(0, inplace=True)
         
@@ -4230,7 +4224,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
                         orb_high = orb_data['High'].max()
                         orb_low = orb_data['Low'].min()
             
-            # Use itertuples for performance on large datasets (Massive support)
+            # Use itertuples for performance on large datasets
             for row in group.itertuples():
                 current_time = row.time
                 current_datetime = row.datetime
