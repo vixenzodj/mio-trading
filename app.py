@@ -325,67 +325,80 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
     # ROUTE 1: Forex/Derivative -> histdatacom
     if is_forex:
         try:
-            pair = clean_ticker.lower()
-            
+            # Setup directory temporanea
+            temp_dir = "./data_forex"
+            extract_dir = "./data_extracted"
+            os.makedirs(temp_dir, exist_ok=True)
+            os.makedirs(extract_dir, exist_ok=True)
+
             options = Options()
-            options.api_return_type = "pandas"
-            options.pairs = {pair}
+            options.pairs = {clean_ticker.lower()}
             options.formats = {"ascii"}
             options.timeframes = {"1-minute-bar-quotes"}
-            
-            # Formato data richiesto dalla doc ufficiale: YYYY-MM
             options.start_yearmonth = pd.to_datetime(start_date).strftime("%Y-%m")
             options.end_yearmonth = pd.to_datetime(end_date).strftime("%Y-%m")
             
-            # Chiamata corretta come da doc ufficiale (NON usare histdatacom.histdatacom)
-            data = histdatacom(options)
+            # Chiediamo SOLO il download dell'archivio (No extract_csvs per evitare datatable)
+            options.download_data_archives = True  
+            options.data_directory = temp_dir
             
-            # Estrazione Pandas
-            if isinstance(data, list) and len(data) > 0:
-                df_histdata = data[0]['data']
+            # Esecuzione download
+            histdatacom(options)
+            
+            # ESTRAZIONE MANUALE (Standard Python - No dependencies)
+            zip_files = glob.glob(os.path.join(temp_dir, "**", "*.zip"), recursive=True)
+            if not zip_files:
+                st.error("❌ Nessun file ZIP scaricato da HistData.")
             else:
-                df_histdata = data
+                for zf in zip_files:
+                    with zipfile.ZipFile(zf, 'r') as zip_ref:
+                        zip_ref.extractall(extract_dir)
                 
-            if df_histdata is not None and not df_histdata.empty:
-                # Rinomina colonne
-                rename_map = {c: str(c).lower().capitalize() for c in df_histdata.columns if str(c).lower() in ['open', 'high', 'low', 'close', 'volume']}
-                for c in df_histdata.columns:
-                    if str(c).lower() in ['date', 'timestamp', 'time', 'datetime']:
-                        rename_map[c] = 'Datetime'
-                df_histdata.rename(columns=rename_map, inplace=True)
-                
-                # La doc ufficiale restituisce la data in millisecondi UTC
-                if 'Datetime' in df_histdata.columns:
-                    df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], unit='ms', errors='coerce')
-                    df_histdata.rename(columns={'Datetime': 'datetime'}, inplace=True)
+                # LETTURA CSV
+                csv_files = glob.glob(os.path.join(extract_dir, "**", "*.csv"), recursive=True)
+                if csv_files:
+                    # Carichiamo i file (Solitamente il formato HistData è senza header)
+                    df_list = []
+                    for f in csv_files:
+                        tmp_df = pd.read_csv(f, header=None, sep=';', engine='python')
+                        df_list.append(tmp_df)
+                    df_raw = pd.concat(df_list, ignore_index=True)
                     
-                df = process_dataframe(df_histdata, ticker, start_date, end_date)
-                
-                # Resampling per Timeframe custom
-                if not df.empty and timeframe not in ['1m', '1Min']:
-                    resample_map = {
-                        '5m': '5T', '5Min': '5T',
-                        '15m': '15T', '15Min': '15T',
-                        '1h': 'h', '1H': 'h',
-                        '1d': 'D', '1D': 'D'
-                    }
-                    freq = resample_map.get(timeframe, 'D')
+                    # Assegnazione colonne standard (Format: YYYYMMDD HHMMSS;O;H;L;C;V)
+                    df_raw.columns = ['datetime_str', 'Open', 'High', 'Low', 'Close', 'Volume']
+                    df_raw['datetime'] = pd.to_datetime(df_raw['datetime_str'], format='%Y%m%d %H%M%S')
                     
-                    df = df.resample(freq).agg({
-                        'Open': 'first',
-                        'High': 'max',
-                        'Low': 'min',
-                        'Close': 'last',
-                        'Volume': 'sum'
-                    }).dropna()
+                    df = process_dataframe(df_raw, ticker, start_date, end_date)
                     
-                    df['datetime'] = df.index
-                
-                st.success("✅ Dati Forex recuperati tramite histdatacom.")
-            else:
-                st.info(f"ℹ️ Nessun dato trovato per {ticker} nel periodo selezionato tramite histdatacom.")
+                    # Resampling per Timeframe custom
+                    if not df.empty and timeframe not in ['1m', '1Min']:
+                        resample_map = {
+                            '5m': '5T', '5Min': '5T',
+                            '15m': '15T', '15Min': '15T',
+                            '1h': 'h', '1H': 'h',
+                            '1d': 'D', '1D': 'D'
+                        }
+                        freq = resample_map.get(timeframe, 'D')
+                        
+                        df = df.resample(freq).agg({
+                            'Open': 'first',
+                            'High': 'max',
+                            'Low': 'min',
+                            'Close': 'last',
+                            'Volume': 'sum'
+                        }).dropna()
+                        
+                        df['datetime'] = df.index
+
+                    st.success(f"✅ Forex: {ticker} caricato con successo ({len(df)} righe).")
+                    
+                    # PULIZIA (Rimuoviamo tutto per liberare spazio su Streamlit)
+                    shutil.rmtree(temp_dir)
+                    shutil.rmtree(extract_dir)
+                else:
+                    st.error("❌ Nessun file CSV trovato negli archivi estratti.")
         except Exception as e:
-            st.error(f"❌ Errore API histdatacom: {e}")
+            st.error(f"❌ Errore critico Forex: {e}")
 
     # ROUTE 2: Non-Forex -> Alpaca / Yahoo Finance
     if not is_forex:
