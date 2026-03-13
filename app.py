@@ -10,8 +10,9 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
-import os
-from histdatacom import downloader
+from histdatacom.options import Options
+from histdatacom.histdatacom import histdatacom
+import os, zipfile, shutil, glob
 
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
@@ -1117,7 +1118,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             try:
                 import os
                 import glob
-                from histdatacom import downloader
                 
                 start_dt = pd.to_datetime(start_date)
                 end_dt = pd.to_datetime(end_date)
@@ -1138,7 +1138,14 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 
                 for y, m in months_to_download:
                     try:
-                        downloader.download(pair=pair, year=str(y), month=str(m), timeframe='M1', format='ascii', output_directory=histdata_dir)
+                        options = Options()
+                        options.pair = pair
+                        options.year = str(y)
+                        options.month = str(m)
+                        options.timeframe = 'M1'
+                        options.format = 'ascii'
+                        options.output_directory = histdata_dir
+                        histdatacom(options)
                     except Exception as e:
                         st.warning(f"Impossibile scaricare dati per {pair} {y}-{m}: {e}")
                 
@@ -4027,7 +4034,6 @@ elif menu == "🛠️ STRATEGY BUILDER":
             try:
                 import os
                 import glob
-                from histdatacom import downloader
                 
                 start_dt = pd.to_datetime(start_date)
                 end_dt = pd.to_datetime(end_date)
@@ -4048,7 +4054,14 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 
                 for y, m in months_to_download:
                     try:
-                        downloader.download(pair=pair, year=str(y), month=str(m), timeframe='M1', format='ascii', output_directory=histdata_dir)
+                        options = Options()
+                        options.pair = pair
+                        options.year = str(y)
+                        options.month = str(m)
+                        options.timeframe = 'M1'
+                        options.format = 'ascii'
+                        options.output_directory = histdata_dir
+                        histdatacom(options)
                     except Exception as e:
                         st.warning(f"Impossibile scaricare dati per {pair} {y}-{m}: {e}")
                 
