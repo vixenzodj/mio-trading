@@ -7,4 +7,3 @@ scipy>=1.11.0
 requests>=2.31.0
 streamlit-autorefresh>=1.0.0
 histdatacom==0.78.4
-datatable==1.1.0
