@@ -10,8 +10,8 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
+import histdatacom
 from histdatacom.options import Options
-from histdatacom.histdatacom import histdatacom
 import os, zipfile, shutil, glob
 
 LOCAL_DB_DIR = 'local_database'
@@ -1116,79 +1116,61 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         # ROUTE 1: Forex/Derivative -> histdatacom
         if is_forex:
             try:
-                import os
-                import glob
-                
-                start_dt = pd.to_datetime(start_date)
-                end_dt = pd.to_datetime(end_date)
-                
-                current_dt = start_dt.replace(day=1)
-                months_to_download = []
-                while current_dt <= end_dt:
-                    months_to_download.append((current_dt.year, current_dt.month))
-                    if current_dt.month == 12:
-                        current_dt = current_dt.replace(year=current_dt.year + 1, month=1)
-                    else:
-                        current_dt = current_dt.replace(month=current_dt.month + 1)
-                
-                histdata_dir = os.path.join(LOCAL_DB_DIR, 'histdata')
-                os.makedirs(histdata_dir, exist_ok=True)
-                
                 pair = clean_ticker.lower()
                 
-                for y, m in months_to_download:
-                    try:
-                        options = Options()
-                        options.pair = pair
-                        options.year = str(y)
-                        options.month = str(m)
-                        options.timeframe = 'M1'
-                        options.format = 'ascii'
-                        options.output_directory = histdata_dir
-                        histdatacom(options)
-                    except Exception as e:
-                        st.warning(f"Impossibile scaricare dati per {pair} {y}-{m}: {e}")
+                options = Options()
+                options.api_return_type = "pandas"
+                options.pairs = {pair}
+                options.formats = {"ascii"}
+                options.timeframes = {"1-minute-bar-quotes"}
+                options.start_yearmonth = pd.to_datetime(start_date).strftime("%Y%m")
+                options.end_yearmonth = pd.to_datetime(end_date).strftime("%Y%m")
                 
-                search_pattern = os.path.join(histdata_dir, f"DAT_ASCII_{pair.upper()}_M1_*.csv")
-                csv_files = glob.glob(search_pattern)
+                data = histdatacom.histdatacom(options)
                 
-                if csv_files:
-                    dfs = []
-                    for file in csv_files:
-                        try:
-                            temp_df = pd.read_csv(file, sep=';', header=None, names=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
-                            dfs.append(temp_df)
-                        except Exception as e:
-                            st.warning(f"Errore nella lettura del file {file}: {e}")
-                            
-                    if dfs:
-                        df_histdata = pd.concat(dfs, ignore_index=True)
-                        df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], format='%Y%m%d %H%M%S', errors='coerce')
+                if isinstance(data, list) and len(data) > 0:
+                    df_histdata = data[0]['data']
+                else:
+                    df_histdata = data
+                    
+                if df_histdata is not None and not df_histdata.empty:
+                    # Assicurati che le colonne siano rinominate correttamente
+                    rename_map = {}
+                    for c in df_histdata.columns:
+                        cl = str(c).lower()
+                        if cl in ['open', 'high', 'low', 'close', 'volume']:
+                            rename_map[c] = cl.capitalize()
+                        elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                            rename_map[c] = 'Datetime'
+                    df_histdata.rename(columns=rename_map, inplace=True)
+                    
+                    if 'Datetime' in df_histdata.columns:
+                        df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], errors='coerce')
                         df_histdata.rename(columns={'Datetime': 'datetime'}, inplace=True)
                         
-                        df = process_dataframe(df_histdata, ticker, start_date, end_date)
-                        
-                        if not df.empty:
-                            if timeframe not in ['1m', '1Min']:
-                                resample_map = {
-                                    '5m': '5T', '5Min': '5T',
-                                    '15m': '15T', '15Min': '15T',
-                                    '1h': 'H', '1H': 'H',
-                                    '1d': 'D', '1D': 'D'
-                                }
-                                freq = resample_map.get(timeframe, 'D')
-                                
-                                df = df.resample(freq).agg({
-                                    'Open': 'first',
-                                    'High': 'max',
-                                    'Low': 'min',
-                                    'Close': 'last',
-                                    'Volume': 'sum'
-                                }).dropna()
-                                
-                                df['datetime'] = df.index
+                    df = process_dataframe(df_histdata, ticker, start_date, end_date)
+                    
+                    if not df.empty:
+                        if timeframe not in ['1m', '1Min']:
+                            resample_map = {
+                                '5m': '5T', '5Min': '5T',
+                                '15m': '15T', '15Min': '15T',
+                                '1h': 'H', '1H': 'H',
+                                '1d': 'D', '1D': 'D'
+                            }
+                            freq = resample_map.get(timeframe, 'D')
                             
-                            st.success("✅ Dati recuperati tramite histdatacom.")
+                            df = df.resample(freq).agg({
+                                'Open': 'first',
+                                'High': 'max',
+                                'Low': 'min',
+                                'Close': 'last',
+                                'Volume': 'sum'
+                            }).dropna()
+                            
+                            df['datetime'] = df.index
+                        
+                        st.success("✅ Dati recuperati tramite histdatacom.")
                 else:
                     st.info(f"ℹ️ Nessun dato trovato per {ticker} nel periodo selezionato tramite histdatacom.")
             except Exception as e:
@@ -4032,79 +4014,61 @@ elif menu == "🛠️ STRATEGY BUILDER":
         # ROUTE 1: Forex/Derivative -> histdatacom
         if is_forex:
             try:
-                import os
-                import glob
-                
-                start_dt = pd.to_datetime(start_date)
-                end_dt = pd.to_datetime(end_date)
-                
-                current_dt = start_dt.replace(day=1)
-                months_to_download = []
-                while current_dt <= end_dt:
-                    months_to_download.append((current_dt.year, current_dt.month))
-                    if current_dt.month == 12:
-                        current_dt = current_dt.replace(year=current_dt.year + 1, month=1)
-                    else:
-                        current_dt = current_dt.replace(month=current_dt.month + 1)
-                
-                histdata_dir = os.path.join(LOCAL_DB_DIR, 'histdata')
-                os.makedirs(histdata_dir, exist_ok=True)
-                
                 pair = clean_ticker.lower()
                 
-                for y, m in months_to_download:
-                    try:
-                        options = Options()
-                        options.pair = pair
-                        options.year = str(y)
-                        options.month = str(m)
-                        options.timeframe = 'M1'
-                        options.format = 'ascii'
-                        options.output_directory = histdata_dir
-                        histdatacom(options)
-                    except Exception as e:
-                        st.warning(f"Impossibile scaricare dati per {pair} {y}-{m}: {e}")
+                options = Options()
+                options.api_return_type = "pandas"
+                options.pairs = {pair}
+                options.formats = {"ascii"}
+                options.timeframes = {"1-minute-bar-quotes"}
+                options.start_yearmonth = pd.to_datetime(start_date).strftime("%Y%m")
+                options.end_yearmonth = pd.to_datetime(end_date).strftime("%Y%m")
                 
-                search_pattern = os.path.join(histdata_dir, f"DAT_ASCII_{pair.upper()}_M1_*.csv")
-                csv_files = glob.glob(search_pattern)
+                data = histdatacom.histdatacom(options)
                 
-                if csv_files:
-                    dfs = []
-                    for file in csv_files:
-                        try:
-                            temp_df = pd.read_csv(file, sep=';', header=None, names=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
-                            dfs.append(temp_df)
-                        except Exception as e:
-                            st.warning(f"Errore nella lettura del file {file}: {e}")
-                            
-                    if dfs:
-                        df_histdata = pd.concat(dfs, ignore_index=True)
-                        df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], format='%Y%m%d %H%M%S', errors='coerce')
+                if isinstance(data, list) and len(data) > 0:
+                    df_histdata = data[0]['data']
+                else:
+                    df_histdata = data
+                    
+                if df_histdata is not None and not df_histdata.empty:
+                    # Assicurati che le colonne siano rinominate correttamente
+                    rename_map = {}
+                    for c in df_histdata.columns:
+                        cl = str(c).lower()
+                        if cl in ['open', 'high', 'low', 'close', 'volume']:
+                            rename_map[c] = cl.capitalize()
+                        elif cl in ['date', 'timestamp', 'time', 'datetime']:
+                            rename_map[c] = 'Datetime'
+                    df_histdata.rename(columns=rename_map, inplace=True)
+                    
+                    if 'Datetime' in df_histdata.columns:
+                        df_histdata['Datetime'] = pd.to_datetime(df_histdata['Datetime'], errors='coerce')
                         df_histdata.rename(columns={'Datetime': 'datetime'}, inplace=True)
                         
-                        df = process_dataframe(df_histdata, ticker, start_date, end_date)
-                        
-                        if not df.empty:
-                            if timeframe not in ['1m', '1Min']:
-                                resample_map = {
-                                    '5m': '5T', '5Min': '5T',
-                                    '15m': '15T', '15Min': '15T',
-                                    '1h': 'H', '1H': 'H',
-                                    '1d': 'D', '1D': 'D'
-                                }
-                                freq = resample_map.get(timeframe, 'D')
-                                
-                                df = df.resample(freq).agg({
-                                    'Open': 'first',
-                                    'High': 'max',
-                                    'Low': 'min',
-                                    'Close': 'last',
-                                    'Volume': 'sum'
-                                }).dropna()
-                                
-                                df['datetime'] = df.index
+                    df = process_dataframe(df_histdata, ticker, start_date, end_date)
+                    
+                    if not df.empty:
+                        if timeframe not in ['1m', '1Min']:
+                            resample_map = {
+                                '5m': '5T', '5Min': '5T',
+                                '15m': '15T', '15Min': '15T',
+                                '1h': 'H', '1H': 'H',
+                                '1d': 'D', '1D': 'D'
+                            }
+                            freq = resample_map.get(timeframe, 'D')
                             
-                            st.success("✅ Dati recuperati tramite histdatacom.")
+                            df = df.resample(freq).agg({
+                                'Open': 'first',
+                                'High': 'max',
+                                'Low': 'min',
+                                'Close': 'last',
+                                'Volume': 'sum'
+                            }).dropna()
+                            
+                            df['datetime'] = df.index
+                        
+                        st.success("✅ Dati recuperati tramite histdatacom.")
                 else:
                     st.info(f"ℹ️ Nessun dato trovato per {ticker} nel periodo selezionato tramite histdatacom.")
             except Exception as e:
