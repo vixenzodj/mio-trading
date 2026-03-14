@@ -1,5 +1,4 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -13,9 +12,42 @@ import requests
 import histdatacom
 from histdatacom.options import Options
 import os, zipfile, shutil, glob
+import json
 
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
+
+USER_ASSETS_FILE = 'user_assets.json'
+BASE_ASSETS = {
+    "⭐ Preferiti": [],
+    "Criptovalute (Alpaca)": ["BTC", "ETH", "SOL", "LTC", "BCH"],
+    "Forex (HistData)": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"],
+    "Indici & ETF (Alpaca)": ["SPY", "QQQ", "DIA", "NDX", "SPX"],
+    "Azioni USA (Alpaca)": ["AAPL", "MSFT", "NVDA", "TSLA", "META"],
+    "Materie Prime (Alpaca)": ["GLD", "USO", "SLV"]
+}
+
+def load_user_settings():
+    if os.path.exists(USER_ASSETS_FILE):
+        try:
+            with open(USER_ASSETS_FILE, 'r') as f:
+                user_assets = json.load(f)
+                merged = BASE_ASSETS.copy()
+                for k, v in user_assets.items():
+                    if k in merged:
+                        for ticker in v:
+                            if ticker not in merged[k]:
+                                merged[k].append(ticker)
+                    else:
+                        merged[k] = v
+                return merged
+        except:
+            return BASE_ASSETS.copy()
+    return BASE_ASSETS.copy()
+
+def save_user_settings(assets_dict):
+    with open(USER_ASSETS_FILE, 'w') as f:
+        json.dump(assets_dict, f, indent=4)
 
 # --- STRATEGY PARAMETER GRID ---
 STRATEGY_PARAM_GRID = {
@@ -103,80 +135,14 @@ def get_greeks_pro(df, S, r=0.045):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker, dates):
-    t = yf.Ticker(ticker)
-    frames = []
-    for d in dates:
-        try:
-            oc = t.option_chain(d)
-            frames.append(pd.concat([oc.calls.assign(type='call', exp=d), oc.puts.assign(type='put', exp=d)]))
-        except: continue
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    st.warning("⚠️ Modulo Opzioni disabilitato (Yahoo Finance rimosso).")
+    return pd.DataFrame()
 
-# --- FUNZIONE PROTETTIVA PER LO SCANNER (Evita Ban IP da Yahoo) ---
-@st.cache_data(ttl=300, show_spinner=False) # Aggiorna max ogni 5 minuti per ticker
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
-    try:
-        t_obj = yf.Ticker(t_name)
-        hist = t_obj.history(period='5d')
-        if hist.empty: return None
-        px = hist['Close'].iloc[-1]
-        opts = t_obj.options
-        if not opts: return None
-        target_opt = opts[0] if "0-1 DTE" in expiry_mode_str else (opts[2] if len(opts) > 2 else opts[0])
-        oc = t_obj.option_chain(target_opt)
-        df_scan = pd.concat([oc.calls.assign(type='call'), oc.puts.assign(type='put')])
-        
-        # Conversione stringa a datetime
-        today_obj = datetime.strptime(today_str, '%Y-%m-%d')
-        dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today_obj).days + 1, 0.5) / 365
-        df_scan['dte_years'] = dte_years
-        df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
-        
-        return px, df_scan, dte_years
-    except:
-        return None
+    return None
 
-def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
-    # Mapping Timeframe Yahoo
-    tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
-    tf = tf_map.get(timeframe, "1d")
-    
-    # Controllo Limiti Yahoo Intraday
-    start_dt = datetime.strptime(start_str, '%Y-%m-%d')
-    end_dt = datetime.strptime(end_str, '%Y-%m-%d')
-    delta_days = (end_dt - start_dt).days
-    
-    if delta_days > 7 and tf == "1m":
-        st.warning("⚠️ Yahoo limita i dati 1Min a 7 giorni. Passaggio automatico a 1H.")
-        tf = "1h"
-    elif delta_days > 60 and tf in ["5m", "15m"]:
-        st.warning("⚠️ Yahoo limita i dati 5Min/15Min a 60 giorni. Passaggio automatico a 1D.")
-        tf = "1d"
-    elif delta_days > 730 and tf == "1h":
-        st.warning("⚠️ Yahoo limita i dati 1H a 730 giorni. Passaggio automatico a 1D.")
-        tf = "1d"
-
-    try:
-        df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False)
-        
-        if df.empty: return pd.DataFrame()
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df.reset_index(inplace=True)
-        col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
-        df.rename(columns=col_map, inplace=True)
-        df['datetime'] = pd.to_datetime(df['datetime'])
-        df.ffill().bfill(inplace=True)
-        return df
-    except Exception as e:
-        st.error(f"Errore Yahoo Finance: {e}")
-        return pd.DataFrame()
-
-def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
-    if symbol.startswith("^"):
-        return fetch_yahoo_history(symbol, timeframe, start_str, end_str)
+def fetch_alpaca_history(symbol, timeframe, start_str, end_str, is_crypto=False):
 
     symbol_map = {
         "SPX": "SPY", "NDX": "QQQ", "RUT": "IWM", "DJI": "DIA", "VIX": "VIXY"
@@ -203,7 +169,25 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     except:
         final_end = end_str + "T23:59:59Z"
 
-    url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
+    if is_crypto:
+        url = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
+        params_base = {
+            "symbols": alpaca_sym,
+            "start": start_str + "T00:00:00Z",
+            "end": final_end,
+            "timeframe": tf,
+            "limit": 10000,
+        }
+    else:
+        url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
+        params_base = {
+            "start": start_str + "T00:00:00Z",
+            "end": final_end,
+            "timeframe": tf,
+            "limit": 10000,
+            "adjustment": "raw",
+            "feed": "iex",
+        }
     
     all_bars = []
     next_token = None
@@ -212,22 +196,21 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     p_bar = st.progress(0, text="Scaricamento dati storici (Pagination)...")
     
     while True:
-        params = {
-            "start": start_str + "T00:00:00Z",
-            "end": final_end,
-            "timeframe": tf,
-            "limit": 10000,
-            "adjustment": "raw",
-            "feed": "iex",
-            "page_token": next_token
-        }
-        
+        params = params_base.copy()
+        if next_token:
+            params["page_token"] = next_token
+            
         try:
-            response = requests.get(url, headers=headers, params=params)
+            response = requests.get(url, headers=headers, params=params, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                if "bars" in data and data["bars"]:
-                    all_bars.extend(data["bars"])
+                if is_crypto:
+                    current_bars = data.get("bars", {}).get(alpaca_sym, [])
+                else:
+                    current_bars = data.get("bars", [])
+                    
+                if current_bars:
+                    all_bars.extend(current_bars)
                     next_token = data.get("next_page_token")
                     
                     # Update progress (fake visual feedback)
@@ -241,6 +224,9 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
             else:
                 st.error(f"Errore Alpaca API ({response.status_code}): {response.text}")
                 break
+        except requests.exceptions.Timeout:
+            st.error("Timeout richiesta Alpaca API.")
+            break
         except Exception as e:
             st.error(f"Errore Connessione Alpaca: {e}")
             break
@@ -262,14 +248,27 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
     
     df = pd.DataFrame()
     
-    # Determine asset type
-    is_forex = "=X" in ticker or (len(ticker) == 6 and ticker.isalpha())
-    is_index = ticker.startswith("^") or ticker in ["FTSEMIB.MI"]
-    is_crypto = "-USD" in ticker
-    is_stock = not (is_forex or is_index or is_crypto)
+    # Determine asset type based on user_assets
+    is_forex = False
+    is_crypto = False
     
+    for cat, tickers in st.session_state.assets_dict.items():
+        if cat == "⭐ Preferiti": continue
+        if ticker in tickers:
+            if "Forex" in cat:
+                is_forex = True
+            elif "Criptovalute" in cat:
+                is_crypto = True
+            break
+            
+    if not is_forex and not is_crypto:
+        if len(ticker) == 6 and ticker.endswith(("USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD")):
+            is_forex = True
+        elif ticker in ["BTC", "ETH", "SOL", "LTC", "BCH"] or "-USD" in ticker:
+            is_crypto = True
+
     days_requested = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
-    clean_ticker = ticker.replace('=X', '').replace('^', '')
+    clean_ticker = ticker.replace('=X', '').replace('^', '').replace('-USD', '')
 
     # Helper to standardize dataframe
     def process_dataframe(df, ticker, start_date, end_date):
@@ -400,9 +399,8 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
         except Exception as e:
             st.error(f"❌ Errore critico Forex: {e}")
 
-    # ROUTE 2: Non-Forex -> Alpaca / Yahoo Finance
+    # ROUTE 2: Non-Forex -> Alpaca
     if not is_forex:
-        # ENGINE 1: Alpaca (Primary for Stocks/Indices/Crypto)
         try:
             tf_alpaca = timeframe
             if timeframe == "1d" or timeframe == "1D": tf_alpaca = "1Day"
@@ -411,41 +409,11 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
             elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
             elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
             
-            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            df = fetch_alpaca_history(clean_ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), is_crypto=is_crypto)
+            if not df.empty:
+                df = process_dataframe(df, ticker, start_date, end_date)
         except Exception as e:
             st.error(f"Alpaca fetch failed: {e}")
-        
-        # ENGINE 2: yfinance (Fallback)
-        if df.empty:
-            try:
-                tf_yf = "1d"
-                if timeframe == "1m" or timeframe == "1Min": tf_yf = "1m"
-                elif timeframe == "5m" or timeframe == "5Min": tf_yf = "5m"
-                elif timeframe == "15m" or timeframe == "15Min": tf_yf = "15m"
-                elif timeframe == "1h" or timeframe == "1H": tf_yf = "1h"
-                elif timeframe == "1d" or timeframe == "1D": tf_yf = "1d"
-                
-                actual_start = start_date
-                if tf_yf in ["1m"] and days_requested > 7:
-                    actual_start = end_date - timedelta(days=7)
-                    st.warning("⚠️ yfinance supporta solo 7 giorni per il timeframe 1m. Date troncate.")
-                elif tf_yf in ["5m", "15m"] and days_requested > 60:
-                    actual_start = end_date - timedelta(days=60)
-                    st.warning(f"⚠️ yfinance supporta solo 60 giorni per il timeframe {tf_yf}. Date troncate.")
-                elif tf_yf == "1h" and days_requested > 730:
-                    actual_start = end_date - timedelta(days=730)
-                    st.warning(f"⚠️ yfinance supporta solo 730 giorni per il timeframe 1h. Date troncate.")
-                
-                df_yf = yf.download(ticker, start=actual_start, end=end_date, interval=tf_yf, progress=False)
-                if not df_yf.empty:
-                    if isinstance(df_yf.columns, pd.MultiIndex):
-                        df_yf.columns = df_yf.columns.get_level_values(0)
-                    df_yf.reset_index(inplace=True)
-                    df = process_dataframe(df_yf, ticker, start_date, end_date)
-                    if not df.empty:
-                        st.warning("⚠️ Dati presi da Yahoo Finance (Limiti applicati).")
-            except Exception as e:
-                st.error(f"❌ Errore Yahoo Finance: {e}")
 
     # ROUTE 3: Local Database (If everything fails)
     if df.empty:
@@ -498,6 +466,39 @@ st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", val
 st.session_state.alpaca_secret_key = st.sidebar.text_input("Alpaca Secret Key", value=st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7"), type="password")
 st.sidebar.markdown("---")
 
+if 'assets_dict' not in st.session_state:
+    st.session_state.assets_dict = load_user_settings()
+
+st.sidebar.markdown("## 🗂️ GESTIONE ASSET")
+category = st.sidebar.selectbox("Categoria", list(st.session_state.assets_dict.keys()))
+ticker_list = st.session_state.assets_dict[category]
+selected_ticker = st.sidebar.selectbox("Ticker", ticker_list if ticker_list else ["Nessun Ticker"])
+
+st.sidebar.markdown("### Gestione Ticker")
+new_ticker = st.sidebar.text_input("Nuovo Ticker", "").upper().strip()
+
+col1, col2, col3 = st.sidebar.columns(3)
+with col1:
+    if st.button("➕ Add"):
+        if new_ticker and new_ticker not in st.session_state.assets_dict[category]:
+            st.session_state.assets_dict[category].append(new_ticker)
+            save_user_settings(st.session_state.assets_dict)
+            st.rerun()
+with col2:
+    if st.button("➖ Rem"):
+        if selected_ticker and selected_ticker != "Nessun Ticker" and selected_ticker in st.session_state.assets_dict[category]:
+            st.session_state.assets_dict[category].remove(selected_ticker)
+            save_user_settings(st.session_state.assets_dict)
+            st.rerun()
+with col3:
+    if st.button("⭐ Fav"):
+        if selected_ticker and selected_ticker != "Nessun Ticker" and selected_ticker not in st.session_state.assets_dict["⭐ Preferiti"]:
+            st.session_state.assets_dict["⭐ Preferiti"].append(selected_ticker)
+            save_user_settings(st.session_state.assets_dict)
+            st.rerun()
+
+st.sidebar.markdown("---")
+
 st.sidebar.markdown("## 📁 DATABASE LOCALE")
 uploaded_file = st.sidebar.file_uploader("Carica file CSV (Database Locale)", type=['csv'])
 if uploaded_file is not None:
@@ -523,16 +524,12 @@ today = datetime.now()
 today_str_format = today.strftime('%Y-%m-%d') # Per la cache
 
 if menu == "🏟️ DASHBOARD SINGOLA":
-    if 'ticker_list' not in st.session_state:
-        st.session_state.ticker_list = ["NDX", "SPX", "QQQ", "SPY", "IWM", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "MSTR"]
-    
-    new_asset = st.sidebar.text_input("➕ CARICA TICKER", "").upper().strip()
-    if new_asset and new_asset not in st.session_state.ticker_list:
-        st.session_state.ticker_list.insert(0, new_asset)
-        st.rerun()
-
-    asset = st.sidebar.selectbox("SELEZIONA ASSET", st.session_state.ticker_list)
-    t_map = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT"}
+    asset = selected_ticker
+    if asset == "Nessun Ticker":
+        st.warning("Seleziona un ticker dalla sidebar.")
+        st.stop()
+        
+    t_map = {"SPX": "SPY", "NDX": "QQQ", "RUT": "IWM"}
     current_ticker = t_map.get(asset, asset)
 
     default_gran = 1.0
@@ -540,16 +537,21 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     elif "SPX" in asset: default_gran = 10.0
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
-    ticker_obj = yf.Ticker(current_ticker)
-    h = ticker_obj.history(period='1d')
-    if h.empty: st.stop()
-    spot = h['Close'].iloc[-1]
-
-    try:
-        available_dates = ticker_obj.options
-    except Exception as e:
-        st.error("⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi 10 minuti prima di riprovare.")
+    is_crypto_dash = False
+    for cat, tickers in st.session_state.assets_dict.items():
+        if cat == "⭐ Preferiti": continue
+        if current_ticker in tickers and "Criptovalute" in cat:
+            is_crypto_dash = True
+            break
+            
+    df_spot = fetch_alpaca_history(current_ticker, "1D", (today - timedelta(days=5)).strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d'), is_crypto=is_crypto_dash)
+    if df_spot.empty:
+        st.error(f"Impossibile recuperare il prezzo spot per {current_ticker} tramite Alpaca.")
         st.stop()
+    spot = df_spot['Close'].iloc[-1]
+
+    available_dates = []
+    st.warning("⚠️ Modulo Opzioni disabilitato (Yahoo Finance rimosso).")
 
     all_dates_info = []
     for d in available_dates:
@@ -1259,16 +1261,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     # Common Inputs
     c1, c2, c3, c4 = st.columns(4)
     with c1: 
-        # Ticker Selection with Predefined List + Custom
-        PREDEFINED_TICKERS = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "TSLA", "NVDA", "AMD", "AMZN", "GOOGL", "META", "NFLX"]
-        ticker_select = st.selectbox("Seleziona Ticker", ["Seleziona..."] + PREDEFINED_TICKERS + ["Inserisci Manualmente"])
-        
-        if ticker_select == "Inserisci Manualmente":
-            ticker = st.text_input("Inserisci Simbolo Ticker", value="SPY").upper()
-        elif ticker_select != "Seleziona...":
-            ticker = ticker_select
-        else:
-            ticker = "SPY" # Default
+        st.markdown(f"### Asset: **{selected_ticker}**")
+        ticker = selected_ticker
 
     with c2: timeframe = st.selectbox("Timeframe", ["1D", "1H", "15Min", "5Min"], index=0)
     with c3: 
@@ -3776,29 +3770,9 @@ elif menu == "🛠️ STRATEGY BUILDER":
     # Ticker and Date Range
     st.sidebar.markdown("### 📈 Selezione Asset")
     
-    forex_pairs = [
-        'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 
-        'USDCAD', 'USDCHF', 'NZDUSD'
-    ]
+    st.sidebar.markdown(f"**Asset Selezionato:** {selected_ticker}")
+    ticker = selected_ticker
     
-    standard_tickers = [
-        "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
-        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
-        "--- INSERIMENTO MANUALE ---"
-    ]
-    
-    strategy_tickers = forex_pairs + standard_tickers
-    
-    selected_ticker = st.sidebar.selectbox(
-        "Select Ticker",
-        options=strategy_tickers,
-        key="strategy_builder_ticker_select"
-    )
-    if selected_ticker == "--- INSERIMENTO MANUALE ---":
-        ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
-    else:
-        ticker = selected_ticker.split(" ")[0]
-        
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
     risk_per_trade = st.sidebar.slider("Risk per Trade (%)", 0.1, 5.0, 1.0, 0.1)
