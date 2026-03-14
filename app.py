@@ -3800,8 +3800,8 @@ elif menu == "🛠️ STRATEGY BUILDER":
         "Forex": ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD'],
         "Azioni": ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'META'],
         "Crypto": ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE'],
-        "Indici": ['^GSPC', '^IXIC', '^GDAXI', 'FTSEMIB.MI', '^RUT', '^DJI'],
-        "Materie Prime": ['GC=F', 'CL=F', 'SI=F', 'HG=F', 'NG=F'],
+        "Indici (ETF)": ['SPY', 'QQQ', 'DIA', 'IWM', 'VXX'],
+        "Materie Prime (ETF)": ['GLD', 'SLV', 'USO', 'UNG', 'DBA'],
         "⭐ Preferiti": user_assets.get("Preferiti", []),
         "➕ Personalizzati": user_assets.get("Personalizzati", [])
     }
@@ -3842,7 +3842,6 @@ elif menu == "🛠️ STRATEGY BUILDER":
             st.rerun()
             
     ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
-    ticker = ticker.replace("-USD", "").replace("/USD", "")
         
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
@@ -3893,20 +3892,14 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 
         return new_trades, equity_curve
 
-    def calculate_advanced_metrics(trades_list):
+    def calculate_advanced_metrics(trades_list, equity_curve):
         fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
-        if not trades_list:
-            return fallback
-            
-        df = pd.DataFrame(trades_list)
-        df.columns = [str(c).lower() for c in df.columns]
+        if not trades_list: return fallback
         
-        if 'pnl' not in df.columns:
-            return fallback
-            
+        df = pd.DataFrame(trades_list)
+        if 'pnl' not in df.columns: return fallback
         exits = df[df['pnl'].notna()]
-        if exits.empty:
-            return fallback
+        if exits.empty: return fallback
             
         wins = exits[exits['pnl'] > 0]['pnl']
         losses = exits[exits['pnl'] < 0]['pnl']
@@ -3916,30 +3909,21 @@ elif menu == "🛠️ STRATEGY BUILDER":
         avg_loss = abs(losses.mean()) if not losses.empty else 0
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
         profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
-        
         total_profit_abs = exits['pnl'].sum()
         
-        bal_col = 'balance' if 'balance' in df.columns else None
+        # FIX DRAWDOWN
         max_dd = 0
         max_dd_abs = 0
-        if bal_col:
-            curve = df[bal_col].tolist()
-            peak = curve[0]
-            for val in curve:
+        if equity_curve:
+            peak = equity_curve[0]
+            for val in equity_curve:
                 if val > peak: peak = val
                 dd = (peak - val) / peak if peak > 0 else 0
                 dd_abs = peak - val
                 if dd > max_dd: max_dd = dd
                 if dd_abs > max_dd_abs: max_dd_abs = dd_abs
                 
-        return {
-            'expectancy': expectancy,
-            'profit_factor': profit_factor,
-            'max_drawdown': max_dd * 100,
-            'win_rate': win_rate * 100,
-            'total_profit_abs': total_profit_abs,
-            'max_dd_abs': max_dd_abs
-        }
+        return {'expectancy': expectancy, 'profit_factor': profit_factor, 'max_drawdown': max_dd * 100, 'win_rate': win_rate * 100, 'total_profit_abs': total_profit_abs, 'max_dd_abs': max_dd_abs}
 
     def run_monte_carlo(trades_list, initial_capital, simulations=1000):
         import plotly.graph_objects as go
@@ -4184,6 +4168,10 @@ elif menu == "🛠️ STRATEGY BUILDER":
         return trades
 
     if st.button("🚀 Esegui Strategia Custom"):
+        # LOG FOREX
+        if ticker in categories.get("Forex", []):
+            st.info(f"📥 Connessione a HistData. Download e decompressione di {ticker} in corso... (Potrebbe richiedere alcuni secondi)")
+            
         with st.spinner("Fetching data and running strategy..."):
             df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
@@ -4194,13 +4182,16 @@ elif menu == "🛠️ STRATEGY BUILDER":
                     adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
                     
                     st.subheader("📊 Risultati Strategia")
-                    metrics = calculate_advanced_metrics(adjusted_trades)
+                    # Passiamo la equity_curve alla nuova funzione
+                    metrics = calculate_advanced_metrics(adjusted_trades, adjusted_equity)
                     
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Win Rate", f"{metrics['win_rate']:.1f}%")
-                    col2.metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
-                    col3.metric("Max Drawdown", f"{metrics['max_drawdown']:.1f}%")
-                    col4.metric("Total Profit", f"${metrics['total_profit_abs']:.2f}")
+                    # 5 Colonne per aggiungere il Total Trades
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric("Tot. Operazioni", len(adjusted_trades))
+                    col2.metric("Win Rate", f"{metrics['win_rate']:.1f}%")
+                    col3.metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
+                    col4.metric("Max Drawdown", f"{metrics['max_drawdown']:.1f}%")
+                    col5.metric("Total Profit", f"${metrics['total_profit_abs']:.2f}")
                     
                     st.line_chart(adjusted_equity)
                     
