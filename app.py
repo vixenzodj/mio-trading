@@ -3776,28 +3776,73 @@ elif menu == "🛠️ STRATEGY BUILDER":
     # Ticker and Date Range
     st.sidebar.markdown("### 📈 Selezione Asset")
     
-    forex_pairs = [
-        'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 
-        'USDCAD', 'USDCHF', 'NZDUSD'
-    ]
+    import json
+    import os
     
-    standard_tickers = [
-        "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
-        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
-        "--- INSERIMENTO MANUALE ---"
-    ]
+    ASSETS_FILE = "strategy_assets.json"
     
-    strategy_tickers = forex_pairs + standard_tickers
+    def load_assets():
+        if os.path.exists(ASSETS_FILE):
+            try:
+                with open(ASSETS_FILE, "r") as f:
+                    return json.load(f)
+            except:
+                pass
+        return {"Personalizzati": [], "Preferiti": []}
+
+    def save_assets(data):
+        with open(ASSETS_FILE, "w") as f:
+            json.dump(data, f)
+            
+    user_assets = load_assets()
     
-    selected_ticker = st.sidebar.selectbox(
-        "Select Ticker",
-        options=strategy_tickers,
-        key="strategy_builder_ticker_select"
-    )
-    if selected_ticker == "--- INSERIMENTO MANUALE ---":
-        ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
-    else:
-        ticker = selected_ticker.split(" ")[0]
+    categories = {
+        "Forex": ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD'],
+        "Azioni": ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'META'],
+        "Crypto": ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE'],
+        "Indici": ['^GSPC', '^IXIC', '^GDAXI', 'FTSEMIB.MI', '^RUT', '^DJI'],
+        "Materie Prime": ['GC=F', 'CL=F', 'SI=F', 'HG=F', 'NG=F'],
+        "⭐ Preferiti": user_assets.get("Preferiti", []),
+        "➕ Personalizzati": user_assets.get("Personalizzati", [])
+    }
+    
+    selected_category = st.sidebar.selectbox("Categoria", list(categories.keys()), key="strategy_builder_category_select")
+    
+    ticker_options = categories[selected_category]
+    if not ticker_options:
+        ticker_options = ["Nessun ticker"]
+        
+    selected_ticker = st.sidebar.selectbox("Ticker", ticker_options, key="strategy_builder_ticker_select")
+    
+    st.sidebar.markdown("#### Gestione Ticker")
+    new_ticker = st.sidebar.text_input("Nuovo Ticker (es. AAPL)", key="strategy_builder_new_ticker").upper().strip()
+    
+    col_add, col_rem, col_fav = st.sidebar.columns(3)
+    
+    if col_add.button("➕", key="btn_add_ticker"):
+        if new_ticker and new_ticker not in user_assets["Personalizzati"]:
+            user_assets["Personalizzati"].append(new_ticker)
+            save_assets(user_assets)
+            st.rerun()
+            
+    if col_rem.button("➖", key="btn_rem_ticker"):
+        if selected_ticker in user_assets["Personalizzati"]:
+            user_assets["Personalizzati"].remove(selected_ticker)
+            save_assets(user_assets)
+            st.rerun()
+        elif selected_ticker in user_assets["Preferiti"]:
+            user_assets["Preferiti"].remove(selected_ticker)
+            save_assets(user_assets)
+            st.rerun()
+            
+    if col_fav.button("⭐", key="btn_fav_ticker"):
+        if selected_ticker and selected_ticker != "Nessun ticker" and selected_ticker not in user_assets["Preferiti"]:
+            user_assets["Preferiti"].append(selected_ticker)
+            save_assets(user_assets)
+            st.rerun()
+            
+    ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
+    ticker = ticker.replace("-USD", "").replace("/USD", "")
         
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
