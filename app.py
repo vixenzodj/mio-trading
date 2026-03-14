@@ -3815,45 +3815,33 @@ elif menu == "🛠️ STRATEGY BUILDER":
     selected_ticker = st.sidebar.selectbox("Ticker", ticker_options, key="strategy_builder_ticker_select")
     
     st.sidebar.markdown("#### Gestione Ticker")
-    manual_ticker = st.sidebar.text_input("Inserimento Manuale Ticker", key="strategy_builder_manual_ticker").upper().strip()
+    new_ticker = st.sidebar.text_input("Nuovo Ticker (es. AAPL)", key="strategy_builder_new_ticker").upper().strip()
     
     col_add, col_rem, col_fav = st.sidebar.columns(3)
     
     if col_add.button("➕", key="btn_add_ticker"):
-        if manual_ticker and manual_ticker not in user_assets["Personalizzati"]:
-            user_assets["Personalizzati"].append(manual_ticker)
+        if new_ticker and new_ticker not in user_assets["Personalizzati"]:
+            user_assets["Personalizzati"].append(new_ticker)
             save_assets(user_assets)
             st.rerun()
             
     if col_rem.button("➖", key="btn_rem_ticker"):
-        target_rem = manual_ticker if manual_ticker else selected_ticker
-        if target_rem in user_assets["Personalizzati"]:
-            user_assets["Personalizzati"].remove(target_rem)
+        if selected_ticker in user_assets["Personalizzati"]:
+            user_assets["Personalizzati"].remove(selected_ticker)
             save_assets(user_assets)
             st.rerun()
-        elif target_rem in user_assets["Preferiti"]:
-            user_assets["Preferiti"].remove(target_rem)
+        elif selected_ticker in user_assets["Preferiti"]:
+            user_assets["Preferiti"].remove(selected_ticker)
             save_assets(user_assets)
             st.rerun()
             
     if col_fav.button("⭐", key="btn_fav_ticker"):
-        target_fav = manual_ticker if manual_ticker else selected_ticker
-        if target_fav and target_fav != "Nessun ticker" and target_fav not in user_assets["Preferiti"]:
-            user_assets["Preferiti"].append(target_fav)
+        if selected_ticker and selected_ticker != "Nessun ticker" and selected_ticker not in user_assets["Preferiti"]:
+            user_assets["Preferiti"].append(selected_ticker)
             save_assets(user_assets)
             st.rerun()
             
-    if manual_ticker:
-        ticker = manual_ticker
-    else:
-        ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
-        
-    crypto_list = ['BTC', 'ETH', 'DOGE', 'ADA', 'DOT', 'SOL', 'XRP']
-    if selected_category == "Crypto" or ticker in crypto_list:
-        if not ticker.endswith("USD"):
-            ticker = f"{ticker}USD"
-            
-    st.markdown(f"### 🔍 Asset Selezionato: `{ticker}`")
+    ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
         
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
@@ -4179,158 +4167,13 @@ elif menu == "🛠️ STRATEGY BUILDER":
                             
         return trades
 
-    def fetch_data_strategy_builder(ticker, timeframe, start_date, end_date):
-        import requests
-        from datetime import timedelta
-        import os, glob, zipfile, shutil
-        import pandas as pd
-        
-        df = pd.DataFrame()
-        is_forex = "=X" in ticker or (len(ticker) == 6 and ticker.isalpha() and not ticker.endswith("USD"))
-        
-        def process_dataframe(df, ticker, start_date, end_date):
-            if df.empty: return df
-            rename_map = {}
-            for c in df.columns:
-                cl = str(c).lower()
-                if cl in ['open', 'high', 'low', 'close', 'volume']:
-                    rename_map[c] = cl.capitalize()
-                elif cl in ['date', 'timestamp', 'time', 'datetime']:
-                    rename_map[c] = 'datetime'
-            df.rename(columns=rename_map, inplace=True)
-            if 'datetime' not in df.columns:
-                if df.index.name and str(df.index.name).lower() in ['date', 'timestamp', 'time', 'datetime']:
-                    df.reset_index(inplace=True)
-                    df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
-                else:
-                    return pd.DataFrame()
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-            if 'Close' in df.columns:
-                df.dropna(subset=['Close'], inplace=True)
-            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-            df.dropna(subset=['datetime'], inplace=True)
-            df = df[(df['datetime'] >= pd.to_datetime(start_date)) & (df['datetime'] <= pd.to_datetime(end_date))]
-            if not df.empty and len(df) > 1:
-                df.sort_values('datetime', ascending=True, inplace=True)
-                df.set_index('datetime', drop=False, inplace=True)
-            return df
-
-        if is_forex:
-            try:
-                temp_dir = "./data_forex_sb"
-                extract_dir = "./data_extracted_sb"
-                os.makedirs(temp_dir, exist_ok=True)
-                os.makedirs(extract_dir, exist_ok=True)
-                
-                clean_ticker = ticker.replace('=X', '').replace('^', '')
-                options = Options()
-                options.pairs = {clean_ticker.lower()}
-                options.formats = {"ascii"}
-                options.timeframes = {"1-minute-bar-quotes"}
-                options.start_yearmonth = pd.to_datetime(start_date).strftime("%Y-%m")
-                options.end_yearmonth = pd.to_datetime(end_date).strftime("%Y-%m")
-                options.download_data_archives = True  
-                options.data_directory = temp_dir
-                
-                histdatacom(options)
-                
-                zip_files = glob.glob(os.path.join(temp_dir, "**", "*.zip"), recursive=True)
-                if zip_files:
-                    for zf in zip_files:
-                        with zipfile.ZipFile(zf, 'r') as zip_ref:
-                            zip_ref.extractall(extract_dir)
-                    
-                    csv_files = glob.glob(os.path.join(extract_dir, "**", "*.csv"), recursive=True)
-                    if csv_files:
-                        df_list = []
-                        for f in csv_files:
-                            tmp_df = pd.read_csv(f, header=None, sep=';', engine='python')
-                            df_list.append(tmp_df)
-                        df_raw = pd.concat(df_list, ignore_index=True)
-                        df_raw.columns = ['datetime_str', 'Open', 'High', 'Low', 'Close', 'Volume']
-                        df_raw['datetime'] = pd.to_datetime(df_raw['datetime_str'], format='%Y%m%d %H%M%S')
-                        
-                        df = process_dataframe(df_raw, ticker, start_date, end_date)
-                        
-                        if not df.empty and timeframe not in ['1m', '1Min']:
-                            resample_map = {'5m': '5T', '5Min': '5T', '15m': '15T', '15Min': '15T', '1h': 'h', '1H': 'h', '1d': 'D', '1D': 'D'}
-                            freq = resample_map.get(timeframe, 'D')
-                            df = df.resample(freq).agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
-                            df['datetime'] = df.index
-                            
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                shutil.rmtree(extract_dir, ignore_errors=True)
-            except Exception as e:
-                st.error(f"Errore Forex: {e}")
-        else:
-            try:
-                tf_alpaca = timeframe
-                if timeframe in ["1d", "1D"]: tf_alpaca = "1Day"
-                elif timeframe in ["1h", "1H"]: tf_alpaca = "1Hour"
-                elif timeframe in ["15m", "15Min"]: tf_alpaca = "15Min"
-                elif timeframe in ["5m", "5Min"]: tf_alpaca = "5Min"
-                elif timeframe in ["1m", "1Min"]: tf_alpaca = "1Min"
-                
-                is_crypto = ticker.endswith("USD") and (selected_category == "Crypto" or ticker.replace("USD", "") in ['BTC', 'ETH', 'DOGE', 'ADA', 'DOT', 'SOL', 'XRP'])
-                
-                if is_crypto:
-                    headers = {
-                        "APCA-API-KEY-ID": st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"),
-                        "APCA-API-SECRET-KEY": st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7")
-                    }
-                    crypto_sym = ticker.replace("USD", "/USD")
-                    url = f"https://data.alpaca.markets/v1beta3/crypto/us/bars"
-                    
-                    all_bars = []
-                    next_token = None
-                    
-                    while True:
-                        params = {
-                            "symbols": crypto_sym,
-                            "start": start_date.strftime('%Y-%m-%d') + "T00:00:00Z",
-                            "end": end_date.strftime('%Y-%m-%d') + "T23:59:59Z",
-                            "timeframe": tf_alpaca,
-                            "limit": 10000,
-                            "page_token": next_token
-                        }
-                        response = requests.get(url, headers=headers, params=params)
-                        if response.status_code == 200:
-                            data = response.json()
-                            if "bars" in data and crypto_sym in data["bars"]:
-                                all_bars.extend(data["bars"][crypto_sym])
-                                next_token = data.get("next_page_token")
-                                if not next_token: break
-                            else: break
-                        else:
-                            st.error(f"Errore Alpaca Crypto API: {response.text}")
-                            break
-                            
-                    if all_bars:
-                        df = pd.DataFrame(all_bars)
-                        df['t'] = pd.to_datetime(df['t'])
-                        df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
-                        df = process_dataframe(df, ticker, start_date, end_date)
-                else:
-                    ticker_for_alpaca = ticker.replace("^", "")
-                    df = fetch_alpaca_history(ticker_for_alpaca, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-                    if not df.empty:
-                        df = process_dataframe(df, ticker, start_date, end_date)
-            except Exception as e:
-                st.error(f"Alpaca fetch failed: {e}")
-                
-        return df
-
     if st.button("🚀 Esegui Strategia Custom"):
-        st.info(f"⚙️ Elaborazione Backtest per: **{ticker}** | Timeframe: {timeframe}")
-        
         # LOG FOREX
         if ticker in categories.get("Forex", []):
             st.info(f"📥 Connessione a HistData. Download e decompressione di {ticker} in corso... (Potrebbe richiedere alcuni secondi)")
             
         with st.spinner("Fetching data and running strategy..."):
-            df = fetch_data_strategy_builder(ticker, timeframe, start_date, end_date)
+            df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
                 trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
                 
