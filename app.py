@@ -475,9 +475,18 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
         cols = df.select_dtypes(include=['float64']).columns
         if not cols.empty:
             df[cols] = df[cols].astype('float32')
+            
         if 'datetime' in df.columns:
             df['datetime'] = pd.to_datetime(df['datetime'])
-        df.sort_values('datetime', inplace=True)
+            
+        # --- FIX AMBIGUITÀ PANDAS ---
+        # Resettiamo l'indice PRIMA di ordinare. Questo elimina l'eventuale indice 'datetime'
+        # mantenendo intatta e sicura la colonna 'datetime', permettendo il sort senza crash.
+        df.reset_index(drop=True, inplace=True)
+        
+        if 'datetime' in df.columns:
+            df.sort_values('datetime', inplace=True)
+            
         df.ffill().bfill(inplace=True)
         df.reset_index(drop=True, inplace=True)
 
