@@ -3844,22 +3844,110 @@ elif menu == "🛠️ STRATEGY BUILDER":
     st.sidebar.markdown("### 📊 Filtri Tecnici (pandas_ta)")
     num_ta_filters = st.sidebar.number_input("Numero di Filtri TA", min_value=0, max_value=5, value=0)
     ta_filters = []
+    
     for i in range(num_ta_filters):
         st.sidebar.markdown(f"**Filtro {i+1}**")
-        ind_name = st.sidebar.text_input(f"Nome Indicatore {i+1} (es. rsi, macd)", value="rsi", key=f"ta_name_{i}")
-        ind_params_str = st.sidebar.text_input(f"Parametri {i+1} (es. length=14)", value="length=14", key=f"ta_params_{i}")
-        cond_long = st.sidebar.text_input(f"Condizione Long {i+1} (es. RSI_14 < 30)", value="RSI_14 < 30", key=f"ta_long_{i}")
-        cond_short = st.sidebar.text_input(f"Condizione Short {i+1} (es. RSI_14 > 70)", value="RSI_14 > 70", key=f"ta_short_{i}")
+        
+        indicator_choice = st.sidebar.selectbox(
+            f"Indicatore {i+1}", 
+            ["RSI", "MACD", "EMA", "SMA", "ATR", "Bollinger Bands"], 
+            key=f"ind_choice_{i}"
+        )
         
         params_dict = {}
-        if ind_params_str:
-            try:
-                for pair in ind_params_str.split(','):
-                    k, v = pair.split('=')
-                    params_dict[k.strip()] = int(v.strip()) if v.strip().isdigit() else v.strip()
-            except:
-                pass
+        output_col = ""
+        ind_name = ""
+        
+        if indicator_choice == "RSI":
+            ind_name = "rsi"
+            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=14, key=f"rsi_len_{i}")
+            params_dict = {"length": length}
+            output_col = f"RSI_{length}"
+            default_long_val, default_short_val = 30.0, 70.0
+            default_op_long, default_op_short = "<", ">"
+            
+        elif indicator_choice == "MACD":
+            ind_name = "macd"
+            c1, c2, c3 = st.sidebar.columns(3)
+            with c1: fast = st.number_input(f"Fast", min_value=1, value=12, key=f"macd_fast_{i}")
+            with c2: slow = st.number_input(f"Slow", min_value=1, value=26, key=f"macd_slow_{i}")
+            with c3: signal = st.number_input(f"Signal", min_value=1, value=9, key=f"macd_sig_{i}")
+            params_dict = {"fast": fast, "slow": slow, "signal": signal}
+            output_col = f"MACD_{fast}_{slow}_{signal}"
+            default_long_val, default_short_val = 0.0, 0.0
+            default_op_long, default_op_short = ">", "<"
+            
+        elif indicator_choice == "EMA":
+            ind_name = "ema"
+            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=50, key=f"ema_len_{i}")
+            params_dict = {"length": length}
+            output_col = f"EMA_{length}"
+            default_long_val, default_short_val = 0.0, 0.0
+            default_op_long, default_op_short = ">", "<"
+            
+        elif indicator_choice == "SMA":
+            ind_name = "sma"
+            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=50, key=f"sma_len_{i}")
+            params_dict = {"length": length}
+            output_col = f"SMA_{length}"
+            default_long_val, default_short_val = 0.0, 0.0
+            default_op_long, default_op_short = ">", "<"
+            
+        elif indicator_choice == "ATR":
+            ind_name = "atr"
+            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=14, key=f"atr_len_{i}")
+            params_dict = {"length": length}
+            output_col = f"ATRr_{length}"
+            default_long_val, default_short_val = 1.0, 1.0
+            default_op_long, default_op_short = ">", ">"
+            
+        elif indicator_choice == "Bollinger Bands":
+            ind_name = "bbands"
+            c1, c2 = st.sidebar.columns(2)
+            with c1: length = st.number_input(f"Length", min_value=1, value=20, key=f"bb_len_{i}")
+            with c2: std = st.number_input(f"Std Dev", min_value=0.1, value=2.0, step=0.1, key=f"bb_std_{i}")
+            params_dict = {"length": length, "std": std}
+            band_choice = st.sidebar.selectbox(f"Banda da confrontare {i+1}", ["Lower (BBL)", "Middle (BBM)", "Upper (BBU)"], key=f"bb_band_{i}")
+            if "Lower" in band_choice:
+                output_col = f"BBL_{length}_{std}"
+            elif "Middle" in band_choice:
+                output_col = f"BBM_{length}_{std}"
+            else:
+                output_col = f"BBU_{length}_{std}"
+            default_long_val, default_short_val = 0.0, 0.0
+            default_op_long, default_op_short = "<", ">"
+
+        compare_mode = st.sidebar.radio(
+            f"Tipo di confronto {i+1}", 
+            ["Indicatore vs Valore Fisso", "Prezzo vs Indicatore"], 
+            horizontal=True,
+            key=f"comp_mode_{i}"
+        )
+
+        c_long, c_short = st.sidebar.columns(2)
+        
+        with c_long:
+            st.markdown("🟢 **LONG**")
+            op_long = st.selectbox("Operatore", [">", "<", ">=", "<=", "=="], index=[">", "<", ">=", "<=", "=="].index(default_op_long), key=f"op_long_{i}")
+            
+            if compare_mode == "Indicatore vs Valore Fisso":
+                thresh_long = st.number_input("Soglia", value=float(default_long_val), key=f"thresh_long_{i}")
+                cond_long = f"{output_col} {op_long} {thresh_long}"
+            else:
+                price_col_long = st.selectbox("Prezzo", ["Close", "Open", "High", "Low"], index=0, key=f"price_long_{i}")
+                cond_long = f"{price_col_long} {op_long} {output_col}"
                 
+        with c_short:
+            st.markdown("🔴 **SHORT**")
+            op_short = st.selectbox("Operatore", ["<", ">", "<=", ">=", "=="], index=["<", ">", "<=", ">=", "=="].index(default_op_short), key=f"op_short_{i}")
+            
+            if compare_mode == "Indicatore vs Valore Fisso":
+                thresh_short = st.number_input("Soglia", value=float(default_short_val), key=f"thresh_short_{i}")
+                cond_short = f"{output_col} {op_short} {thresh_short}"
+            else:
+                price_col_short = st.selectbox("Prezzo", ["Close", "Open", "High", "Low"], index=0, key=f"price_short_{i}")
+                cond_short = f"{price_col_short} {op_short} {output_col}"
+
         ta_filters.append({
             'name': ind_name,
             'params': params_dict,
