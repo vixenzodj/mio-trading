@@ -174,23 +174,14 @@ def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
         st.error(f"Errore Yahoo Finance: {e}")
         return pd.DataFrame()
 
-def fetch_alpaca_history(symbol, timeframe, start_str, end_str, is_crypto=False):
+def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     if symbol.startswith("^"):
         return fetch_yahoo_history(symbol, timeframe, start_str, end_str)
 
     symbol_map = {
         "SPX": "SPY", "NDX": "QQQ", "RUT": "IWM", "DJI": "DIA", "VIX": "VIXY"
     } 
-    
-    if is_crypto:
-        clean_sym = symbol.upper().replace('-USD', '').replace('USD', '').replace('/', '')
-        alpaca_sym = f"{clean_sym}/USD"
-        url = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
-        tf_param = "timeframes"
-    else:
-        alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
-        url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
-        tf_param = "timeframe"
+    alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
     
     headers = {
         "APCA-API-KEY-ID": st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"),
@@ -212,6 +203,8 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str, is_crypto=False)
     except:
         final_end = end_str + "T23:59:59Z"
 
+    url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
+    
     all_bars = []
     next_token = None
     
@@ -220,34 +213,28 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str, is_crypto=False)
     
     while True:
         params = {
-            "symbols" if is_crypto else "symbols": alpaca_sym,
             "start": start_str + "T00:00:00Z",
             "end": final_end,
-            tf_param: tf,
+            "timeframe": tf,
             "limit": 10000,
+            "adjustment": "raw",
+            "feed": "iex",
             "page_token": next_token
         }
-        if not is_crypto:
-            params["adjustment"] = "raw"
-            params["feed"] = "iex"
         
         try:
             response = requests.get(url, headers=headers, params=params)
             if response.status_code == 200:
                 data = response.json()
-                if "bars" in data:
-                    bars_data = data["bars"].get(alpaca_sym) if is_crypto else data["bars"]
-                    if bars_data:
-                        all_bars.extend(bars_data)
-                        next_token = data.get("next_page_token")
-                        
-                        # Update progress (fake visual feedback)
-                        current_len = len(all_bars)
-                        p_bar.progress(min(current_len % 100, 90), text=f"Scaricati {current_len} records...")
-                        
-                        if not next_token:
-                            break
-                    else:
+                if "bars" in data and data["bars"]:
+                    all_bars.extend(data["bars"])
+                    next_token = data.get("next_page_token")
+                    
+                    # Update progress (fake visual feedback)
+                    current_len = len(all_bars)
+                    p_bar.progress(min(current_len % 100, 90), text=f"Scaricati {current_len} records...")
+                    
+                    if not next_token:
                         break
                 else:
                     break
@@ -269,7 +256,7 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str, is_crypto=False)
     return pd.DataFrame()
 
 # --- DATA FETCHING ENHANCED ---
-def fetch_data_smart(ticker, timeframe, start_date, end_date, no_yf=False):
+def fetch_data_smart(ticker, timeframe, start_date, end_date):
     import requests
     from datetime import timedelta
     
@@ -424,12 +411,12 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, no_yf=False):
             elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
             elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
             
-            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), is_crypto=is_crypto)
+            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
         except Exception as e:
             st.error(f"Alpaca fetch failed: {e}")
         
         # ENGINE 2: yfinance (Fallback)
-        if df.empty and not no_yf:
+        if df.empty:
             try:
                 tf_yf = "1d"
                 if timeframe == "1m" or timeframe == "1Min": tf_yf = "1m"
@@ -1216,11 +1203,9 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         final_balances = equity_curves[:, -1]
         prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
         
-        # Risk of Ruin: max drawdown > 20% (dynamic peak) or equity drops below initial_capital * 0.80
+        # Risk of Ruin: equity drops below initial_capital * 0.80 at any point
         ruin_threshold = initial_capital * 0.80
-        peaks = np.maximum.accumulate(equity_curves, axis=1)
-        max_drawdowns = np.max((peaks - equity_curves) / peaks, axis=1)
-        ruined_simulations = (max_drawdowns > 0.20) | np.any(equity_curves < ruin_threshold, axis=1)
+        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
         risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
         
         median_final_balance = np.median(final_balances)
@@ -3774,8 +3759,6 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 elif menu == "🛠️ STRATEGY BUILDER":
     st.title("🛠️ Strategy Builder (No-Code)")
     
-    manual_ticker = st.text_input("Ricerca Manuale Ticker (Priorità)")
-    
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Impostazioni Base")
     
@@ -3793,74 +3776,28 @@ elif menu == "🛠️ STRATEGY BUILDER":
     # Ticker and Date Range
     st.sidebar.markdown("### 📈 Selezione Asset")
     
-    import json
-    import os
+    forex_pairs = [
+        'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 
+        'USDCAD', 'USDCHF', 'NZDUSD'
+    ]
     
-    ASSETS_FILE = "strategy_assets.json"
+    standard_tickers = [
+        "^GSPC (S&P500)", "^IXIC (Nasdaq)", "^GDAXI (DAX)", "FTSEMIB.MI (FTSE MIB)",
+        "BTC-USD (Crypto)", "ETH-USD (Crypto)", "AAPL (Stock)", "TSLA (Stock)", "NVDA (Stock)",
+        "--- INSERIMENTO MANUALE ---"
+    ]
     
-    def load_assets():
-        if os.path.exists(ASSETS_FILE):
-            try:
-                with open(ASSETS_FILE, "r") as f:
-                    return json.load(f)
-            except:
-                pass
-        return {"Personalizzati": [], "Preferiti": []}
-
-    def save_assets(data):
-        with open(ASSETS_FILE, "w") as f:
-            json.dump(data, f)
-            
-    user_assets = load_assets()
+    strategy_tickers = forex_pairs + standard_tickers
     
-    categories = {
-        "Forex": ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD'],
-        "Azioni": ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'META'],
-        "Crypto": ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE'],
-        "Indici (ETF)": ['SPY', 'QQQ', 'DIA', 'IWM', 'VXX'],
-        "Materie Prime (ETF)": ['GLD', 'SLV', 'USO', 'UNG', 'DBA'],
-        "⭐ Preferiti": user_assets.get("Preferiti", []),
-        "➕ Personalizzati": user_assets.get("Personalizzati", [])
-    }
-    
-    selected_category = st.sidebar.selectbox("Categoria", list(categories.keys()), key="strategy_builder_category_select")
-    
-    ticker_options = categories[selected_category]
-    if not ticker_options:
-        ticker_options = ["Nessun ticker"]
-        
-    selected_ticker = st.sidebar.selectbox("Ticker", ticker_options, key="strategy_builder_ticker_select")
-    
-    st.sidebar.markdown("#### Gestione Ticker")
-    new_ticker = st.sidebar.text_input("Nuovo Ticker (es. AAPL)", key="strategy_builder_new_ticker").upper().strip()
-    
-    col_add, col_rem, col_fav = st.sidebar.columns(3)
-    
-    if col_add.button("➕", key="btn_add_ticker"):
-        if new_ticker and new_ticker not in user_assets["Personalizzati"]:
-            user_assets["Personalizzati"].append(new_ticker)
-            save_assets(user_assets)
-            st.rerun()
-            
-    if col_rem.button("➖", key="btn_rem_ticker"):
-        if selected_ticker in user_assets["Personalizzati"]:
-            user_assets["Personalizzati"].remove(selected_ticker)
-            save_assets(user_assets)
-            st.rerun()
-        elif selected_ticker in user_assets["Preferiti"]:
-            user_assets["Preferiti"].remove(selected_ticker)
-            save_assets(user_assets)
-            st.rerun()
-            
-    if col_fav.button("⭐", key="btn_fav_ticker"):
-        if selected_ticker and selected_ticker != "Nessun ticker" and selected_ticker not in user_assets["Preferiti"]:
-            user_assets["Preferiti"].append(selected_ticker)
-            save_assets(user_assets)
-            st.rerun()
-            
-    ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
-    ticker_finale = manual_ticker.strip().upper() if manual_ticker.strip() else ticker
-    st.subheader(f"🔍 Asset in Analisi: {ticker_finale}")
+    selected_ticker = st.sidebar.selectbox(
+        "Select Ticker",
+        options=strategy_tickers,
+        key="strategy_builder_ticker_select"
+    )
+    if selected_ticker == "--- INSERIMENTO MANUALE ---":
+        ticker = st.sidebar.text_input("Inserisci Ticker Custom", value="SPY").upper()
+    else:
+        ticker = selected_ticker.split(" ")[0]
         
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
@@ -3911,14 +3848,20 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 
         return new_trades, equity_curve
 
-    def calculate_advanced_metrics(trades_list, equity_curve):
+    def calculate_advanced_metrics(trades_list):
         fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
-        if not trades_list: return fallback
-        
+        if not trades_list:
+            return fallback
+            
         df = pd.DataFrame(trades_list)
-        if 'pnl' not in df.columns: return fallback
+        df.columns = [str(c).lower() for c in df.columns]
+        
+        if 'pnl' not in df.columns:
+            return fallback
+            
         exits = df[df['pnl'].notna()]
-        if exits.empty: return fallback
+        if exits.empty:
+            return fallback
             
         wins = exits[exits['pnl'] > 0]['pnl']
         losses = exits[exits['pnl'] < 0]['pnl']
@@ -3928,21 +3871,30 @@ elif menu == "🛠️ STRATEGY BUILDER":
         avg_loss = abs(losses.mean()) if not losses.empty else 0
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
         profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
+        
         total_profit_abs = exits['pnl'].sum()
         
-        # FIX DRAWDOWN
+        bal_col = 'balance' if 'balance' in df.columns else None
         max_dd = 0
         max_dd_abs = 0
-        if equity_curve:
-            peak = equity_curve[0]
-            for val in equity_curve:
+        if bal_col:
+            curve = df[bal_col].tolist()
+            peak = curve[0]
+            for val in curve:
                 if val > peak: peak = val
                 dd = (peak - val) / peak if peak > 0 else 0
                 dd_abs = peak - val
                 if dd > max_dd: max_dd = dd
                 if dd_abs > max_dd_abs: max_dd_abs = dd_abs
                 
-        return {'expectancy': expectancy, 'profit_factor': profit_factor, 'max_drawdown': max_dd * 100, 'win_rate': win_rate * 100, 'total_profit_abs': total_profit_abs, 'max_dd_abs': max_dd_abs}
+        return {
+            'expectancy': expectancy,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_dd * 100,
+            'win_rate': win_rate * 100,
+            'total_profit_abs': total_profit_abs,
+            'max_dd_abs': max_dd_abs
+        }
 
     def run_monte_carlo(trades_list, initial_capital, simulations=1000):
         import plotly.graph_objects as go
@@ -3977,11 +3929,8 @@ elif menu == "🛠️ STRATEGY BUILDER":
         final_balances = equity_curves[:, -1]
         prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
         
-        running_max = np.maximum.accumulate(equity_curves, axis=1)
-        drawdowns = (running_max - equity_curves) / running_max
         ruin_threshold = initial_capital * 0.80
-        
-        ruined_simulations = np.any((drawdowns > 0.20) | (equity_curves < ruin_threshold), axis=1)
+        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
         risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
         
         median_final_balance = np.median(final_balances)
@@ -4190,12 +4139,8 @@ elif menu == "🛠️ STRATEGY BUILDER":
         return trades
 
     if st.button("🚀 Esegui Strategia Custom"):
-        # LOG FOREX
-        if ticker_finale in categories.get("Forex", []):
-            st.info(f"📥 Connessione a HistData. Download e decompressione di {ticker_finale} in corso... (Potrebbe richiedere alcuni secondi)")
-            
         with st.spinner("Fetching data and running strategy..."):
-            df = fetch_data_smart(ticker_finale, timeframe, start_date, end_date, no_yf=True)
+            df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
                 trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
                 
@@ -4204,16 +4149,13 @@ elif menu == "🛠️ STRATEGY BUILDER":
                     adjusted_trades, adjusted_equity = apply_friction_post_process(trades, initial_capital, friction_pct)
                     
                     st.subheader("📊 Risultati Strategia")
-                    # Passiamo la equity_curve alla nuova funzione
-                    metrics = calculate_advanced_metrics(adjusted_trades, adjusted_equity)
+                    metrics = calculate_advanced_metrics(adjusted_trades)
                     
-                    # 5 Colonne per aggiungere il Total Trades
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    col1.metric("Tot. Operazioni", len(adjusted_trades))
-                    col2.metric("Win Rate", f"{metrics['win_rate']:.1f}%")
-                    col3.metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
-                    col4.metric("Max Drawdown", f"{metrics['max_drawdown']:.1f}%")
-                    col5.metric("Total Profit", f"${metrics['total_profit_abs']:.2f}")
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Win Rate", f"{metrics['win_rate']:.1f}%")
+                    col2.metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
+                    col3.metric("Max Drawdown", f"{metrics['max_drawdown']:.1f}%")
+                    col4.metric("Total Profit", f"${metrics['total_profit_abs']:.2f}")
                     
                     st.line_chart(adjusted_equity)
                     
