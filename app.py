@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import pandas_ta as ta
 import plotly.graph_objects as go
 from scipy import stats
 from scipy.stats import norm
@@ -3821,11 +3822,52 @@ elif menu == "🛠️ STRATEGY BUILDER":
     end_time = st.sidebar.time_input("End Trading Time", value=datetime.strptime("16:00", "%H:%M").time())
     eod_close = st.sidebar.checkbox("Close all at EOD", value=True)
     
-    # ORB UI
-    orb_enabled = st.sidebar.checkbox("Enable Opening Range Breakout (ORB)", value=True)
+    # Core Strategies UI
+    st.sidebar.markdown("### 🧠 Strategie Core")
+    core_strategies = st.sidebar.multiselect(
+        "Seleziona Strategie",
+        ["ORB (Opening Range Breakout)", "VWAP Reversion", "Volume Profile"],
+        default=["ORB (Opening Range Breakout)"]
+    )
+    
     orb_duration = 15
-    if orb_enabled:
-        orb_duration = st.sidebar.selectbox("ORB Candle Duration (min)", [5, 15, 30])
+    vwap_sd_level = 2
+    vp_mode = 'breakout'
+    
+    if "ORB (Opening Range Breakout)" in core_strategies:
+        orb_duration = st.sidebar.selectbox("ORB Duration (min)", [5, 15, 30, 60])
+    if "VWAP Reversion" in core_strategies:
+        vwap_sd_level = st.sidebar.selectbox("VWAP SD Level", [1, 2, 3], index=1)
+    if "Volume Profile" in core_strategies:
+        vp_mode = st.sidebar.selectbox("Volume Profile Mode", ["breakout", "rejection"])
+
+    st.sidebar.markdown("### 📊 Filtri Tecnici (pandas_ta)")
+    num_ta_filters = st.sidebar.number_input("Numero di Filtri TA", min_value=0, max_value=5, value=0)
+    ta_filters = []
+    for i in range(num_ta_filters):
+        st.sidebar.markdown(f"**Filtro {i+1}**")
+        ind_name = st.sidebar.text_input(f"Nome Indicatore {i+1} (es. rsi, macd)", value="rsi", key=f"ta_name_{i}")
+        ind_params_str = st.sidebar.text_input(f"Parametri {i+1} (es. length=14)", value="length=14", key=f"ta_params_{i}")
+        cond_long = st.sidebar.text_input(f"Condizione Long {i+1} (es. RSI_14 < 30)", value="RSI_14 < 30", key=f"ta_long_{i}")
+        cond_short = st.sidebar.text_input(f"Condizione Short {i+1} (es. RSI_14 > 70)", value="RSI_14 > 70", key=f"ta_short_{i}")
+        
+        params_dict = {}
+        if ind_params_str:
+            try:
+                for pair in ind_params_str.split(','):
+                    k, v = pair.split('=')
+                    params_dict[k.strip()] = int(v.strip()) if v.strip().isdigit() else v.strip()
+            except:
+                pass
+                
+        ta_filters.append({
+            'name': ind_name,
+            'params': params_dict,
+            'condition': {'long': cond_long, 'short': cond_short}
+        })
+        
+    st.sidebar.markdown("### 🔀 Logica Combinatoria")
+    combinatorial_logic = st.sidebar.radio("Come combinare i segnali?", ["OR (Basta un segnale)", "AND (Tutti allineati)"])
         
     # Ticker and Date Range
     st.sidebar.markdown("### 📈 Selezione Asset")
@@ -4074,10 +4116,266 @@ elif menu == "🛠️ STRATEGY BUILDER":
         
         return fig, prob_profit, risk_of_ruin, median_final_balance
 
+    class InstitutionalIndicators:
+        @staticmethod
+        def vwap_sd(df):
+            """
+            Calcola il VWAP e le Bande di Deviazione Standard (1, 2, 3 SD).
+            Per il Forex, usa df['Volume'] come Tick Volume.
+            """
+            if 'Volume' not in df.columns or df['Volume'].sum() == 0:
+                df['VWAP'] = df['Close']
+                for i in range(1, 4):
+                    df[f'VWAP_Upper_{i}SD'] = df['Close']
+                    df[f'VWAP_Lower_{i}SD'] = df['Close']
+                return df
 
-    def run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct):
+            df['Date'] = df.index.date if isinstance(df.index, pd.DatetimeIndex) else pd.to_datetime(df['datetime']).dt.date
+            df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+            df['VP'] = df['Typical_Price'] * df['Volume']
+            
+            daily_groups = df.groupby('Date')
+            df['Cum_VP'] = daily_groups['VP'].cumsum()
+            df['Cum_Vol'] = daily_groups['Volume'].cumsum()
+            
+            df['VWAP'] = df['Cum_VP'] / df['Cum_Vol']
+            
+            df['Price_Diff_Sq'] = ((df['Typical_Price'] - df['VWAP']) ** 2) * df['Volume']
+            df['Cum_Price_Diff_Sq'] = daily_groups['Price_Diff_Sq'].cumsum()
+            df['VWAP_Variance'] = df['Cum_Price_Diff_Sq'] / df['Cum_Vol']
+            df['VWAP_SD'] = np.sqrt(df['VWAP_Variance'])
+            
+            for i in range(1, 4):
+                df[f'VWAP_Upper_{i}SD'] = df['VWAP'] + (i * df['VWAP_SD'])
+                df[f'VWAP_Lower_{i}SD'] = df['VWAP'] - (i * df['VWAP_SD'])
+                
+            df.drop(columns=['Date', 'Typical_Price', 'VP', 'Cum_VP', 'Cum_Vol', 'Price_Diff_Sq', 'Cum_Price_Diff_Sq', 'VWAP_Variance', 'VWAP_SD'], inplace=True, errors='ignore')
+            return df
+
+        @staticmethod
+        def volume_profile_intraday(df, bins=50, value_area_pct=0.70):
+            """
+            Calcola il Volume Profile Intraday: POC, VAH, VAL.
+            Per il Forex, usa df['Volume'] come Tick Volume.
+            """
+            if 'Volume' not in df.columns or df['Volume'].sum() == 0:
+                df['POC'] = df['Close']
+                df['VAH'] = df['High']
+                df['VAL'] = df['Low']
+                return df
+
+            df['Date'] = df.index.date if isinstance(df.index, pd.DatetimeIndex) else pd.to_datetime(df['datetime']).dt.date
+            df['POC'] = np.nan
+            df['VAH'] = np.nan
+            df['VAL'] = np.nan
+
+            for date, group in df.groupby('Date'):
+                min_price = group['Low'].min()
+                max_price = group['High'].max()
+                
+                if min_price == max_price:
+                    df.loc[group.index, 'POC'] = min_price
+                    df.loc[group.index, 'VAH'] = min_price
+                    df.loc[group.index, 'VAL'] = min_price
+                    continue
+
+                price_bins = np.linspace(min_price, max_price, bins)
+                volume_profile = np.zeros(bins - 1)
+
+                for _, row in group.iterrows():
+                    idx = np.digitize((row['High'] + row['Low'] + row['Close']) / 3, price_bins) - 1
+                    idx = min(max(idx, 0), bins - 2)
+                    volume_profile[idx] += row['Volume']
+
+                poc_idx = np.argmax(volume_profile)
+                poc_price = (price_bins[poc_idx] + price_bins[poc_idx + 1]) / 2
+                
+                total_volume = np.sum(volume_profile)
+                va_volume = volume_profile[poc_idx]
+                upper_idx = poc_idx
+                lower_idx = poc_idx
+                
+                while va_volume < total_volume * value_area_pct:
+                    upper_vol = volume_profile[upper_idx + 1] if upper_idx < bins - 2 else 0
+                    lower_vol = volume_profile[lower_idx - 1] if lower_idx > 0 else 0
+                    
+                    if upper_vol == 0 and lower_vol == 0:
+                        break
+                        
+                    if upper_vol >= lower_vol:
+                        upper_idx += 1
+                        va_volume += upper_vol
+                    else:
+                        lower_idx -= 1
+                        va_volume += lower_vol
+
+                vah_price = price_bins[upper_idx + 1]
+                val_price = price_bins[lower_idx]
+
+                df.loc[group.index, 'POC'] = poc_price
+                df.loc[group.index, 'VAH'] = vah_price
+                df.loc[group.index, 'VAL'] = val_price
+
+            df.drop(columns=['Date'], inplace=True, errors='ignore')
+            return df
+
+    class StrategyFactory:
+        @staticmethod
+        def get_vwap_reversion_signal(df, params):
+            """
+            Genera segnali di mean reversion basati sulle bande di deviazione standard del VWAP.
+            params: dict con chiave 'sd_level' (default 2)
+            """
+            sd_level = params.get('sd_level', 2)
+            signals = pd.Series(0, index=df.index)
+            
+            upper_col = f'VWAP_Upper_{sd_level}SD'
+            lower_col = f'VWAP_Lower_{sd_level}SD'
+            
+            if upper_col not in df.columns or lower_col not in df.columns:
+                return signals
+                
+            # Long: Il prezzo tocca/scende sotto la banda inferiore e chiude sopra (rejection)
+            long_cond = (df['Low'] < df[lower_col]) & (df['Close'] > df[lower_col])
+            
+            # Short: Il prezzo tocca/sale sopra la banda superiore e chiude sotto (rejection)
+            short_cond = (df['High'] > df[upper_col]) & (df['Close'] < df[upper_col])
+            
+            signals.loc[long_cond] = 1
+            signals.loc[short_cond] = -1
+            
+            return signals
+
+        @staticmethod
+        def get_volumeprofile_signal(df, params):
+            """
+            Genera segnali di breakout o rejection dal POC e dai bordi della Value Area (VAH, VAL).
+            params: dict con chiave 'mode' ('breakout' o 'rejection')
+            """
+            mode = params.get('mode', 'breakout')
+            signals = pd.Series(0, index=df.index)
+            
+            if not all(col in df.columns for col in ['POC', 'VAH', 'VAL']):
+                return signals
+                
+            if mode == 'breakout':
+                # Breakout Long: Chiusura sopra VAH (con apertura sotto o uguale)
+                long_cond = (df['Close'] > df['VAH']) & (df['Open'] <= df['VAH'])
+                # Breakout Short: Chiusura sotto VAL (con apertura sopra o uguale)
+                short_cond = (df['Close'] < df['VAL']) & (df['Open'] >= df['VAL'])
+            else:
+                # Rejection Long: Minimo sotto VAL ma chiusura sopra VAL
+                long_cond = (df['Low'] < df['VAL']) & (df['Close'] > df['VAL'])
+                # Rejection Short: Massimo sopra VAH ma chiusura sotto VAH
+                short_cond = (df['High'] > df['VAH']) & (df['Close'] < df['VAH'])
+                
+            signals.loc[long_cond] = 1
+            signals.loc[short_cond] = -1
+            
+            return signals
+
+        @staticmethod
+        def get_orb_signal(df, params):
+            """
+            Genera segnali basati sull'Opening Range Breakout (ORB).
+            params: dict con chiave 'orb_duration' (minuti, default 15)
+            """
+            orb_duration = params.get('orb_duration', 15)
+            signals = pd.Series(0, index=df.index)
+            
+            # Identifica la colonna datetime o l'indice
+            if isinstance(df.index, pd.DatetimeIndex):
+                dt_series = df.index.to_series()
+            elif 'datetime' in df.columns:
+                dt_series = pd.to_datetime(df['datetime'])
+            else:
+                return signals
+                
+            # Creiamo un DataFrame temporaneo per raggruppare per giorno in modo efficiente
+            df_temp = pd.DataFrame({
+                'dt': dt_series, 
+                'Open': df['Open'], 
+                'High': df['High'], 
+                'Low': df['Low'], 
+                'Close': df['Close']
+            }, index=df.index)
+            df_temp['Date'] = df_temp['dt'].dt.date
+            
+            for date, group in df_temp.groupby('Date'):
+                if group.empty:
+                    continue
+                    
+                # Definisci il periodo ORB (primi 'orb_duration' minuti della sessione per quel giorno)
+                start_time = group['dt'].iloc[0]
+                end_orb_time = start_time + pd.Timedelta(minutes=orb_duration)
+                
+                orb_mask = (group['dt'] >= start_time) & (group['dt'] < end_orb_time)
+                orb_data = group[orb_mask]
+                
+                if orb_data.empty:
+                    continue
+                    
+                orb_high = orb_data['High'].max()
+                orb_low = orb_data['Low'].min()
+                
+                # Dati successivi all'ORB
+                post_orb_mask = group['dt'] >= end_orb_time
+                
+                # Breakout Long: Chiusura sopra l'ORB High
+                long_cond = post_orb_mask & (group['Close'] > orb_high) & (group['Open'] <= orb_high)
+                # Breakout Short: Chiusura sotto l'ORB Low
+                short_cond = post_orb_mask & (group['Close'] < orb_low) & (group['Open'] >= orb_low)
+                
+                # Assegna i segnali usando gli indici originali
+                signals.loc[group[long_cond].index] = 1
+                signals.loc[group[short_cond].index] = -1
+                
+            return signals
+
+        @staticmethod
+        def get_ta_signal(df, indicator_name, params, condition):
+            """
+            Genera segnali utilizzando pandas_ta per un indicatore specifico.
+            condition: dict con chiavi 'long' e 'short' contenenti stringhe di query (es. "RSI_14 < 30")
+                       oppure una singola stringa (restituirà solo segnali Long = 1).
+            """
+            signals = pd.Series(0, index=df.index)
+            
+            try:
+                # Ottieni la funzione dell'indicatore da pandas_ta (es. df.ta.rsi)
+                ind_func = getattr(df.ta, indicator_name)
+                
+                # Calcola l'indicatore
+                ind_result = ind_func(**params)
+                
+                # Unisci il risultato al dataframe originale per la valutazione
+                if isinstance(ind_result, pd.Series):
+                    temp_df = df.join(ind_result)
+                else:
+                    temp_df = pd.concat([df, ind_result], axis=1)
+                    
+                # Valuta le condizioni logiche in modo vettorializzato
+                if isinstance(condition, dict):
+                    if 'long' in condition and condition['long']:
+                        long_mask = temp_df.eval(condition['long'])
+                        signals.loc[long_mask] = 1
+                    if 'short' in condition and condition['short']:
+                        short_mask = temp_df.eval(condition['short'])
+                        signals.loc[short_mask] = -1
+                elif isinstance(condition, str):
+                    # Se è passata solo una stringa, assumiamo sia una condizione Long generica
+                    mask = temp_df.eval(condition)
+                    signals.loc[mask] = 1
+                    
+            except Exception as e:
+                print(f"Errore nel calcolo del segnale TA ({indicator_name}): {e}")
+                
+            return signals
+
+
+    def run_custom_strategy(df, start_time, end_time, eod_close, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct):
         trades = []
-        if df.empty:
+        if df.empty or 'Master_Signal' not in df.columns:
             return trades
             
         df = df.copy()
@@ -4104,20 +4402,6 @@ elif menu == "🛠️ STRATEGY BUILDER":
         
         for date, group in grouped:
             group = group.sort_values('datetime').reset_index(drop=True)
-            
-            orb_high = None
-            orb_low = None
-            orb_end_time = None
-            
-            if orb_enabled:
-                if not group.empty:
-                    first_candle_time = group.iloc[0]['datetime']
-                    orb_end_time = first_candle_time + pd.Timedelta(minutes=orb_duration)
-                    
-                    orb_data = group[group['datetime'] < orb_end_time]
-                    if not orb_data.empty:
-                        orb_high = orb_data['High'].max()
-                        orb_low = orb_data['Low'].min()
             
             # Use itertuples for performance on large datasets
             for row in group.itertuples():
@@ -4180,66 +4464,44 @@ elif menu == "🛠️ STRATEGY BUILDER":
                         in_position = False
                 
                 if not in_position and is_trading_time:
-                    if orb_enabled and orb_high is not None and orb_low is not None:
-                        if current_datetime >= orb_end_time:
-                            if row.High > orb_high:
-                                in_position = True
-                                position_type = 'LONG'
-                                entry_price = max(row.Open, orb_high)
-                                entry_time = current_datetime
+                    if row.Master_Signal == 1:
+                        in_position = True
+                        position_type = 'LONG'
+                        entry_price = row.Close
+                        entry_time = current_datetime
+                        
+                        if sl_mode == "Fixed %":
+                            sl_price = entry_price * (1 - fixed_sl_pct / 100)
+                        else:
+                            sl_price = row.Low
+                            if sl_price >= entry_price:
+                                sl_price = entry_price * 0.999
                                 
-                                if sl_mode == "Fixed %":
-                                    sl_price = entry_price * (1 - fixed_sl_pct / 100)
-                                else:
-                                    sl_price = row.Low
-                                    if sl_price >= entry_price:
-                                        sl_price = entry_price * 0.999
-                                        
-                                tp_price = entry_price + ((entry_price - sl_price) * rr_ratio)
+                        tp_price = entry_price + ((entry_price - sl_price) * rr_ratio)
+                        
+                        risk_amount = initial_capital * (risk_per_trade / 100)
+                        risk_per_unit = entry_price - sl_price
+                        size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+                        
+                    elif row.Master_Signal == -1:
+                        in_position = True
+                        position_type = 'SHORT'
+                        entry_price = row.Close
+                        entry_time = current_datetime
+                        
+                        if sl_mode == "Fixed %":
+                            sl_price = entry_price * (1 + fixed_sl_pct / 100)
+                        else:
+                            sl_price = row.High
+                            if sl_price <= entry_price:
+                                sl_price = entry_price * 1.001
                                 
-                                risk_amount = initial_capital * (risk_per_trade / 100)
-                                risk_per_unit = entry_price - sl_price
-                                size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
-                                
-                            elif row.Low < orb_low:
-                                in_position = True
-                                position_type = 'SHORT'
-                                entry_price = min(row.Open, orb_low)
-                                entry_time = current_datetime
-                                
-                                if sl_mode == "Fixed %":
-                                    sl_price = entry_price * (1 + fixed_sl_pct / 100)
-                                else:
-                                    sl_price = row.High
-                                    if sl_price <= entry_price:
-                                        sl_price = entry_price * 1.001
-                                        
-                                tp_price = entry_price - ((sl_price - entry_price) * rr_ratio)
-                                
-                                risk_amount = initial_capital * (risk_per_trade / 100)
-                                risk_per_unit = sl_price - entry_price
-                                size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
-                                
-                    elif not orb_enabled:
-                        if current_time >= start_time:
-                            in_position = True
-                            position_type = 'LONG'
-                            entry_price = row.Close
-                            entry_time = current_datetime
-                            
-                            if sl_mode == "Fixed %":
-                                sl_price = entry_price * (1 - fixed_sl_pct / 100)
-                            else:
-                                sl_price = row.Low
-                                if sl_price >= entry_price:
-                                    sl_price = entry_price * 0.999
-                                    
-                            tp_price = entry_price + ((entry_price - sl_price) * rr_ratio)
-                            
-                            risk_amount = initial_capital * (risk_per_trade / 100)
-                            risk_per_unit = entry_price - sl_price
-                            size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
-                            
+                        tp_price = entry_price - ((sl_price - entry_price) * rr_ratio)
+                        
+                        risk_amount = initial_capital * (risk_per_trade / 100)
+                        risk_per_unit = sl_price - entry_price
+                        size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+                        
         return trades
 
     if st.button("🚀 Esegui Strategia Custom"):
@@ -4250,7 +4512,47 @@ elif menu == "🛠️ STRATEGY BUILDER":
         with st.spinner("Fetching data and running strategy..."):
             df = fetch_data_smart(ticker, timeframe, start_date, end_date)
             if not df.empty:
-                trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
+                # Calcolo indicatori istituzionali se necessari
+                if "VWAP Reversion" in core_strategies:
+                    df = InstitutionalIndicators.vwap_sd(df)
+                if "Volume Profile" in core_strategies:
+                    df = InstitutionalIndicators.volume_profile_intraday(df)
+                
+                # Generazione segnali
+                all_signals = []
+                
+                if "ORB (Opening Range Breakout)" in core_strategies:
+                    sig = StrategyFactory.get_orb_signal(df, {'orb_duration': orb_duration})
+                    all_signals.append(sig)
+                
+                if "VWAP Reversion" in core_strategies:
+                    sig = StrategyFactory.get_vwap_reversion_signal(df, {'sd_level': vwap_sd_level})
+                    all_signals.append(sig)
+                    
+                if "Volume Profile" in core_strategies:
+                    sig = StrategyFactory.get_volumeprofile_signal(df, {'mode': vp_mode})
+                    all_signals.append(sig)
+                    
+                for ta_f in ta_filters:
+                    sig = StrategyFactory.get_ta_signal(df, ta_f['name'], ta_f['params'], ta_f['condition'])
+                    all_signals.append(sig)
+                
+                # Combinazione segnali
+                df['Master_Signal'] = 0
+                if all_signals:
+                    signals_df = pd.concat(all_signals, axis=1)
+                    if combinatorial_logic.startswith("OR"):
+                        long_mask = (signals_df == 1).any(axis=1)
+                        short_mask = (signals_df == -1).any(axis=1)
+                        df.loc[long_mask, 'Master_Signal'] = 1
+                        df.loc[short_mask & ~long_mask, 'Master_Signal'] = -1
+                    else: # AND
+                        long_mask = (signals_df == 1).all(axis=1)
+                        short_mask = (signals_df == -1).all(axis=1)
+                        df.loc[long_mask, 'Master_Signal'] = 1
+                        df.loc[short_mask, 'Master_Signal'] = -1
+                
+                trades = run_custom_strategy(df, start_time, end_time, eod_close, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
                 
                 if trades:
                     friction_pct = 0.0
