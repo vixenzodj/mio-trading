@@ -255,6 +255,56 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
         
     return pd.DataFrame()
 
+def fetch_alpaca_crypto(symbol, timeframe, start_str, end_str):
+    clean_sym = symbol.upper().replace('-USD', '').replace('USD', '').replace('/', '')
+    alpaca_sym = f"{clean_sym}/USD"
+    headers = {
+        "APCA-API-KEY-ID": st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"),
+        "APCA-API-SECRET-KEY": st.session_state.get("alpaca_secret_key", "EeZLG3n9NN7uxPCjVSZkQEScgBDjrVE4jiGeabTngeK7")
+    }
+    tf_map = {"1Min": "1Min", "5Min": "5Min", "15Min": "15Min", "1H": "1Hour", "1D": "1Day"}
+    tf = tf_map.get(timeframe, "1Day")
+    
+    url = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
+    all_bars = []
+    page_token = None
+    
+    while True:
+        params = {
+            "symbols": alpaca_sym,
+            "timeframe": tf,
+            "start": start_str,
+            "end": end_str,
+            "limit": 10000
+        }
+        if page_token:
+            params["page_token"] = page_token
+            
+        try:
+            import requests
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                bars = data.get("bars", {}).get(alpaca_sym, [])
+                all_bars.extend(bars)
+                page_token = data.get("next_page_token")
+                if not page_token:
+                    break
+            else:
+                st.error(f"Errore Alpaca Crypto API ({response.status_code}): {response.text}")
+                break
+        except Exception as e:
+            st.error(f"Errore Connessione Alpaca Crypto: {e}")
+            break
+            
+    if all_bars:
+        df = pd.DataFrame(all_bars)
+        df['t'] = pd.to_datetime(df['t'])
+        df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
+        return df
+        
+    return pd.DataFrame()
+
 # --- DATA FETCHING ENHANCED ---
 def fetch_data_smart(ticker, timeframe, start_date, end_date):
     import requests
@@ -263,9 +313,10 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
     df = pd.DataFrame()
     
     # Determine asset type
-    is_forex = "=X" in ticker or (len(ticker) == 6 and ticker.isalpha())
+    crypto_list = ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE']
+    is_crypto = "-USD" in ticker or any(ticker.startswith(c) and (ticker.endswith("USD") or len(ticker) == len(c)) for c in crypto_list)
+    is_forex = ("=X" in ticker or (len(ticker) == 6 and ticker.isalpha())) and not is_crypto
     is_index = ticker.startswith("^") or ticker in ["FTSEMIB.MI"]
-    is_crypto = "-USD" in ticker
     is_stock = not (is_forex or is_index or is_crypto)
     
     days_requested = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
@@ -411,7 +462,10 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
             elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
             elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
             
-            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            if is_crypto:
+                df = fetch_alpaca_crypto(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            else:
+                df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
         except Exception as e:
             st.error(f"Alpaca fetch failed: {e}")
         
@@ -3841,7 +3895,27 @@ elif menu == "🛠️ STRATEGY BUILDER":
             save_assets(user_assets)
             st.rerun()
             
-    ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
+    if new_ticker:
+        ticker = new_ticker
+    else:
+        ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
+        
+    # Determine Data Engine
+    crypto_list = ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOT', 'DOGE']
+    is_crypto = "-USD" in ticker or any(ticker.startswith(c) and (ticker.endswith("USD") or len(ticker) == len(c)) for c in crypto_list)
+    is_forex = ("=X" in ticker or (len(ticker) == 6 and ticker.isalpha())) and not is_crypto
+    is_index = ticker.startswith("^") or ticker in ["FTSEMIB.MI"]
+    is_stock = not (is_forex or is_index or is_crypto)
+    
+    if is_crypto:
+        engine_str = "Alpaca Crypto v1beta3"
+    elif is_forex:
+        engine_str = "HistData (Forex)"
+    else:
+        engine_str = "Alpaca Stocks/ETF v2"
+        
+    st.sidebar.markdown(f"**Asset:** `{ticker}`")
+    st.sidebar.markdown(f"**Data Engine:** `{engine_str}`")
         
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
@@ -3958,8 +4032,9 @@ elif menu == "🛠️ STRATEGY BUILDER":
         final_balances = equity_curves[:, -1]
         prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
         
-        ruin_threshold = initial_capital * 0.80
-        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
+        running_max = np.maximum.accumulate(equity_curves, axis=1)
+        drawdowns = (running_max - equity_curves) / running_max
+        ruined_simulations = np.any(drawdowns > 0.20, axis=1)
         risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
         
         median_final_balance = np.median(final_balances)
