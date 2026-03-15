@@ -174,14 +174,23 @@ def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
         st.error(f"Errore Yahoo Finance: {e}")
         return pd.DataFrame()
 
-def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
+def fetch_alpaca_history(symbol, timeframe, start_str, end_str, is_crypto=False):
     if symbol.startswith("^"):
         return fetch_yahoo_history(symbol, timeframe, start_str, end_str)
 
     symbol_map = {
         "SPX": "SPY", "NDX": "QQQ", "RUT": "IWM", "DJI": "DIA", "VIX": "VIXY"
     } 
-    alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
+    
+    if is_crypto:
+        clean_sym = symbol.upper().replace('-USD', '').replace('USD', '').replace('/', '')
+        alpaca_sym = f"{clean_sym}/USD"
+        url = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
+        tf_param = "timeframes"
+    else:
+        alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
+        url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
+        tf_param = "timeframe"
     
     headers = {
         "APCA-API-KEY-ID": st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"),
@@ -203,8 +212,6 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     except:
         final_end = end_str + "T23:59:59Z"
 
-    url = f"https://data.alpaca.markets/v2/stocks/{alpaca_sym}/bars"
-    
     all_bars = []
     next_token = None
     
@@ -213,28 +220,34 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     
     while True:
         params = {
+            "symbols" if is_crypto else "symbols": alpaca_sym,
             "start": start_str + "T00:00:00Z",
             "end": final_end,
-            "timeframe": tf,
+            tf_param: tf,
             "limit": 10000,
-            "adjustment": "raw",
-            "feed": "iex",
             "page_token": next_token
         }
+        if not is_crypto:
+            params["adjustment"] = "raw"
+            params["feed"] = "iex"
         
         try:
             response = requests.get(url, headers=headers, params=params)
             if response.status_code == 200:
                 data = response.json()
-                if "bars" in data and data["bars"]:
-                    all_bars.extend(data["bars"])
-                    next_token = data.get("next_page_token")
-                    
-                    # Update progress (fake visual feedback)
-                    current_len = len(all_bars)
-                    p_bar.progress(min(current_len % 100, 90), text=f"Scaricati {current_len} records...")
-                    
-                    if not next_token:
+                if "bars" in data:
+                    bars_data = data["bars"].get(alpaca_sym) if is_crypto else data["bars"]
+                    if bars_data:
+                        all_bars.extend(bars_data)
+                        next_token = data.get("next_page_token")
+                        
+                        # Update progress (fake visual feedback)
+                        current_len = len(all_bars)
+                        p_bar.progress(min(current_len % 100, 90), text=f"Scaricati {current_len} records...")
+                        
+                        if not next_token:
+                            break
+                    else:
                         break
                 else:
                     break
@@ -256,7 +269,7 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     return pd.DataFrame()
 
 # --- DATA FETCHING ENHANCED ---
-def fetch_data_smart(ticker, timeframe, start_date, end_date):
+def fetch_data_smart(ticker, timeframe, start_date, end_date, no_yf=False):
     import requests
     from datetime import timedelta
     
@@ -411,12 +424,12 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
             elif timeframe == "5m" or timeframe == "5Min": tf_alpaca = "5Min"
             elif timeframe == "1m" or timeframe == "1Min": tf_alpaca = "1Min"
             
-            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+            df = fetch_alpaca_history(ticker, tf_alpaca, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), is_crypto=is_crypto)
         except Exception as e:
             st.error(f"Alpaca fetch failed: {e}")
         
         # ENGINE 2: yfinance (Fallback)
-        if df.empty:
+        if df.empty and not no_yf:
             try:
                 tf_yf = "1d"
                 if timeframe == "1m" or timeframe == "1Min": tf_yf = "1m"
@@ -1203,9 +1216,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         final_balances = equity_curves[:, -1]
         prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
         
-        # Risk of Ruin: equity drops below initial_capital * 0.80 at any point
+        # Risk of Ruin: max drawdown > 20% (dynamic peak) or equity drops below initial_capital * 0.80
         ruin_threshold = initial_capital * 0.80
-        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
+        peaks = np.maximum.accumulate(equity_curves, axis=1)
+        max_drawdowns = np.max((peaks - equity_curves) / peaks, axis=1)
+        ruined_simulations = (max_drawdowns > 0.20) | np.any(equity_curves < ruin_threshold, axis=1)
         risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
         
         median_final_balance = np.median(final_balances)
@@ -3759,6 +3774,8 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 elif menu == "🛠️ STRATEGY BUILDER":
     st.title("🛠️ Strategy Builder (No-Code)")
     
+    manual_ticker = st.text_input("Ricerca Manuale Ticker (Priorità)")
+    
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Impostazioni Base")
     
@@ -3842,6 +3859,8 @@ elif menu == "🛠️ STRATEGY BUILDER":
             st.rerun()
             
     ticker = selected_ticker if selected_ticker != "Nessun ticker" else "SPY"
+    ticker_finale = manual_ticker.strip().upper() if manual_ticker.strip() else ticker
+    st.subheader(f"🔍 Asset in Analisi: {ticker_finale}")
         
     st.sidebar.markdown("### 🛡️ Risk Management")
     initial_capital = st.sidebar.number_input("Initial Capital ($)", value=10000)
@@ -3958,8 +3977,11 @@ elif menu == "🛠️ STRATEGY BUILDER":
         final_balances = equity_curves[:, -1]
         prob_profit = (np.sum(final_balances > initial_capital) / simulations) * 100
         
+        running_max = np.maximum.accumulate(equity_curves, axis=1)
+        drawdowns = (running_max - equity_curves) / running_max
         ruin_threshold = initial_capital * 0.80
-        ruined_simulations = np.any(equity_curves < ruin_threshold, axis=1)
+        
+        ruined_simulations = np.any((drawdowns > 0.20) | (equity_curves < ruin_threshold), axis=1)
         risk_of_ruin = (np.sum(ruined_simulations) / simulations) * 100
         
         median_final_balance = np.median(final_balances)
@@ -4169,11 +4191,11 @@ elif menu == "🛠️ STRATEGY BUILDER":
 
     if st.button("🚀 Esegui Strategia Custom"):
         # LOG FOREX
-        if ticker in categories.get("Forex", []):
-            st.info(f"📥 Connessione a HistData. Download e decompressione di {ticker} in corso... (Potrebbe richiedere alcuni secondi)")
+        if ticker_finale in categories.get("Forex", []):
+            st.info(f"📥 Connessione a HistData. Download e decompressione di {ticker_finale} in corso... (Potrebbe richiedere alcuni secondi)")
             
         with st.spinner("Fetching data and running strategy..."):
-            df = fetch_data_smart(ticker, timeframe, start_date, end_date)
+            df = fetch_data_smart(ticker_finale, timeframe, start_date, end_date, no_yf=True)
             if not df.empty:
                 trades = run_custom_strategy(df, start_time, end_time, eod_close, orb_enabled, orb_duration, initial_capital, risk_per_trade, rr_ratio, sl_mode, fixed_sl_pct)
                 
