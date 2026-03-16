@@ -3849,12 +3849,57 @@ elif menu == "🛠️ STRATEGY BUILDER":
     num_ta_filters = st.sidebar.number_input("Numero di Filtri TA", min_value=0, max_value=5, value=0)
     ta_filters = []
     
+    TA_INDICATORS_MAP = {
+        # MOMENTUM
+        "stoch": {"k": 14, "d": 3, "smooth_k": 3},
+        "stochrsi": {"length": 14, "rsi_length": 14, "k": 3, "d": 3},
+        "cci": {"length": 20},
+        "willr": {"length": 14},
+        "mfi": {"length": 14},
+        "tsi": {"fast": 13, "slow": 25},
+        "uo": {"fast": 7, "medium": 14, "slow": 28},
+        "roc": {"length": 10},
+        "mom": {"length": 10},
+        "cmo": {"length": 14},
+        "cg": {"length": 10},
+        "bop": {},
+        # TREND
+        "wma": {"length": 50},
+        "hma": {"length": 20},
+        "tema": {"length": 20},
+        "dema": {"length": 20},
+        "kama": {"length": 10},
+        "alma": {"length": 9, "sigma": 6.0, "offset": 0.85},
+        "supertrend": {"length": 7, "multiplier": 3.0},
+        "adx": {"length": 14},
+        "aroon": {"length": 14},
+        "chop": {"length": 14},
+        "psar": {"af0": 0.02, "af": 0.02, "max_af": 0.2},
+        "qstick": {"length": 14},
+        "decay": {"length": 14},
+        # VOLATILITA E CANALI
+        "kc": {"length": 20, "scalar": 2.0},
+        "dc": {"length": 20},
+        "natr": {"length": 14},
+        "massi": {"fast": 9, "slow": 25},
+        "true_range": {},
+        # VOLUME
+        "vwap": {},
+        "obv": {},
+        "cmf": {"length": 20},
+        "ad": {},
+        "pvt": {},
+        "efi": {"length": 14}
+    }
+
+    full_indicator_list = ["RSI", "MACD", "EMA", "SMA", "ATR", "Bollinger Bands"] + [k.upper() for k in TA_INDICATORS_MAP.keys()]
+
     for i in range(num_ta_filters):
         st.sidebar.markdown(f"**Filtro {i+1}**")
         
         indicator_choice = st.sidebar.selectbox(
             f"Indicatore {i+1}", 
-            ["RSI", "MACD", "EMA", "SMA", "ATR", "Bollinger Bands"], 
+            full_indicator_list, 
             key=f"ind_choice_{i}"
         )
         
@@ -3920,6 +3965,37 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 output_col = f"BBU_{length}_{std}"
             default_long_val, default_short_val = 0.0, 0.0
             default_op_long, default_op_short = "<", ">"
+            
+        else:
+            ind_name = indicator_choice.lower()
+            base_params = TA_INDICATORS_MAP.get(ind_name, {})
+            
+            if base_params:
+                cols = st.sidebar.columns(len(base_params))
+                for col, (param_key, param_val) in zip(cols, base_params.items()):
+                    with col:
+                        if isinstance(param_val, float):
+                            params_dict[param_key] = st.number_input(f"{param_key.capitalize()}", value=float(param_val), step=0.01, key=f"{ind_name}_{param_key}_{i}")
+                        else:
+                            params_dict[param_key] = st.number_input(f"{param_key.capitalize()}", value=int(param_val), step=1, key=f"{ind_name}_{param_key}_{i}")
+            
+            if ind_name == "supertrend":
+                output_col = f"SUPERTd_{params_dict.get('length', 7)}_{params_dict.get('multiplier', 3.0)}"
+            elif ind_name == "stoch":
+                scelta = st.sidebar.selectbox(f"Linea Stocastico {i+1}", ["K", "D"], key=f"stoch_line_{i}")
+                output_col = f"STOCH{scelta.lower()}_{params_dict.get('k', 14)}_{params_dict.get('d', 3)}_{params_dict.get('smooth_k', 3)}"
+            elif ind_name == "vwap":
+                output_col = "VWAP_D"
+            elif ind_name == "cmf":
+                output_col = f"CMF_{params_dict.get('length', 20)}"
+            else:
+                if params_dict:
+                    output_col = ind_name.upper() + "_" + "_".join(str(v) for v in params_dict.values())
+                else:
+                    output_col = ind_name.upper()
+            
+            default_long_val, default_short_val = 0.0, 0.0
+            default_op_long, default_op_short = ">", "<"
 
         compare_mode = st.sidebar.radio(
             f"Tipo di confronto {i+1}", 
