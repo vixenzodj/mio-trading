@@ -422,6 +422,10 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
                     
                     df = process_dataframe(df_raw, ticker, start_date, end_date)
                     
+                    # --- FIX VOLUME SINTETICO FOREX ---
+                    if 'Volume' not in df.columns or df['Volume'].sum() == 0:
+                        df['Volume'] = ((df['High'] - df['Low']) * 100000).clip(lower=1)
+                    
                     # Resampling per Timeframe custom
                     if not df.empty and timeframe not in ['1m', '1Min']:
                         resample_map = {
