@@ -2466,15 +2466,55 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
         def add_gex_levels(self, sensitivity=1.5):
             if self.df.empty: return
-            # Synthetic GEX Logic
-            self.df['Returns'] = self.df['Close'].pct_change()
-            self.df['Roll_Vol'] = self.df['Returns'].rolling(window=20).std() * np.sqrt(252)
-            self.df['ZeroGamma'] = self.df['Close'].rolling(window=20).mean()
             
-            # Dynamic Walls based on Volatility and Sensitivity
-            vol_mult = sensitivity * (1 + self.df['Roll_Vol'])
-            self.df['CallWall'] = self.df['ZeroGamma'] + (self.df['ATR'] * vol_mult)
-            self.df['PutWall'] = self.df['ZeroGamma'] - (self.df['ATR'] * vol_mult)
+            import numpy as np
+            
+            # --- NUOVA LOGICA PROXY GEX (VWAP & Volume-Weighted SD) ---
+            # 1. Calcolo del Prezzo Tipico e VP (Volume * Price)
+            self.df['Typical_Price'] = (self.df['High'] + self.df['Low'] + self.df['Close']) / 3.0
+            self.df['VP'] = self.df['Typical_Price'] * self.df['Volume']
+            
+            # 2. Logica differenziata: Anchored Daily per Intraday, Rolling per Daily
+            if self.timeframe.upper() in ['1D', '1DAY']:
+                # Rolling VWAP (20 periodi) per grafici giornalieri
+                window = 20
+                cum_vp = self.df['VP'].rolling(window=window, min_periods=1).sum()
+                cum_vol = self.df['Volume'].rolling(window=window, min_periods=1).sum()
+                self.df['ZeroGamma'] = cum_vp / cum_vol
+                
+                # Calcolo Varianza e Deviazione Standard ponderata ai volumi
+                self.df['Price_Diff_Sq'] = ((self.df['Typical_Price'] - self.df['ZeroGamma']) ** 2) * self.df['Volume']
+                vwap_var = self.df['Price_Diff_Sq'].rolling(window=window, min_periods=1).sum() / cum_vol
+                vwap_sd = np.sqrt(vwap_var)
+                
+            else:
+                # Anchored VWAP giornaliero per grafici Intraday (1H, 15Min, 5Min, 1Min)
+                self.df['Date'] = self.df['datetime'].dt.date
+                daily_groups = self.df.groupby('Date')
+                
+                cum_vp = daily_groups['VP'].cumsum()
+                cum_vol = daily_groups['Volume'].cumsum()
+                self.df['ZeroGamma'] = cum_vp / cum_vol
+                
+                # Calcolo Varianza e Deviazione Standard ancorata alla giornata
+                self.df['Price_Diff_Sq'] = ((self.df['Typical_Price'] - self.df['ZeroGamma']) ** 2) * self.df['Volume']
+                cum_price_diff_sq = daily_groups['Price_Diff_Sq'].cumsum()
+                
+                vwap_var = cum_price_diff_sq / cum_vol
+                vwap_sd = np.sqrt(vwap_var)
+
+            # --- DEFINIZIONE MURI (WALLS) DINAMICI ---
+            self.df['CallWall'] = self.df['ZeroGamma'] + (vwap_sd * sensitivity)
+            self.df['PutWall'] = self.df['ZeroGamma'] - (vwap_sd * sensitivity)
+            
+            # Pulizia colonne temporanee per ottimizzare la RAM
+            cols_to_drop = ['Typical_Price', 'VP', 'Date', 'Price_Diff_Sq']
+            self.df.drop(columns=[c for c in cols_to_drop if c in self.df.columns], inplace=True)
+            
+            # FFill e BFill per sicurezza
+            self.df['ZeroGamma'] = self.df['ZeroGamma'].ffill().bfill()
+            self.df['CallWall'] = self.df['CallWall'].ffill().bfill()
+            self.df['PutWall'] = self.df['PutWall'].ffill().bfill()
 
         def optimize_strategy(self, strategy_type, param_ranges, risk_reward, risk_per_trade, time_ranges=None):
             import itertools
