@@ -176,13 +176,18 @@ def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
         return pd.DataFrame()
 
 def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
-    if symbol.startswith("^"):
-        return fetch_yahoo_history(symbol, timeframe, start_str, end_str)
-
-    symbol_map = {
-        "SPX": "SPY", "NDX": "QQQ", "RUT": "IWM", "DJI": "DIA", "VIX": "VIXY"
-    } 
-    alpaca_sym = symbol_map.get(symbol.upper(), symbol.upper().replace("^", ""))
+    # GESTIONE INDICI CON PREZZI "REALI" (Proxy ETF + Scaling)
+    index_map = {
+        "SPX": ("SPY", "^GSPC"),
+        "NDX": ("QQQ", "^NDX"),
+        "RUT": ("IWM", "^RUT"),
+        "DJI": ("DIA", "^DJI"),
+        "VIX": ("VIXY", "^VIX")
+    }
+    
+    is_index = symbol.upper() in index_map
+    alpaca_sym = index_map[symbol.upper()][0] if is_index else symbol.upper().replace("^", "")
+    real_index_sym = index_map[symbol.upper()][1] if is_index else None
     
     headers = {
         "APCA-API-KEY-ID": st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"),
@@ -252,6 +257,23 @@ def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
         df = pd.DataFrame(all_bars)
         df['t'] = pd.to_datetime(df['t'])
         df.rename(columns={'t': 'datetime', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
+        
+        # SCALING LOGIC PER GLI INDICI
+        if is_index and real_index_sym:
+            try:
+                # Scarica il prezzo reale dell'indice da Yahoo Finance (solo l'ultimo giorno per calcolare il ratio)
+                real_idx_data = yf.download(real_index_sym, period="5d", progress=False)
+                if not real_idx_data.empty:
+                    real_close = real_idx_data['Close'].iloc[-1].item()
+                    etf_close = df['Close'].iloc[-1]
+                    ratio = real_close / etf_close
+                    
+                    # Moltiplica i prezzi dell'ETF per il ratio
+                    for col in ['Open', 'High', 'Low', 'Close']:
+                        df[col] = df[col] * ratio
+            except Exception as e:
+                st.warning(f"Impossibile scalare l'indice {symbol}: {e}")
+                
         return df
         
     return pd.DataFrame()
@@ -1184,14 +1206,18 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         if not trades_list: return fallback
         df = pd.DataFrame(trades_list)
         df.columns = [str(c).lower() for c in df.columns]
+        df = df.loc[:, ~df.columns.duplicated()] # Rimuove colonne doppie
         if 'pnl' not in df.columns: return fallback
         
         # FIX: Filtriamo solo le righe che rappresentano la chiusura di un trade (PnL diverso da zero)
         # o che contengono la stringa 'EXIT' nel tipo.
+        mask = df['pnl'] != 0
+        if 'direction' in df.columns:
+            mask = mask | df['direction'].astype(str).str.contains('EXIT', case=False, na=False)
         if 'type' in df.columns:
-            exits = df[df['type'].str.contains('EXIT', case=False, na=False)]
-        else:
-            exits = df[df['pnl'] != 0]
+            mask = mask | df['type'].astype(str).str.contains('EXIT', case=False, na=False)
+            
+        exits = df[mask]
             
         if exits.empty: return fallback
         
@@ -3034,7 +3060,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                     'Exit Price': exit_price,
                     'pnl': pnl,
                     'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
-                    'Type': 'long' if direction == 1 else 'short',
+                    'Direction': 'long' if direction == 1 else 'short',
                     'Status': exit_type,
                     'type': 'ENTRY LONG' if direction == 1 else 'ENTRY SHORT',
                     'time': entry_time,
@@ -3158,7 +3184,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                             'Exit Price': exit_price,
                             'pnl': pnl,
                             'Return %': (pnl / (position['entry'] * position['size'])) * 100 if position['size'] > 0 else 0,
-                            'Type': position['type'],
+                            'Direction': position['type'],
                             'Status': exit_type,
                             # Compatibility fields for Visualizer
                             'type': f"ENTRY {position['type'].upper()}", 
@@ -3237,7 +3263,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                                     'Exit Price': imm_price,
                                     'pnl': pnl,
                                     'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
-                                    'Type': signal,
+                                    'Direction': signal,
                                     'Status': imm_exit,
                                     'type': f"ENTRY {signal.upper()}",
                                     'time': curr['datetime'],
@@ -4228,8 +4254,19 @@ elif menu == "🛠️ STRATEGY BUILDER":
         if not trades_list: return fallback
         
         df = pd.DataFrame(trades_list)
+        df.columns = [str(c).lower() for c in df.columns]
+        df = df.loc[:, ~df.columns.duplicated()] # Rimuove colonne doppie
         if 'pnl' not in df.columns: return fallback
-        exits = df[df['pnl'].notna()]
+        
+        # FIX: Filtriamo solo le righe che rappresentano la chiusura di un trade (PnL diverso da zero)
+        # o che contengono la stringa 'EXIT' nel tipo.
+        mask = df['pnl'] != 0
+        if 'direction' in df.columns:
+            mask = mask | df['direction'].astype(str).str.contains('EXIT', case=False, na=False)
+        if 'type' in df.columns:
+            mask = mask | df['type'].astype(str).str.contains('EXIT', case=False, na=False)
+            
+        exits = df[mask]
         if exits.empty: return fallback
             
         wins = exits[exits['pnl'] > 0]['pnl']
@@ -4669,7 +4706,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
                             'Exit Price': exit_price,
                             'pnl': pnl,
                             'Return %': (pnl / (entry_price * size)) * 100 if size > 0 else 0,
-                            'Type': 'long' if position_type == 'LONG' else 'short',
+                            'Direction': 'long' if position_type == 'LONG' else 'short',
                             'Status': exit_type,
                             'type': f'EXIT {exit_type}',
                             'time': current_datetime,
