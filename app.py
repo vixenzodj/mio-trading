@@ -1177,19 +1177,20 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     def calculate_advanced_metrics(trades_list):
         fallback = {'expectancy': 0, 'profit_factor': 0, 'max_drawdown': 0, 'win_rate': 0, 'total_profit_abs': 0, 'max_dd_abs': 0}
-        if not trades_list:
-            return fallback
-            
+        if not trades_list: return fallback
         df = pd.DataFrame(trades_list)
         df.columns = [str(c).lower() for c in df.columns]
+        if 'pnl' not in df.columns: return fallback
         
-        if 'pnl' not in df.columns:
-            return fallback
+        # FIX: Filtriamo solo le righe che rappresentano la chiusura di un trade (PnL diverso da zero)
+        # o che contengono la stringa 'EXIT' nel tipo.
+        if 'type' in df.columns:
+            exits = df[df['type'].str.contains('EXIT', case=False, na=False)]
+        else:
+            exits = df[df['pnl'] != 0]
             
-        exits = df[df['pnl'].notna()]
-        if exits.empty:
-            return fallback
-            
+        if exits.empty: return fallback
+        
         wins = exits[exits['pnl'] > 0]['pnl']
         losses = exits[exits['pnl'] < 0]['pnl']
         
@@ -1197,13 +1198,13 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         avg_win = wins.mean() if not wins.empty else 0
         avg_loss = abs(losses.mean()) if not losses.empty else 0
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
-        profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
         
+        profit_factor = wins.sum() / abs(losses.sum()) if abs(losses.sum()) > 0 else float('inf')
         total_profit_abs = exits['pnl'].sum()
         
+        # Calcolo Drawdown (rimane invariato)
         bal_col = 'balance' if 'balance' in df.columns else None
-        max_dd = 0
-        max_dd_abs = 0
+        max_dd, max_dd_abs = 0, 0
         if bal_col:
             curve = df[bal_col].tolist()
             peak = curve[0]
@@ -1215,11 +1216,11 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
                 if dd_abs > max_dd_abs: max_dd_abs = dd_abs
                 
         return {
-            'expectancy': expectancy,
-            'profit_factor': profit_factor,
-            'max_drawdown': max_dd * 100,
-            'win_rate': win_rate * 100,
-            'total_profit_abs': total_profit_abs,
+            'expectancy': expectancy, 
+            'profit_factor': profit_factor, 
+            'max_drawdown': max_dd * 100, 
+            'win_rate': win_rate * 100, 
+            'total_profit_abs': total_profit_abs, 
             'max_dd_abs': max_dd_abs
         }
 
