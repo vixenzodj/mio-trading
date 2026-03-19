@@ -559,9 +559,14 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America
             
         if 'datetime' in df.columns:
             df['datetime'] = pd.to_datetime(df['datetime'])
-            if df['datetime'].dt.tz is None:
-                df['datetime'] = df['datetime'].dt.localize('UTC')
-            df['datetime'] = df['datetime'].dt.tz_convert(target_tz).dt.tz_localize(None)
+            try:
+                if df['datetime'].dt.tz is None:
+                    df['datetime'] = df['datetime'].dt.tz_localize('UTC', ambiguous='infer').dt.tz_convert(target_tz).dt.tz_localize(None)
+                else:
+                    df['datetime'] = df['datetime'].dt.tz_convert(target_tz).dt.tz_localize(None)
+            except Exception as e:
+                # Fallback estremo: se la conversione fallisce, manteniamo il tempo originale per non bloccare il sistema
+                st.warning(f"⚠️ Avviso Timezone: {e}. Utilizzo tempo originale.")
             
         # --- FIX AMBIGUITÀ PANDAS ---
         # Resettiamo l'indice PRIMA di ordinare. Questo elimina l'eventuale indice 'datetime'
@@ -1206,7 +1211,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
         if not trades_list: return fallback
         df = pd.DataFrame(trades_list)
         df.columns = [str(c).lower() for c in df.columns]
-        df = df.loc[:, ~df.columns.duplicated()] # Rimuove colonne doppie
+        df = df.loc[:, ~df.columns.duplicated()] # Elimina colonne con lo stesso nome
         if 'pnl' not in df.columns: return fallback
         
         # FIX: Filtriamo solo le righe che rappresentano la chiusura di un trade (PnL diverso da zero)
@@ -4255,7 +4260,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
         
         df = pd.DataFrame(trades_list)
         df.columns = [str(c).lower() for c in df.columns]
-        df = df.loc[:, ~df.columns.duplicated()] # Rimuove colonne doppie
+        df = df.loc[:, ~df.columns.duplicated()] # Elimina colonne con lo stesso nome
         if 'pnl' not in df.columns: return fallback
         
         # FIX: Filtriamo solo le righe che rappresentano la chiusura di un trade (PnL diverso da zero)
