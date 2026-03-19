@@ -307,7 +307,7 @@ def fetch_alpaca_crypto(symbol, timeframe, start_str, end_str):
     return pd.DataFrame()
 
 # --- DATA FETCHING ENHANCED ---
-def fetch_data_smart(ticker, timeframe, start_date, end_date):
+def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America/New_York"):
     import requests
     from datetime import timedelta
     
@@ -537,6 +537,9 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date):
             
         if 'datetime' in df.columns:
             df['datetime'] = pd.to_datetime(df['datetime'])
+            if df['datetime'].dt.tz is None:
+                df['datetime'] = df['datetime'].dt.localize('UTC')
+            df['datetime'] = df['datetime'].dt.tz_convert(target_tz).dt.tz_localize(None)
             
         # --- FIX AMBIGUITÀ PANDAS ---
         # Resettiamo l'indice PRIMA di ordinare. Questo elimina l'eventuale indice 'datetime'
@@ -1139,6 +1142,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     st.title("🛠️ Professional Backtesting Suite")
     
     st.sidebar.markdown("---")
+    tz_choice = st.sidebar.selectbox("🌍 Fuso Orario", ["America/New_York", "UTC", "Europe/Rome"], index=0)
     st.sidebar.markdown("### 🛡️ Risk & Robustness")
     friction_pct = st.sidebar.slider("Execution Friction (%)", 0.00, 0.50, 0.00, 0.01)
 
@@ -1348,7 +1352,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
     st.markdown("---")
     if st.button("🔍 Verifica Disponibilità Dati Storici"):
         with st.spinner(f"Ricerca dati storici per {ticker} dal {start_date} al {end_date}..."):
-            df_check = fetch_data_smart(ticker, timeframe, start_date, end_date)
+            df_check = fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz=tz_choice)
             
             if not df_check.empty:
                 # Check actual date range
@@ -2415,16 +2419,17 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             return long_sig.reindex(df.index, fill_value=False), short_sig.reindex(df.index, fill_value=False)
 
     class BacktestEngine:
-        def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000):
+        def __init__(self, ticker, start_date, end_date, timeframe, initial_capital=10000, target_tz="America/New_York"):
             self.ticker = ticker
             self.start_date = start_date
             self.end_date = end_date
             self.timeframe = timeframe
             self.initial_capital = initial_capital
+            self.target_tz = target_tz
             self.df = pd.DataFrame()
 
         def fetch_data(self):
-            self.df = fetch_data_smart(self.ticker, self.timeframe, self.start_date, self.end_date)
+            self.df = fetch_data_smart(self.ticker, self.timeframe, self.start_date, self.end_date, target_tz=self.target_tz)
             return not self.df.empty
 
         def add_technical_indicators(self):
@@ -3336,7 +3341,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
             
             return fig
 
-    engine = BacktestEngine(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), timeframe, initial_capital)
+    engine = BacktestEngine(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), timeframe, initial_capital, target_tz=tz_choice)
 
     # Use verified data if available
     if st.session_state.backtest_data is not None and st.session_state.backtest_ticker == ticker:
@@ -3860,6 +3865,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
     st.title("🛠️ Strategy Builder (No-Code)")
     
     st.sidebar.markdown("---")
+    tz_choice = st.sidebar.selectbox("🌍 Fuso Orario", ["America/New_York", "UTC", "Europe/Rome"], index=0)
     st.sidebar.markdown("### ⚙️ Impostazioni Base")
     
     # Time Filters UI
@@ -4719,7 +4725,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
             st.info(f"📥 Connessione a HistData. Download e decompressione di {ticker} in corso... (Potrebbe richiedere alcuni secondi)")
             
         with st.spinner("Fetching data and running strategy..."):
-            df = fetch_data_smart(ticker, timeframe, start_date, end_date)
+            df = fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz=tz_choice)
             if not df.empty:
                 # Calcolo indicatori istituzionali se necessari
                 if "VWAP Reversion" in core_strategies:
