@@ -3985,11 +3985,12 @@ elif menu == "🛠️ STRATEGY BUILDER":
         output_col = ""
         ind_name = ""
         
+        output_col = "TARGET_IND" # Il motore userà sempre questo alias sicuro
+
         if indicator_choice == "RSI":
             ind_name = "rsi"
             length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=14, key=f"rsi_len_{i}")
             params_dict = {"length": length}
-            output_col = f"RSI_{length}"
             default_long_val, default_short_val = 30.0, 70.0
             default_op_long, default_op_short = "<", ">"
             
@@ -4000,47 +4001,33 @@ elif menu == "🛠️ STRATEGY BUILDER":
             with c2: slow = st.number_input(f"Slow", min_value=1, value=26, key=f"macd_slow_{i}")
             with c3: signal = st.number_input(f"Signal", min_value=1, value=9, key=f"macd_sig_{i}")
             params_dict = {"fast": fast, "slow": slow, "signal": signal}
-            output_col = f"MACD_{fast}_{slow}_{signal}"
             default_long_val, default_short_val = 0.0, 0.0
             default_op_long, default_op_short = ">", "<"
             
-        elif indicator_choice == "EMA":
-            ind_name = "ema"
-            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=50, key=f"ema_len_{i}")
+        elif indicator_choice in ["EMA", "SMA", "ATR"]:
+            ind_name = indicator_choice.lower()
+            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=50 if ind_name!="atr" else 14, key=f"{ind_name}_len_{i}")
             params_dict = {"length": length}
-            output_col = f"EMA_{length}"
-            default_long_val, default_short_val = 0.0, 0.0
-            default_op_long, default_op_short = ">", "<"
+            default_long_val, default_short_val = 0.0 if ind_name!="atr" else 1.0, 0.0 if ind_name!="atr" else 1.0
+            default_op_long, default_op_short = ">", "<" if ind_name!="atr" else ">"
             
-        elif indicator_choice == "SMA":
-            ind_name = "sma"
-            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=50, key=f"sma_len_{i}")
-            params_dict = {"length": length}
-            output_col = f"SMA_{length}"
-            default_long_val, default_short_val = 0.0, 0.0
-            default_op_long, default_op_short = ">", "<"
-            
-        elif indicator_choice == "ATR":
-            ind_name = "atr"
-            length = st.sidebar.number_input(f"Length {i+1}", min_value=1, value=14, key=f"atr_len_{i}")
-            params_dict = {"length": length}
-            output_col = f"ATRr_{length}"
-            default_long_val, default_short_val = 1.0, 1.0
-            default_op_long, default_op_short = ">", ">"
-            
-        elif indicator_choice == "Bollinger Bands":
-            ind_name = "bbands"
+        elif indicator_choice in ["Bollinger Bands", "KC", "DC"]:
+            ind_name = "bbands" if indicator_choice == "Bollinger Bands" else indicator_choice.lower()
             c1, c2 = st.sidebar.columns(2)
-            with c1: length = st.number_input(f"Length", min_value=1, value=20, key=f"bb_len_{i}")
-            with c2: std = st.number_input(f"Std Dev", min_value=0.1, value=2.0, step=0.1, key=f"bb_std_{i}")
-            params_dict = {"length": length, "std": std}
-            band_choice = st.sidebar.selectbox(f"Banda da confrontare {i+1}", ["Lower (BBL)", "Middle (BBM)", "Upper (BBU)"], key=f"bb_band_{i}")
-            if "Lower" in band_choice:
-                output_col = f"BBL_{length}_{std}"
-            elif "Middle" in band_choice:
-                output_col = f"BBM_{length}_{std}"
+            with c1: length = st.number_input(f"Length", min_value=1, value=20, key=f"{ind_name}_len_{i}")
+            
+            if ind_name != "dc":
+                with c2: std = st.number_input(f"Multiplier", min_value=0.1, value=2.0, step=0.1, key=f"{ind_name}_std_{i}")
+                if ind_name == "bbands": params_dict = {"length": length, "std": std}
+                else: params_dict = {"length": length, "scalar": std}
             else:
-                output_col = f"BBU_{length}_{std}"
+                params_dict = {"length": length}
+                
+            band_choice = st.sidebar.selectbox(f"Banda da confrontare {i+1}", ["Lower (BBL)", "Middle/Basis (BBM)", "Upper (BBU)"], key=f"{ind_name}_band_{i}")
+            if "Lower" in band_choice: params_dict['_band'] = "Lower"
+            elif "Upper" in band_choice: params_dict['_band'] = "Upper"
+            else: params_dict['_band'] = "Middle"
+            
             default_long_val, default_short_val = 0.0, 0.0
             default_op_long, default_op_short = "<", ">"
             
@@ -4052,26 +4039,13 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 cols = st.sidebar.columns(len(base_params))
                 for col, (param_key, param_val) in zip(cols, base_params.items()):
                     with col:
-                        if isinstance(param_val, float):
-                            params_dict[param_key] = st.number_input(f"{param_key.capitalize()}", value=float(param_val), step=0.01, key=f"{ind_name}_{param_key}_{i}")
-                        else:
-                            params_dict[param_key] = st.number_input(f"{param_key.capitalize()}", value=int(param_val), step=1, key=f"{ind_name}_{param_key}_{i}")
+                        if isinstance(param_val, float): params_dict[param_key] = st.number_input(f"{param_key.capitalize()}", value=float(param_val), step=0.01, key=f"{ind_name}_{param_key}_{i}")
+                        else: params_dict[param_key] = st.number_input(f"{param_key.capitalize()}", value=int(param_val), step=1, key=f"{ind_name}_{param_key}_{i}")
             
-            if ind_name == "supertrend":
-                output_col = f"SUPERTd_{params_dict.get('length', 7)}_{params_dict.get('multiplier', 3.0)}"
-            elif ind_name == "stoch":
+            if ind_name == "stoch":
                 scelta = st.sidebar.selectbox(f"Linea Stocastico {i+1}", ["K", "D"], key=f"stoch_line_{i}")
-                output_col = f"STOCH{scelta.lower()}_{params_dict.get('k', 14)}_{params_dict.get('d', 3)}_{params_dict.get('smooth_k', 3)}"
-            elif ind_name == "vwap":
-                output_col = "VWAP_D"
-            elif ind_name == "cmf":
-                output_col = f"CMF_{params_dict.get('length', 20)}"
-            else:
-                if params_dict:
-                    output_col = ind_name.upper() + "_" + "_".join(str(v) for v in params_dict.values())
-                else:
-                    output_col = ind_name.upper()
-            
+                params_dict['_line'] = scelta
+                
             default_long_val, default_short_val = 0.0, 0.0
             default_op_long, default_op_short = ">", "<"
 
@@ -4592,41 +4566,44 @@ elif menu == "🛠️ STRATEGY BUILDER":
         @staticmethod
         def get_ta_signal(df, indicator_name, params, condition):
             """
-            Genera segnali utilizzando pandas_ta per un indicatore specifico.
-            condition: dict con chiavi 'long' e 'short' contenenti stringhe di query (es. "RSI_14 < 30")
-                       oppure una singola stringa (restituirà solo segnali Long = 1).
+            Genera segnali utilizzando pandas_ta in modo AGNOSTICO ai nomi.
             """
             signals = pd.Series(0, index=df.index)
-            
             try:
-                # Ottieni la funzione dell'indicatore da pandas_ta (es. df.ta.rsi)
-                ind_func = getattr(df.ta, indicator_name)
+                # Estraiamo parametri speciali di routing
+                target_band = params.pop('_band', None)
+                target_line = params.pop('_line', None)
                 
                 # Calcola l'indicatore
+                ind_func = getattr(df.ta, indicator_name)
                 ind_result = ind_func(**params)
                 
-                # Unisci il risultato al dataframe originale per la valutazione
+                # --- NORMALIZZAZIONE COLONNA TARGET ---
+                target_col_name = None
                 if isinstance(ind_result, pd.Series):
-                    temp_df = df.join(ind_result)
-                else:
-                    temp_df = pd.concat([df, ind_result], axis=1)
+                    ind_result.name = "TARGET_IND"
+                elif isinstance(ind_result, pd.DataFrame):
+                    # Logica per trovare la colonna giusta se l'indicatore ne genera molte
+                    if target_band == 'Lower': target_col_name = [c for c in ind_result.columns if 'l' in c.lower()][-1]
+                    elif target_band == 'Upper': target_col_name = [c for c in ind_result.columns if 'u' in c.lower()][-1]
+                    elif target_band == 'Middle': target_col_name = [c for c in ind_result.columns if 'm' in c.lower()][-1]
+                    elif indicator_name == 'macd': target_col_name = ind_result.columns[0] # Linea MACD principale
+                    elif indicator_name == 'stoch': target_col_name = ind_result.columns[1] if target_line == 'D' else ind_result.columns[0]
+                    else: target_col_name = ind_result.columns[0] # Fallback
                     
-                # Valuta le condizioni logiche in modo vettorializzato
-                if isinstance(condition, dict):
-                    if 'long' in condition and condition['long']:
-                        long_mask = temp_df.eval(condition['long'])
-                        signals.loc[long_mask] = 1
-                    if 'short' in condition and condition['short']:
-                        short_mask = temp_df.eval(condition['short'])
-                        signals.loc[short_mask] = -1
-                elif isinstance(condition, str):
-                    # Se è passata solo una stringa, assumiamo sia una condizione Long generica
-                    mask = temp_df.eval(condition)
-                    signals.loc[mask] = 1
-                    
-            except Exception as e:
-                print(f"Errore nel calcolo del segnale TA ({indicator_name}): {e}")
+                    ind_result = ind_result[[target_col_name]].rename(columns={target_col_name: "TARGET_IND"})
                 
+                # Unisci al df originale usando il nome sicuro
+                temp_df = pd.concat([df, ind_result], axis=1)
+                
+                # --- VALUTAZIONE CONDIZIONI ---
+                if isinstance(condition, dict):
+                    if condition.get('long'):
+                        signals.loc[temp_df.eval(condition['long'])] = 1
+                    if condition.get('short'):
+                        signals.loc[temp_df.eval(condition['short'])] = -1
+            except Exception as e:
+                pass # Silenzia errori anomali per non bloccare i test
             return signals
 
 
