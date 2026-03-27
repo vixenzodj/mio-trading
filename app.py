@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 import plotly.graph_objects as go
+import plotly.express as px
 from scipy import stats
 from scipy.stats import norm
 from scipy.optimize import brentq
@@ -1054,20 +1055,20 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     st.warning("Dati raw non disponibili per la Heatmap.")
 
             with tab_price:
+                # Inizializzazione chiavi per evitare reset
+                if f"visibili_{current_ticker}" not in st.session_state:
+                    st.session_state[f"visibili_{current_ticker}"] = 100
+                if f"offset_{current_ticker}" not in st.session_state:
+                    st.session_state[f"offset_{current_ticker}"] = 0
+                if f"proiezione_{current_ticker}" not in st.session_state:
+                    st.session_state[f"proiezione_{current_ticker}"] = 30
+                if f"padding_{current_ticker}" not in st.session_state:
+                    st.session_state[f"padding_{current_ticker}"] = 1.0
+
                 df_price = fetch_yahoo_history(current_ticker, "1Min", period="1d")
                 
                 if df_price is not None and not df_price.empty:
                     gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
-                    
-                    # --- INIZIALIZZAZIONE STATO SLIDER ---
-                    if f"visibili_{current_ticker}" not in st.session_state:
-                        st.session_state[f"visibili_{current_ticker}"] = min(100, len(df_price))
-                    if f"offset_{current_ticker}" not in st.session_state:
-                        st.session_state[f"offset_{current_ticker}"] = 0
-                    if f"proiezione_{current_ticker}" not in st.session_state:
-                        st.session_state[f"proiezione_{current_ticker}"] = 30
-                    if f"padding_{current_ticker}" not in st.session_state:
-                        st.session_state[f"padding_{current_ticker}"] = 1.0
 
                     # --- CONTROLLI ZOOM E VISTA GRAFICO ---
                     with st.expander("🔍 Controlli Zoom e Vista Grafico", expanded=True):
@@ -1188,27 +1189,25 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     intensita = min(1.0, abs(g_val) / max_gex)
                                     
                                     if intensita > 0.01:
-                                        alpha = 0.1 + intensita * 0.4
+                                        colorscale = px.colors.sequential.Viridis
+                                        color_idx = int(intensita * (len(colorscale) - 1))
+                                        base_color = colorscale[color_idx]
                                         
-                                        if g_val > 0:
-                                            color_fill = f'rgba(0, 150, 255, {alpha})'
-                                            color_line = f'rgba(0, 150, 255, 1.0)'
-                                        else:
-                                            color_fill = f'rgba(255, 50, 50, {alpha})'
-                                            color_line = f'rgba(255, 50, 50, 1.0)'
-                                            
+                                        rgba_color = base_color.replace('rgb', 'rgba').replace(')', f', {0.1 + intensita*0.5})')
+                                        
                                         fig_price.add_hrect(
-                                            y0=s_val * 0.999, 
-                                            y1=s_val * 1.001, 
-                                            fillcolor=color_fill, 
+                                            y0=s_val * 0.9998, 
+                                            y1=s_val * 1.0002, 
+                                            fillcolor=rgba_color, 
                                             layer='below', 
                                             line_width=0
                                         )
                                         
                                         fig_price.add_hline(
                                             y=s_val,
-                                            line_color=color_line,
+                                            line_color=base_color,
                                             line_width=1,
+                                            line_dash="dot",
                                             layer='below'
                                         )
 
