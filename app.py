@@ -1061,27 +1061,42 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     # --- CONTROLLI ZOOM E VISTA GRAFICO ---
                     with st.expander("🔍 Controlli Zoom e Vista Grafico", expanded=True):
-                        col_z1, col_z2, col_z3 = st.columns(3)
+                        col_z1, col_z2, col_z3, col_z4 = st.columns(4)
                         with col_z1:
-                            visibili = st.slider("Candele Visibili", min_value=10, max_value=len(df_price), value=min(100, len(df_price)))
+                            visibili = st.slider("Candele Visibili", 5, len(df_price), min(100, len(df_price)))
                         with col_z2:
-                            offset = st.slider("Sposta Indietro (Offset)", min_value=0, max_value=max(0, len(df_price) - 10), value=0)
+                            offset = st.slider("Sposta nel Passato (Offset)", 0, len(df_price), 0)
                         with col_z3:
-                            padding = st.slider("Padding Prezzo %", min_value=0.1, max_value=5.0, value=0.5, step=0.1)
+                            proiezione = st.slider("Proiezione Futuro (Minuti)", 0, 120, 30)
+                        with col_z4:
+                            padding = st.slider("Padding Prezzo %", 0.1, 10.0, 1.0)
 
                     # --- CALCOLO LIMITI VISTA ---
+                    # Calcolo indici per i dati reali
                     end_idx = len(df_price) - offset
                     start_idx = max(0, end_idx - visibili)
                     
-                    # Estrai i dati visibili per calcolare min/max
-                    visible_data = df_price.iloc[start_idx:end_idx]
+                    # Calcolo Tempi (Asse X)
+                    # Punto di partenza: la candela all'indice start_idx
+                    t_start = df_price['datetime'].iloc[start_idx]
                     
-                    if not visible_data.empty:
-                        x_range = [visible_data['datetime'].iloc[0], visible_data['datetime'].iloc[-1]]
-                        prezzo_min = visible_data['Low'].min() * (1 - padding/100)
-                        prezzo_max = visible_data['High'].max() * (1 + padding/100)
+                    # Punto di arrivo reale: l'ultima candela visibile nel set attuale
+                    if end_idx > 0:
+                        t_end_data = df_price['datetime'].iloc[end_idx - 1]
                     else:
-                        x_range = [df_price['datetime'].iloc[0], df_price['datetime'].iloc[-1]]
+                        t_end_data = df_price['datetime'].iloc[0]
+                    
+                    # Punto di arrivo finale: aggiungiamo i minuti di proiezione
+                    t_end_final = t_end_data + pd.Timedelta(minutes=proiezione)
+                    
+                    x_range = [t_start, t_end_final]
+                    
+                    # Calcolo Prezzi (Asse Y) basato solo sulle candele effettivamente visibili
+                    subset = df_price.iloc[start_idx:end_idx]
+                    if not subset.empty:
+                        prezzo_min = subset['Low'].min() * (1 - padding/100)
+                        prezzo_max = subset['High'].max() * (1 + padding/100)
+                    else:
                         prezzo_min = df_price['Low'].min() * (1 - padding/100)
                         prezzo_max = df_price['High'].max() * (1 + padding/100)
 
