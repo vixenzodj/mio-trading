@@ -137,28 +137,31 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
     except:
         return None
 
-def fetch_yahoo_history(symbol, timeframe, start_str, end_str):
+def fetch_yahoo_history(symbol, timeframe, start_str=None, end_str=None, period=None):
     # Mapping Timeframe Yahoo
     tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
     tf = tf_map.get(timeframe, "1d")
     
-    # Controllo Limiti Yahoo Intraday
-    start_dt = datetime.strptime(start_str, '%Y-%m-%d')
-    end_dt = datetime.strptime(end_str, '%Y-%m-%d')
-    delta_days = (end_dt - start_dt).days
-    
-    if delta_days > 7 and tf == "1m":
-        st.warning("⚠️ Yahoo limita i dati 1Min a 7 giorni. Passaggio automatico a 1H.")
-        tf = "1h"
-    elif delta_days > 60 and tf in ["5m", "15m"]:
-        st.warning("⚠️ Yahoo limita i dati 5Min/15Min a 60 giorni. Passaggio automatico a 1D.")
-        tf = "1d"
-    elif delta_days > 730 and tf == "1h":
-        st.warning("⚠️ Yahoo limita i dati 1H a 730 giorni. Passaggio automatico a 1D.")
-        tf = "1d"
-
     try:
-        df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False)
+        if period:
+            df = yf.download(symbol, period=period, interval=tf, progress=False, prepost=True)
+        else:
+            # Controllo Limiti Yahoo Intraday
+            start_dt = datetime.strptime(start_str, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_str, '%Y-%m-%d')
+            delta_days = (end_dt - start_dt).days
+            
+            if delta_days > 7 and tf == "1m":
+                st.warning("⚠️ Yahoo limita i dati 1Min a 7 giorni. Passaggio automatico a 1H.")
+                tf = "1h"
+            elif delta_days > 60 and tf in ["5m", "15m"]:
+                st.warning("⚠️ Yahoo limita i dati 5Min/15Min a 60 giorni. Passaggio automatico a 1D.")
+                tf = "1d"
+            elif delta_days > 730 and tf == "1h":
+                st.warning("⚠️ Yahoo limita i dati 1H a 730 giorni. Passaggio automatico a 1D.")
+                tf = "1d"
+        
+            df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False, prepost=True)
         
         if df.empty: return pd.DataFrame()
         
@@ -1051,12 +1054,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     st.warning("Dati raw non disponibili per la Heatmap.")
 
             with tab_price:
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=2)
-                start_str = start_date.strftime("%Y-%m-%d")
-                end_str = end_date.strftime("%Y-%m-%d")
-                
-                df_price = fetch_yahoo_history(current_ticker, "5Min", start_str, end_str)
+                df_price = fetch_yahoo_history(current_ticker, "1Min", period="1d")
                 
                 if df_price is not None and not df_price.empty:
                     gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
@@ -1081,8 +1079,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         p_wall_touch = abs(spot - p_wall) / spot < 0.005
                         v_trig_touch = abs(spot - v_trigger) / spot < 0.005
                         
-                        c_wall_color = "rgba(0, 200, 255, 0.6)" if c_wall_touch else "rgba(0, 200, 255, 0.3)"
-                        p_wall_color = "rgba(255, 100, 0, 0.6)" if p_wall_touch else "rgba(255, 100, 0, 0.3)"
+                        c_wall_color = "rgba(0, 255, 0, 0.6)" if c_wall_touch else "rgba(0, 255, 0, 0.3)"
+                        p_wall_color = "rgba(255, 0, 0, 0.6)" if p_wall_touch else "rgba(255, 0, 0, 0.3)"
                         v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
                         
                         z_w = spot * 0.002
@@ -1098,14 +1096,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
                     
                     fig_price.update_layout(
-                        title=f"Price Action (5m) vs Muri Quant - {current_ticker}",
+                        title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
                         xaxis_title="Data/Ora",
                         yaxis_title="Prezzo",
                         template="plotly_dark",
-                        xaxis_rangeslider_visible=False,
+                        xaxis=dict(resizemode='shift', rangeslider=dict(visible=False)),
                         height=600,
                         uirevision=current_ticker,
-                        dragmode='pan'
+                        dragmode='pan',
+                        hovermode='x unified'
                     )
                     
                     fig_price.update_xaxes(type='date', uirevision=current_ticker, fixedrange=False)
@@ -1125,30 +1124,25 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                         continue
                                         
                                     alpha = min(0.4, (abs(g_val) / max_gex) * 0.5)
-                                    lw = 0
-                                    lc = None
                                     
                                     if abs(spot - s_val) / spot < 0.003:
                                         alpha = min(alpha * 2.0, 0.7)
-                                        lw = 1
-                                        lc = "rgba(255, 255, 255, 0.8)"
                                         
                                     if alpha > 0.01:
                                         if g_val > 0:
-                                            color = f'rgba(0, 255, 255, {alpha})'
+                                            color = f'rgba(0, 255, 0, {alpha})'
                                         else:
-                                            color = f'rgba(255, 69, 0, {alpha})'
+                                            color = f'rgba(255, 0, 0, {alpha})'
                                             
                                         fig_price.add_hrect(
                                             y0=s_val * 0.999, 
                                             y1=s_val * 1.001, 
                                             fillcolor=color, 
                                             layer='below', 
-                                            line_width=lw,
-                                            line_color=lc
+                                            line_width=0
                                         )
 
-                    st.plotly_chart(fig_price, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'modeBarButtonsToAdd': ['drawline', 'drawrect', 'eraseshape'], 'responsive': True})
+                    st.plotly_chart(fig_price, use_container_width=True, key=f"chart_{current_ticker}", config={'scrollZoom': True, 'displayModeBar': True, 'responsive': True})
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
