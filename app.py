@@ -1086,15 +1086,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         )
                     
                     # 2. Aggiorniamo SOLO I DATI della traccia Candlestick esistente (Indice 0)
-                    st.session_state[fig_key].data[0].x = df_price['datetime']
-                    st.session_state[fig_key].data[0].open = df_price['Open']
-                    st.session_state[fig_key].data[0].high = df_price['High']
-                    st.session_state[fig_key].data[0].low = df_price['Low']
-                    st.session_state[fig_key].data[0].close = df_price['Close']
-                    st.session_state[fig_key].data[0].increasing_line_color = '#00ff88'
-                    st.session_state[fig_key].data[0].decreasing_line_color = '#ff3333'
-                    st.session_state[fig_key].data[0].increasing_fillcolor = '#00A666'
-                    st.session_state[fig_key].data[0].decreasing_fillcolor = '#EF4F4F'
+                    traccia = st.session_state[fig_key].data[0]
+                    traccia.x = df_price['datetime']
+                    traccia.open = df_price['Open']
+                    traccia.high = df_price['High']
+                    traccia.low = df_price['Low']
+                    traccia.close = df_price['Close']
+                    
+                    # Sintassi corretta per i colori in Plotly Candlestick
+                    traccia.increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
+                    traccia.decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
                     
                     # Usa la figura dalla sessione
                     fig_price = st.session_state[fig_key]
@@ -1161,12 +1162,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                         )
 
                     st.plotly_chart(
-                        fig_price, 
+                        st.session_state[fig_key], 
                         use_container_width=True, 
-                        key=f"chart_stable_{current_ticker}", 
-                        on_select="ignore", 
+                        key=f"fixed_chart_{current_ticker}", 
                         theme=None, 
-                        config={'scrollZoom': True, 'displayModeBar': True, 'modeBarButtonsToAdd': ['drawline', 'drawrect', 'eraseshape'], 'responsive': True}
+                        config={'scrollZoom': True}
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
