@@ -1100,7 +1100,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         xaxis_title="Data/Ora",
                         yaxis_title="Prezzo",
                         template="plotly_dark",
-                        xaxis=dict(resizemode='shift', rangeslider=dict(visible=False)),
+                        xaxis=dict(rangeslider=dict(visible=False)),
                         height=600,
                         uirevision=current_ticker,
                         dragmode='pan',
@@ -1142,7 +1142,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                             line_width=0
                                         )
 
-                    st.plotly_chart(fig_price, use_container_width=True, key=f"chart_{current_ticker}", config={'scrollZoom': True, 'displayModeBar': True, 'responsive': True})
+                    st.plotly_chart(fig_price, use_container_width=True, key=f"price_chart_{current_ticker}", config={'scrollZoom': True, 'displayModeBar': True, 'responsive': True})
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
