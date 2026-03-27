@@ -1059,6 +1059,32 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 if df_price is not None and not df_price.empty:
                     gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
                     
+                    # --- CONTROLLI ZOOM E VISTA GRAFICO ---
+                    with st.expander("🔍 Controlli Zoom e Vista Grafico", expanded=True):
+                        col_z1, col_z2, col_z3 = st.columns(3)
+                        with col_z1:
+                            visibili = st.slider("Candele Visibili", min_value=10, max_value=len(df_price), value=min(100, len(df_price)))
+                        with col_z2:
+                            offset = st.slider("Sposta Indietro (Offset)", min_value=0, max_value=max(0, len(df_price) - 10), value=0)
+                        with col_z3:
+                            padding = st.slider("Padding Prezzo %", min_value=0.1, max_value=5.0, value=0.5, step=0.1)
+
+                    # --- CALCOLO LIMITI VISTA ---
+                    end_idx = len(df_price) - offset
+                    start_idx = max(0, end_idx - visibili)
+                    
+                    # Estrai i dati visibili per calcolare min/max
+                    visible_data = df_price.iloc[start_idx:end_idx]
+                    
+                    if not visible_data.empty:
+                        x_range = [visible_data['datetime'].iloc[0], visible_data['datetime'].iloc[-1]]
+                        prezzo_min = visible_data['Low'].min() * (1 - padding/100)
+                        prezzo_max = visible_data['High'].max() * (1 + padding/100)
+                    else:
+                        x_range = [df_price['datetime'].iloc[0], df_price['datetime'].iloc[-1]]
+                        prezzo_min = df_price['Low'].min() * (1 - padding/100)
+                        prezzo_max = df_price['High'].max() * (1 + padding/100)
+
                     # Definisci la chiave di sessione per la figura
                     fig_key = f"fig_price_{current_ticker}"
                     
@@ -1070,17 +1096,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         
                         # Impostiamo il layout SOLO ORA
-                        y_min = df_price['Low'].min() * 0.995
-                        y_max = df_price['High'].max() * 1.005
                         st.session_state[fig_key].update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
                             xaxis_title="Data/Ora",
                             yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            yaxis=dict(range=[y_min, y_max]),
                             height=700,
-                            uirevision='constant', # FONDAMENTALE
+                            uirevision=current_ticker, # FONDAMENTALE
                             dragmode='pan',
                             hovermode='x unified'
                         )
@@ -1099,6 +1122,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     # Usa la figura dalla sessione
                     fig_price = st.session_state[fig_key]
+                    
+                    # --- APPLICAZIONE RIGIDA AI LIMITI DEL GRAFICO ---
+                    fig_price.update_xaxes(range=x_range, autorange=False)
+                    fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                     
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
