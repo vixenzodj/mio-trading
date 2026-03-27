@@ -1059,6 +1059,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 df_price = fetch_yahoo_history(current_ticker, "5Min", start_str, end_str)
                 
                 if df_price is not None and not df_price.empty:
+                    gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
+                    
                     fig_price = go.Figure(data=[go.Candlestick(
                         x=df_price['datetime'],
                         open=df_price['Open'],
@@ -1067,6 +1069,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         close=df_price['Close'],
                         name="Price"
                     )])
+                    
+                    if gamma_mode:
+                        y_max = max(df_price['High'].max(), c_wall, v_trigger) * 1.05
+                        y_min = min(df_price['Low'].min(), p_wall, v_trigger) * 0.95
+                        
+                        fig_price.add_hrect(y0=z_gamma, y1=y_max, fillcolor="rgba(0, 255, 0, 0.1)", layer="below", line_width=0, annotation_text="STABILITY", annotation_position="top left")
+                        fig_price.add_hrect(y0=y_min, y1=z_gamma, fillcolor="rgba(255, 0, 0, 0.1)", layer="below", line_width=0, annotation_text="VOLATILITY", annotation_position="bottom left")
+                        
+                        c_wall_touch = abs(spot - c_wall) / spot < 0.005
+                        p_wall_touch = abs(spot - p_wall) / spot < 0.005
+                        v_trig_touch = abs(spot - v_trigger) / spot < 0.005
+                        
+                        c_wall_color = "rgba(0, 200, 255, 0.6)" if c_wall_touch else "rgba(0, 200, 255, 0.3)"
+                        p_wall_color = "rgba(255, 100, 0, 0.6)" if p_wall_touch else "rgba(255, 100, 0, 0.3)"
+                        v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
+                        
+                        z_w = spot * 0.002
+                        
+                        fig_price.add_hrect(y0=c_wall - z_w, y1=c_wall + z_w, fillcolor=c_wall_color, layer="below", line_width=0, annotation_text="CALL WALL", annotation_position="inside right")
+                        fig_price.add_hrect(y0=p_wall - z_w, y1=p_wall + z_w, fillcolor=p_wall_color, layer="below", line_width=0, annotation_text="PUT WALL", annotation_position="inside right")
+                        fig_price.add_hrect(y0=v_trigger - z_w, y1=v_trigger + z_w, fillcolor=v_trig_color, layer="below", line_width=0)
                     
                     fig_price.add_hline(y=c_wall, line_color="green", line_dash="dash", annotation_text="Call Wall")
                     fig_price.add_hline(y=p_wall, line_color="red", line_dash="dash", annotation_text="Put Wall")
