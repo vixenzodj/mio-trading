@@ -1105,6 +1105,36 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         xaxis_rangeslider_visible=False,
                         height=600
                     )
+                    
+                    if gamma_mode:
+                        if 'df' in locals() and not df.empty:
+                            xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
+                            max_gex = xray_agg['Gamma'].abs().max()
+                            
+                            if max_gex > 0:
+                                for _, row in xray_agg.iterrows():
+                                    s_val = row['strike']
+                                    g_val = row['Gamma']
+                                    
+                                    if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2:
+                                        continue
+                                        
+                                    alpha = min((abs(g_val) / max_gex) * 0.45, 0.5)
+                                    
+                                    if alpha > 0.01:
+                                        if g_val > 0:
+                                            color = f'rgba(0, 255, 0, {alpha})'
+                                        else:
+                                            color = f'rgba(255, 0, 0, {alpha})'
+                                            
+                                        fig_price.add_hrect(
+                                            y0=s_val * 0.999, 
+                                            y1=s_val * 1.001, 
+                                            fillcolor=color, 
+                                            layer='below', 
+                                            line_width=0
+                                        )
+
                     st.plotly_chart(fig_price, use_container_width=True)
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
