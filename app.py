@@ -1067,15 +1067,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         high=df_price['High'],
                         low=df_price['Low'],
                         close=df_price['Close'],
-                        name="Price"
+                        name="Price",
+                        increasing_line_color='#00A666', decreasing_line_color='#EF4F4F',
+                        increasing_fillcolor='#00A666', decreasing_fillcolor='#EF4F4F',
+                        line=dict(width=1)
                     )])
                     
                     if gamma_mode:
                         y_max = max(df_price['High'].max(), c_wall, v_trigger) * 1.05
                         y_min = min(df_price['Low'].min(), p_wall, v_trigger) * 0.95
-                        
-                        fig_price.add_hrect(y0=z_gamma, y1=y_max, fillcolor="rgba(0, 255, 0, 0.1)", layer="below", line_width=0, annotation_text="STABILITY", annotation_position="top left")
-                        fig_price.add_hrect(y0=y_min, y1=z_gamma, fillcolor="rgba(255, 0, 0, 0.1)", layer="below", line_width=0, annotation_text="VOLATILITY", annotation_position="bottom left")
                         
                         c_wall_touch = abs(spot - c_wall) / spot < 0.005
                         p_wall_touch = abs(spot - p_wall) / spot < 0.005
@@ -1103,7 +1103,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         yaxis_title="Prezzo",
                         template="plotly_dark",
                         xaxis_rangeslider_visible=False,
-                        height=600
+                        height=600,
+                        uirevision=current_ticker,
+                        dragmode='pan'
                     )
                     
                     if gamma_mode:
@@ -1119,13 +1121,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2:
                                         continue
                                         
-                                    alpha = min((abs(g_val) / max_gex) * 0.45, 0.5)
+                                    alpha = (abs(g_val) / max_gex) * 0.4
                                     
+                                    if abs(spot - s_val) / spot < 0.003:
+                                        alpha = min(alpha * 1.5, 0.8)
+                                        
                                     if alpha > 0.01:
                                         if g_val > 0:
-                                            color = f'rgba(0, 255, 0, {alpha})'
+                                            color = f'rgba(0, 255, 255, {alpha})'
                                         else:
-                                            color = f'rgba(255, 0, 0, {alpha})'
+                                            color = f'rgba(255, 69, 0, {alpha})'
                                             
                                         fig_price.add_hrect(
                                             y0=s_val * 0.999, 
