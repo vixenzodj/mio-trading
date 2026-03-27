@@ -1068,7 +1068,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         low=df_price['Low'],
                         close=df_price['Close'],
                         name="Price",
-                        increasing_line_color='#00A666', decreasing_line_color='#EF4F4F',
+                        increasing_line_color='#00ff88', decreasing_line_color='#ff3333',
                         increasing_fillcolor='#00A666', decreasing_fillcolor='#EF4F4F',
                         line=dict(width=1)
                     )])
@@ -1104,7 +1104,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         template="plotly_dark",
                         xaxis_rangeslider_visible=False,
                         height=600,
-                        uirevision=current_ticker,
+                        uirevision=True,
                         dragmode='pan'
                     )
                     
@@ -1121,10 +1121,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2:
                                         continue
                                         
-                                    alpha = (abs(g_val) / max_gex) * 0.4
+                                    alpha = min(0.4, (abs(g_val) / max_gex) * 0.5)
+                                    lw = 0
+                                    lc = None
                                     
                                     if abs(spot - s_val) / spot < 0.003:
-                                        alpha = min(alpha * 1.5, 0.8)
+                                        alpha = min(alpha * 2.0, 0.7)
+                                        lw = 1
+                                        lc = "rgba(255, 255, 255, 0.8)"
                                         
                                     if alpha > 0.01:
                                         if g_val > 0:
@@ -1137,10 +1141,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                             y1=s_val * 1.001, 
                                             fillcolor=color, 
                                             layer='below', 
-                                            line_width=0
+                                            line_width=lw,
+                                            line_color=lc
                                         )
 
-                    st.plotly_chart(fig_price, use_container_width=True)
+                    st.plotly_chart(fig_price, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
