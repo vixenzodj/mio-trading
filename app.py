@@ -1100,20 +1100,21 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         xaxis_title="Data/Ora",
                         yaxis_title="Prezzo",
                         template="plotly_dark",
-                        xaxis_rangeslider_visible=False,
-                        height=700,
+                        xaxis=dict(rangeslider=dict(visible=False)),
+                        height=600,
                         uirevision=current_ticker,
                         dragmode='pan',
                         hovermode='x unified'
                     )
                     
-                    fig_price.update_xaxes(uirevision=current_ticker, type='date')
-                    
+                    # Imposta i limiti SOLO al primo caricamento per centrare il prezzo.
+                    # Rimuovi l'else! Se non è il primo caricamento, non toccare gli assi.
                     if f"first_load_{current_ticker}" not in st.session_state:
-                        fig_price.update_yaxes(range=[df_price['Low'].min() * 0.999, df_price['High'].max() * 1.001], uirevision=current_ticker)
-                        st.session_state[f"first_load_{current_ticker}"] = False
-                    else:
-                        fig_price.update_yaxes(autorange=None, uirevision=current_ticker)
+                        y_min = df_price['Low'].min() * 0.995
+                        y_max = df_price['High'].max() * 1.005
+                        fig_price.update_xaxes(type='date')
+                        fig_price.update_yaxes(range=[y_min, y_max])
+                        st.session_state[f"first_load_{current_ticker}"] = True
                     
                     if gamma_mode:
                         if 'df' in locals() and not df.empty:
@@ -1147,7 +1148,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                             line_width=0
                                         )
 
-                    st.plotly_chart(fig_price, use_container_width=True, key=f"chart_stable_{current_ticker}", on_select="ignore", config={'scrollZoom': True, 'displayModeBar': True, 'responsive': True})
+                    st.plotly_chart(
+                        fig_price, 
+                        use_container_width=True, 
+                        key=f"chart_stable_{current_ticker}", 
+                        on_select="ignore", 
+                        theme=None, 
+                        config={'scrollZoom': True, 'displayModeBar': True, 'modeBarButtonsToAdd': ['drawline', 'drawrect', 'eraseshape'], 'responsive': True}
+                    )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
