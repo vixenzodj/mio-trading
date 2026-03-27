@@ -973,6 +973,66 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             )
             st.plotly_chart(fig, use_container_width=True)
 
+            # --- NUOVE FUNZIONALITÀ VISIVE AVANZATE ---
+            tab_iv, tab_price = st.tabs(["🔥 Analisi Volatilità Implicita (Heatmap)", "📈 Price Action vs Muri Quant"])
+
+            with tab_iv:
+                if 'raw_data' in locals() and not raw_data.empty:
+                    fig_iv = go.Figure(data=go.Heatmap(
+                        z=raw_data['impliedVolatility'],
+                        x=raw_data['exp'],
+                        y=raw_data['strike'],
+                        colorscale='Inferno',
+                        hoverongaps=False
+                    ))
+                    fig_iv.update_layout(
+                        title="Heatmap Volatilità Implicita",
+                        xaxis_title="Scadenza",
+                        yaxis_title="Strike Price",
+                        yaxis=dict(range=[spot * 0.85, spot * 1.15]),
+                        template="plotly_dark",
+                        height=600
+                    )
+                    st.plotly_chart(fig_iv, use_container_width=True)
+                else:
+                    st.warning("Dati raw non disponibili per la Heatmap.")
+
+            with tab_price:
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=2)
+                start_str = start_date.strftime("%Y-%m-%d")
+                end_str = end_date.strftime("%Y-%m-%d")
+                
+                df_price = fetch_yahoo_history(current_ticker, "5Min", start_str, end_str)
+                
+                if df_price is not None and not df_price.empty:
+                    fig_price = go.Figure(data=[go.Candlestick(
+                        x=df_price['datetime'],
+                        open=df_price['Open'],
+                        high=df_price['High'],
+                        low=df_price['Low'],
+                        close=df_price['Close'],
+                        name="Price"
+                    )])
+                    
+                    fig_price.add_hline(y=c_wall, line_color="green", line_dash="dash", annotation_text="Call Wall")
+                    fig_price.add_hline(y=p_wall, line_color="red", line_dash="dash", annotation_text="Put Wall")
+                    fig_price.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="Zero Gamma")
+                    fig_price.add_hline(y=z_gamma_dyn, line_color="cyan", line_dash="dash", annotation_text="Zero Gamma Dyn")
+                    fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
+                    
+                    fig_price.update_layout(
+                        title=f"Price Action (5m) vs Muri Quant - {current_ticker}",
+                        xaxis_title="Data/Ora",
+                        yaxis_title="Prezzo",
+                        template="plotly_dark",
+                        xaxis_rangeslider_visible=False,
+                        height=600
+                    )
+                    st.plotly_chart(fig_price, use_container_width=True)
+                else:
+                    st.warning("Dati intraday non disponibili per il grafico Price Action.")
+
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
     c1, c2 = st.columns([1, 4])
