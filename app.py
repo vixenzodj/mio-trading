@@ -1104,9 +1104,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         template="plotly_dark",
                         xaxis_rangeslider_visible=False,
                         height=600,
-                        uirevision=True,
+                        uirevision=current_ticker,
                         dragmode='pan'
                     )
+                    
+                    fig_price.update_xaxes(type='date', uirevision=current_ticker, fixedrange=False)
+                    fig_price.update_yaxes(uirevision=current_ticker, fixedrange=False)
                     
                     if gamma_mode:
                         if 'df' in locals() and not df.empty:
@@ -1145,7 +1148,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                             line_color=lc
                                         )
 
-                    st.plotly_chart(fig_price, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
+                    st.plotly_chart(fig_price, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'modeBarButtonsToAdd': ['drawline', 'drawrect', 'eraseshape'], 'responsive': True})
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
