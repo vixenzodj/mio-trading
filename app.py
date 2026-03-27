@@ -1059,17 +1059,48 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 if df_price is not None and not df_price.empty:
                     gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
                     
-                    fig_price = go.Figure(data=[go.Candlestick(
-                        x=df_price['datetime'],
-                        open=df_price['Open'],
-                        high=df_price['High'],
-                        low=df_price['Low'],
-                        close=df_price['Close'],
-                        name="Price",
-                        increasing_line_color='#00ff88', decreasing_line_color='#ff3333',
-                        increasing_fillcolor='#00A666', decreasing_fillcolor='#EF4F4F',
-                        line=dict(width=1)
-                    )])
+                    # Definisci la chiave di sessione per la figura
+                    fig_key = f"fig_price_{current_ticker}"
+                    
+                    # 1. Se la figura non esiste, la creiamo DA ZERO (Primo caricamento)
+                    if fig_key not in st.session_state:
+                        st.session_state[fig_key] = go.Figure()
+                        
+                        # Aggiungiamo le candele vuote (la traccia base)
+                        st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
+                        
+                        # Impostiamo il layout SOLO ORA
+                        y_min = df_price['Low'].min() * 0.995
+                        y_max = df_price['High'].max() * 1.005
+                        st.session_state[fig_key].update_layout(
+                            title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                            xaxis_title="Data/Ora",
+                            yaxis_title="Prezzo",
+                            template="plotly_dark",
+                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
+                            yaxis=dict(range=[y_min, y_max]),
+                            height=700,
+                            uirevision='constant', # FONDAMENTALE
+                            dragmode='pan',
+                            hovermode='x unified'
+                        )
+                    
+                    # 2. Aggiorniamo SOLO I DATI della traccia Candlestick esistente (Indice 0)
+                    st.session_state[fig_key].data[0].x = df_price['datetime']
+                    st.session_state[fig_key].data[0].open = df_price['Open']
+                    st.session_state[fig_key].data[0].high = df_price['High']
+                    st.session_state[fig_key].data[0].low = df_price['Low']
+                    st.session_state[fig_key].data[0].close = df_price['Close']
+                    st.session_state[fig_key].data[0].increasing_line_color = '#00ff88'
+                    st.session_state[fig_key].data[0].decreasing_line_color = '#ff3333'
+                    st.session_state[fig_key].data[0].increasing_fillcolor = '#00A666'
+                    st.session_state[fig_key].data[0].decreasing_fillcolor = '#EF4F4F'
+                    
+                    # Usa la figura dalla sessione
+                    fig_price = st.session_state[fig_key]
+                    
+                    fig_price.layout.shapes = ()
+                    fig_price.layout.annotations = ()
                     
                     if gamma_mode:
                         y_max = max(df_price['High'].max(), c_wall, v_trigger) * 1.05
@@ -1095,26 +1126,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     fig_price.add_hline(y=z_gamma_dyn, line_color="cyan", line_dash="dash", annotation_text="Zero Gamma Dyn")
                     fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
                     
-                    fig_price.update_layout(
-                        title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                        xaxis_title="Data/Ora",
-                        yaxis_title="Prezzo",
-                        template="plotly_dark",
-                        xaxis=dict(rangeslider=dict(visible=False)),
-                        height=600,
-                        uirevision=current_ticker,
-                        dragmode='pan',
-                        hovermode='x unified'
-                    )
-                    
-                    # Imposta i limiti SOLO al primo caricamento per centrare il prezzo.
-                    # Rimuovi l'else! Se non è il primo caricamento, non toccare gli assi.
-                    if f"first_load_{current_ticker}" not in st.session_state:
-                        y_min = df_price['Low'].min() * 0.995
-                        y_max = df_price['High'].max() * 1.005
-                        fig_price.update_xaxes(type='date')
-                        fig_price.update_yaxes(range=[y_min, y_max])
-                        st.session_state[f"first_load_{current_ticker}"] = True
+
                     
                     if gamma_mode:
                         if 'df' in locals() and not df.empty:
