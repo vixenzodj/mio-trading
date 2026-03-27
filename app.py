@@ -1059,17 +1059,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 if df_price is not None and not df_price.empty:
                     gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
                     
+                    # --- INIZIALIZZAZIONE STATO SLIDER ---
+                    if f"visibili_{current_ticker}" not in st.session_state:
+                        st.session_state[f"visibili_{current_ticker}"] = min(100, len(df_price))
+                    if f"offset_{current_ticker}" not in st.session_state:
+                        st.session_state[f"offset_{current_ticker}"] = 0
+                    if f"proiezione_{current_ticker}" not in st.session_state:
+                        st.session_state[f"proiezione_{current_ticker}"] = 30
+                    if f"padding_{current_ticker}" not in st.session_state:
+                        st.session_state[f"padding_{current_ticker}"] = 1.0
+
                     # --- CONTROLLI ZOOM E VISTA GRAFICO ---
                     with st.expander("🔍 Controlli Zoom e Vista Grafico", expanded=True):
                         col_z1, col_z2, col_z3, col_z4 = st.columns(4)
                         with col_z1:
-                            visibili = st.slider("Candele Visibili", 5, len(df_price), min(100, len(df_price)))
+                            visibili = st.slider("Candele Visibili", 5, len(df_price), key=f"visibili_{current_ticker}")
                         with col_z2:
-                            offset = st.slider("Sposta nel Passato (Offset)", 0, len(df_price), 0)
+                            offset = st.slider("Sposta nel Passato (Offset)", 0, len(df_price), key=f"offset_{current_ticker}")
                         with col_z3:
-                            proiezione = st.slider("Proiezione Futuro (Minuti)", 0, 120, 30)
+                            proiezione = st.slider("Proiezione Futuro (Minuti)", 0, 120, key=f"proiezione_{current_ticker}")
                         with col_z4:
-                            padding = st.slider("Padding Prezzo %", 0.1, 10.0, 1.0)
+                            padding = st.slider("Padding Prezzo %", 0.1, 10.0, key=f"padding_{current_ticker}")
 
                     # --- CALCOLO LIMITI VISTA ---
                     # Calcolo indici per i dati reali
@@ -1149,22 +1159,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         y_max = max(df_price['High'].max(), c_wall, v_trigger) * 1.05
                         y_min = min(df_price['Low'].min(), p_wall, v_trigger) * 0.95
                         
-                        c_wall_touch = abs(spot - c_wall) / spot < 0.005
-                        p_wall_touch = abs(spot - p_wall) / spot < 0.005
                         v_trig_touch = abs(spot - v_trigger) / spot < 0.005
-                        
-                        c_wall_color = "rgba(0, 255, 0, 0.6)" if c_wall_touch else "rgba(0, 255, 0, 0.3)"
-                        p_wall_color = "rgba(255, 0, 0, 0.6)" if p_wall_touch else "rgba(255, 0, 0, 0.3)"
                         v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
                         
                         z_w = spot * 0.002
                         
-                        fig_price.add_hrect(y0=c_wall - z_w, y1=c_wall + z_w, fillcolor=c_wall_color, layer="below", line_width=0, annotation_text="CALL WALL", annotation_position="inside right")
-                        fig_price.add_hrect(y0=p_wall - z_w, y1=p_wall + z_w, fillcolor=p_wall_color, layer="below", line_width=0, annotation_text="PUT WALL", annotation_position="inside right")
                         fig_price.add_hrect(y0=v_trigger - z_w, y1=v_trigger + z_w, fillcolor=v_trig_color, layer="below", line_width=0)
                     
-                    fig_price.add_hline(y=c_wall, line_color="green", line_dash="dash", annotation_text="Call Wall")
-                    fig_price.add_hline(y=p_wall, line_color="red", line_dash="dash", annotation_text="Put Wall")
                     fig_price.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="Zero Gamma")
                     fig_price.add_hline(y=z_gamma_dyn, line_color="cyan", line_dash="dash", annotation_text="Zero Gamma Dyn")
                     fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
@@ -1184,23 +1185,31 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2:
                                         continue
                                         
-                                    alpha = min(0.4, (abs(g_val) / max_gex) * 0.5)
+                                    intensita = min(1.0, abs(g_val) / max_gex)
                                     
-                                    if abs(spot - s_val) / spot < 0.003:
-                                        alpha = min(alpha * 2.0, 0.7)
+                                    if intensita > 0.01:
+                                        alpha = 0.1 + intensita * 0.4
                                         
-                                    if alpha > 0.01:
                                         if g_val > 0:
-                                            color = f'rgba(0, 255, 0, {alpha})'
+                                            color_fill = f'rgba(0, 150, 255, {alpha})'
+                                            color_line = f'rgba(0, 150, 255, 1.0)'
                                         else:
-                                            color = f'rgba(255, 0, 0, {alpha})'
+                                            color_fill = f'rgba(255, 50, 50, {alpha})'
+                                            color_line = f'rgba(255, 50, 50, 1.0)'
                                             
                                         fig_price.add_hrect(
                                             y0=s_val * 0.999, 
                                             y1=s_val * 1.001, 
-                                            fillcolor=color, 
+                                            fillcolor=color_fill, 
                                             layer='below', 
                                             line_width=0
+                                        )
+                                        
+                                        fig_price.add_hline(
+                                            y=s_val,
+                                            line_color=color_line,
+                                            line_width=1,
+                                            layer='below'
                                         )
 
                     st.plotly_chart(
