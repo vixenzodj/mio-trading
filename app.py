@@ -978,12 +978,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             with tab_iv:
                 if 'raw_data' in locals() and not raw_data.empty:
+                    # 1. TRASFORMAZIONE DATI & 2. FILTRO QUALITÀ
+                    iv_data = raw_data.copy()
+                    iv_data['impliedVolatility'] = iv_data['impliedVolatility'] * 100
+                    iv_data = iv_data[iv_data['impliedVolatility'] >= 0.1]
+
                     fig_iv = go.Figure(data=go.Heatmap(
-                        z=raw_data['impliedVolatility'],
-                        x=raw_data['exp'],
-                        y=raw_data['strike'],
-                        colorscale='Inferno',
-                        hoverongaps=False
+                        z=iv_data['impliedVolatility'],
+                        x=iv_data['exp'],
+                        y=iv_data['strike'],
+                        colorscale='Viridis',
+                        hoverongaps=False,
+                        zsmooth="best",
+                        colorbar=dict(ticksuffix="%", tickformat=".1f")
                     ))
                     fig_iv.update_layout(
                         title="Heatmap Volatilità Implicita",
