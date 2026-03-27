@@ -996,11 +996,57 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         title="Heatmap Volatilità Implicita",
                         xaxis_title="Scadenza",
                         yaxis_title="Strike Price",
-                        yaxis=dict(range=[spot * 0.85, spot * 1.15]),
+                        yaxis=dict(range=[spot * 0.85, spot * 1.15], autorange=False),
                         template="plotly_dark",
                         height=600
                     )
+                    
+                    fig_iv.add_hline(
+                        y=spot, 
+                        line_dash="dash", 
+                        line_color="white", 
+                        line_width=2, 
+                        annotation_text=f"SPOT: {spot:.2f}", 
+                        annotation_position="bottom right"
+                    )
+                    
                     st.plotly_chart(fig_iv, use_container_width=True)
+                    
+                    st.markdown("---")
+                    skew_selected_date = st.selectbox("Seleziona Scadenza per Grafico Skew Curve", raw_data['exp'].unique())
+                    
+                    if skew_selected_date:
+                        skew_df = raw_data[raw_data['exp'] == skew_selected_date].copy()
+                        skew_df = skew_df.sort_values(by='strike', ascending=True)
+                        
+                        fig_skew = go.Figure()
+                        fig_skew.add_trace(go.Scatter(
+                            x=skew_df['strike'], 
+                            y=skew_df['impliedVolatility'] * 100, 
+                            mode='lines+markers', 
+                            line=dict(color='cyan', width=3, shape='spline'), 
+                            marker=dict(color='white', size=8, line=dict(color='cyan', width=2)), 
+                            name='IV Skew'
+                        ))
+                        
+                        fig_skew.add_vline(
+                            x=spot, 
+                            line_dash="dash", 
+                            line_color="white", 
+                            line_width=2, 
+                            annotation_text=f"SPOT: {spot:.2f}", 
+                            annotation_position="top left"
+                        )
+                        
+                        fig_skew.update_layout(
+                            template="plotly_dark",
+                            title="Analisi Skew (Volatilità per Strike) - Stile Quant",
+                            xaxis_title="Strike Price",
+                            yaxis_title="Volatilità Implicita (%)",
+                            xaxis=dict(range=[spot * 0.85, spot * 1.15])
+                        )
+                        
+                        st.plotly_chart(fig_skew, use_container_width=True)
                 else:
                     st.warning("Dati raw non disponibili per la Heatmap.")
 
