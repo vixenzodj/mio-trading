@@ -65,42 +65,42 @@ STRATEGY_PARAM_GRID = {
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
 # --- CORE QUANT ENGINE ---
-def calculate_gex_at_price(price, df, r=0.045):
+def calculate_gex_at_price(price, df, r=0.045, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
-    # Logica originale: OI + 50% Volume
     exposure_size = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
-    d1 = (np.log(price/K) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
-    gamma = norm.pdf(d1) / (price * iv * np.sqrt(T))
+    d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    gamma = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
     side = np.where(df['type'] == 'call', 1, -1)
     return np.sum(gamma * exposure_size * 100 * price * side)
 
-def calculate_0g_dynamic(price, df, r=0.045):
+def calculate_0g_dynamic(price, df, r=0.045, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
-    # NUOVA LOGICA: Solo Volumi di giornata
     exposure_size = df['volume'].fillna(0).values 
-    d1 = (np.log(price/K) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
-    gamma = norm.pdf(d1) / (price * iv * np.sqrt(T))
+    d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    gamma = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
     side = np.where(df['type'] == 'call', 1, -1)
     return np.sum(gamma * exposure_size * 100 * price * side)
 
-def get_greeks_pro(df, S, r=0.045):
+def get_greeks_pro(df, S, r=0.045, q=0.0):
     if df.empty: return df
     df = df[df['impliedVolatility'] > 0.01].copy()
     K, iv, T = df['strike'].values, df['impliedVolatility'].values, np.maximum(df['dte_years'].values, 0.0001)
     oi_vol_weighted = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
-    d1 = (np.log(S/K) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    
+    d1 = (np.log(S/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     d2 = d1 - iv * np.sqrt(T)
     pdf = norm.pdf(d1)
     side = np.where(df['type'] == 'call', 1, -1)
-    df['Gamma'] = (pdf / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi_vol_weighted * 100 * side
-    df['Vanna'] = S * pdf * (d1 / iv) * 0.01 * oi_vol_weighted * side
-    df['Charm'] = (pdf * (r / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi_vol_weighted * 100 * side
-    df['Vega']  = S * pdf * np.sqrt(T) * 0.01 * oi_vol_weighted * 100
-    df['Theta'] = ((-(S * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side))) * (1/365) * oi_vol_weighted * 100
+    
+    df['Gamma'] = (pdf * np.exp(-q * T) / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi_vol_weighted * 100 * side
+    df['Vanna'] = S * np.exp(-q * T) * pdf * (d1 / iv) * 0.01 * oi_vol_weighted * side
+    df['Charm'] = (pdf * np.exp(-q * T) * ((r - q) / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi_vol_weighted * 100 * side
+    df['Vega']  = S * np.exp(-q * T) * pdf * np.sqrt(T) * 0.01 * oi_vol_weighted * 100
+    df['Theta'] = ((-(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side)) + side * (q * S * np.exp(-q * T) * norm.cdf(d1 * side))) * (1/365) * oi_vol_weighted * 100
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -665,6 +665,34 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         
         if not raw_data.empty:
             raw_data['dte_years'] = raw_data['exp'].apply(lambda x: max((datetime.strptime(x, '%Y-%m-%d') - today).days, 0.5)) / 365
+            
+            # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
+            try:
+                div_yield = ticker_obj.info.get('dividendYield', 0.0)
+                if div_yield is None: div_yield = 0.0
+            except:
+                div_yield = 0.0
+
+            # Funzione sicura di ricalcolo IV sul Mid-Price
+            def refine_iv_vectorized(row):
+                try:
+                    b, a = row.get('bid', 0), row.get('ask', 0)
+                    if b > 0 and a > 0:
+                        mid = (b + a) / 2
+                        K_val, T_val, opt_type = row['strike'], max(row['dte_years'], 0.0001), row['type']
+                        def bs_price(x_iv):
+                            d1_tmp = (np.log(spot/K_val) + (0.045 - div_yield + 0.5 * x_iv**2) * T_val) / (x_iv * np.sqrt(T_val))
+                            d2_tmp = d1_tmp - x_iv * np.sqrt(T_val)
+                            if opt_type == 'call': 
+                                return spot * np.exp(-div_yield*T_val) * norm.cdf(d1_tmp) - K_val * np.exp(-0.045*T_val) * norm.cdf(d2_tmp)
+                            else: 
+                                return K_val * np.exp(-0.045*T_val) * norm.cdf(-d2_tmp) - spot * np.exp(-div_yield*T_val) * norm.cdf(-d1_tmp)
+                        return brentq(lambda x: bs_price(x) - mid, 0.001, 5.0)
+                except: pass
+                return row['impliedVolatility']
+
+            # Applica il raffinamento alla colonna impliedVolatility originale
+            raw_data['impliedVolatility'] = raw_data.apply(refine_iv_vectorized, axis=1)
             mean_iv = raw_data['impliedVolatility'].mean()
             dte_ref = (datetime.strptime(target_dates[0], '%Y-%m-%d') - today).days + 0.5
             
@@ -708,14 +736,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             # ---------------------------------------------
 
             # CALCOLO 0-GAMMA ORIGINALE
-            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data,))
+            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data, 0.045, div_yield))
             except: z_gamma = spot 
-            
+
             # CALCOLO 0-GAMMA DINAMICO (SOLO VOLUMI)
-            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.85, spot * 1.15, args=(raw_data,))
+            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.85, spot * 1.15, args=(raw_data, 0.045, div_yield))
             except: z_gamma_dyn = spot
 
-            df = get_greeks_pro(raw_data, spot)
+            df = get_greeks_pro(raw_data, spot, r=0.045, q=div_yield)
             
             # --- LOGICA DI AGGREGAZIONE MATEMATICA (Binning Dinamico) ---
             # Usiamo floor division per forzare ogni contratto nel proprio bin matematico
