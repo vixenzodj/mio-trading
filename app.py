@@ -138,7 +138,7 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
     except:
         return None
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def fetch_yahoo_history(symbol, timeframe, start_str=None, end_str=None, period=None):
     try:
         tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
@@ -583,7 +583,7 @@ menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
-    st_autorefresh(interval=60000, key="sentinel_dash_refresh")
+    st_autorefresh(interval=20000, key="sentinel_dash_refresh")
 elif menu == "🔥 SCANNER HOT TICKERS":
     st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
