@@ -140,35 +140,20 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_yahoo_history(symbol, timeframe, start_str=None, end_str=None, period=None):
-    tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
-    tf = tf_map.get(timeframe, "1d")
-    
-    for attempt in range(2):
-        try:
-            if period:
-                df = yf.download(symbol, period=period, interval=tf, progress=False, prepost=True)
-            else:
-                start_dt = datetime.strptime(start_str, '%Y-%m-%d')
-                end_dt = datetime.strptime(end_str, '%Y-%m-%d')
-                delta_days = (end_dt - start_dt).days
-                if delta_days > 7 and tf == "1m": tf = "1h"
-                elif delta_days > 60 and tf in ["5m", "15m"]: tf = "1d"
-                elif delta_days > 730 and tf == "1h": tf = "1d"
-                df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False, prepost=True)
-            
-            if df.empty: return pd.DataFrame()
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-            df.reset_index(inplace=True)
-            col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
-            df.rename(columns=col_map, inplace=True)
-            df['datetime'] = pd.to_datetime(df['datetime'])
-            df.ffill().bfill(inplace=True)
-            return df
-        except Exception as e:
-            if attempt == 1:
-                st.error(f"Errore Yahoo (Rate Limit): {e}")
-                return pd.DataFrame()
-            time.sleep(1)
+    try:
+        tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
+        tf = tf_map.get(timeframe, "1m")
+        df = yf.download(symbol, period=period if period else None, start=start_str, end=end_str, interval=tf, progress=False, prepost=True)
+        if df.empty: return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        df.reset_index(inplace=True)
+        col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
+        df.rename(columns=col_map, inplace=True)
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df.ffill().bfill(inplace=True)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
 
 def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     # GESTIONE INDICI CON PREZZI "REALI" (Proxy ETF + Scaling)
@@ -1067,7 +1052,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             xaxis_title="Strike Price",
                             yaxis_title="Volatilità Implicita (%)",
                             xaxis=dict(range=[spot * 0.85, spot * 1.15])
-                                 # 1. Inizializzazione chiavi robuste
+                        )
+                        st.plotly_chart(fig_skew, use_container_width=True)
+
+            with tab_price:
+                # 1. Inizializzazione chiavi robuste
                 def init_slider(key, default_val):
                     if key not in st.session_state:
                         st.session_state[key] = default_val
