@@ -138,46 +138,37 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
     except:
         return None
 
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_yahoo_history(symbol, timeframe, start_str=None, end_str=None, period=None):
-    # Mapping Timeframe Yahoo
     tf_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1H": "1h", "1D": "1d"}
     tf = tf_map.get(timeframe, "1d")
     
-    try:
-        if period:
-            df = yf.download(symbol, period=period, interval=tf, progress=False, prepost=True)
-        else:
-            # Controllo Limiti Yahoo Intraday
-            start_dt = datetime.strptime(start_str, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_str, '%Y-%m-%d')
-            delta_days = (end_dt - start_dt).days
+    for attempt in range(2):
+        try:
+            if period:
+                df = yf.download(symbol, period=period, interval=tf, progress=False, prepost=True)
+            else:
+                start_dt = datetime.strptime(start_str, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_str, '%Y-%m-%d')
+                delta_days = (end_dt - start_dt).days
+                if delta_days > 7 and tf == "1m": tf = "1h"
+                elif delta_days > 60 and tf in ["5m", "15m"]: tf = "1d"
+                elif delta_days > 730 and tf == "1h": tf = "1d"
+                df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False, prepost=True)
             
-            if delta_days > 7 and tf == "1m":
-                st.warning("⚠️ Yahoo limita i dati 1Min a 7 giorni. Passaggio automatico a 1H.")
-                tf = "1h"
-            elif delta_days > 60 and tf in ["5m", "15m"]:
-                st.warning("⚠️ Yahoo limita i dati 5Min/15Min a 60 giorni. Passaggio automatico a 1D.")
-                tf = "1d"
-            elif delta_days > 730 and tf == "1h":
-                st.warning("⚠️ Yahoo limita i dati 1H a 730 giorni. Passaggio automatico a 1D.")
-                tf = "1d"
-        
-            df = yf.download(symbol, start=start_str, end=end_str, interval=tf, progress=False, prepost=True)
-        
-        if df.empty: return pd.DataFrame()
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df.reset_index(inplace=True)
-        col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
-        df.rename(columns=col_map, inplace=True)
-        df['datetime'] = pd.to_datetime(df['datetime'])
-        df.ffill().bfill(inplace=True)
-        return df
-    except Exception as e:
-        st.error(f"Errore Yahoo Finance: {e}")
-        return pd.DataFrame()
+            if df.empty: return pd.DataFrame()
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            df.reset_index(inplace=True)
+            col_map = {'Date': 'datetime', 'Datetime': 'datetime', 'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'}
+            df.rename(columns=col_map, inplace=True)
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df.ffill().bfill(inplace=True)
+            return df
+        except Exception as e:
+            if attempt == 1:
+                st.error(f"Errore Yahoo (Rate Limit): {e}")
+                return pd.DataFrame()
+            time.sleep(1)
 
 def fetch_alpaca_history(symbol, timeframe, start_str, end_str):
     # GESTIONE INDICI CON PREZZI "REALI" (Proxy ETF + Scaling)
@@ -1076,61 +1067,51 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             xaxis_title="Strike Price",
                             yaxis_title="Volatilità Implicita (%)",
                             xaxis=dict(range=[spot * 0.85, spot * 1.15])
-                        )
-                        
-                        st.plotly_chart(fig_skew, use_container_width=True)
-                else:
-                    st.warning("Dati raw non disponibili per la Heatmap.")
+                                 # 1. Inizializzazione chiavi robuste
+                def init_slider(key, default_val):
+                    if key not in st.session_state:
+                        st.session_state[key] = default_val
 
-            with tab_price:
-                # Inizializzazione chiavi per evitare reset
-                if f"visibili_{current_ticker}" not in st.session_state:
-                    st.session_state[f"visibili_{current_ticker}"] = 100
-                if f"offset_{current_ticker}" not in st.session_state:
-                    st.session_state[f"offset_{current_ticker}"] = 0
-                if f"proiezione_{current_ticker}" not in st.session_state:
-                    st.session_state[f"proiezione_{current_ticker}"] = 30
-                if f"padding_{current_ticker}" not in st.session_state:
-                    st.session_state[f"padding_{current_ticker}"] = 1.0
+                init_slider(f"visibili_{current_ticker}", 100)
+                init_slider(f"offset_{current_ticker}", 0)
+                init_slider(f"proiezione_{current_ticker}", 30)
+                init_slider(f"padding_{current_ticker}", 1.0)
+                init_slider("force_zoom_update", True) # Flag per aggiornare assi solo se si muove lo slider
+
+                # 2. Callback: Salva valore e forza l'aggiornamento degli assi
+                def update_slider(key):
+                    st.session_state[key] = st.session_state[f"{key}_widget"]
+                    st.session_state["force_zoom_update"] = True
 
                 df_price = fetch_yahoo_history(current_ticker, "1Min", period="1d")
                 
                 if df_price is not None and not df_price.empty:
                     gamma_mode = st.toggle("Attiva Visualizzazione Gamma/Volatilità Live", value=False)
 
-                    # --- CONTROLLI ZOOM E VISTA GRAFICO ---
                     with st.expander("🔍 Controlli Zoom e Vista Grafico", expanded=True):
                         col_z1, col_z2, col_z3, col_z4 = st.columns(4)
                         with col_z1:
-                            visibili = st.slider("Candele Visibili", 5, len(df_price), key=f"visibili_{current_ticker}")
+                            st.slider("Candele Visibili", 5, len(df_price), value=st.session_state[f"visibili_{current_ticker}"], key=f"visibili_{current_ticker}_widget", on_change=update_slider, args=(f"visibili_{current_ticker}",))
+                            visibili = st.session_state[f"visibili_{current_ticker}"]
                         with col_z2:
-                            offset = st.slider("Sposta nel Passato (Offset)", 0, len(df_price), key=f"offset_{current_ticker}")
+                            st.slider("Sposta (Offset)", 0, len(df_price), value=st.session_state[f"offset_{current_ticker}"], key=f"offset_{current_ticker}_widget", on_change=update_slider, args=(f"offset_{current_ticker}",))
+                            offset = st.session_state[f"offset_{current_ticker}"]
                         with col_z3:
-                            proiezione = st.slider("Proiezione Futuro (Minuti)", 0, 120, key=f"proiezione_{current_ticker}")
+                            st.slider("Futuro (Min)", 0, 120, value=st.session_state[f"proiezione_{current_ticker}"], key=f"proiezione_{current_ticker}_widget", on_change=update_slider, args=(f"proiezione_{current_ticker}",))
+                            proiezione = st.session_state[f"proiezione_{current_ticker}"]
                         with col_z4:
-                            padding = st.slider("Padding Prezzo %", 0.1, 10.0, key=f"padding_{current_ticker}")
+                            st.slider("Padding %", 0.1, 10.0, value=st.session_state[f"padding_{current_ticker}"], key=f"padding_{current_ticker}_widget", on_change=update_slider, args=(f"padding_{current_ticker}",))
+                            padding = st.session_state[f"padding_{current_ticker}"]
 
                     # --- CALCOLO LIMITI VISTA ---
-                    # Calcolo indici per i dati reali
                     end_idx = len(df_price) - offset
                     start_idx = max(0, end_idx - visibili)
                     
-                    # Calcolo Tempi (Asse X)
-                    # Punto di partenza: la candela all'indice start_idx
                     t_start = df_price['datetime'].iloc[start_idx]
-                    
-                    # Punto di arrivo reale: l'ultima candela visibile nel set attuale
-                    if end_idx > 0:
-                        t_end_data = df_price['datetime'].iloc[end_idx - 1]
-                    else:
-                        t_end_data = df_price['datetime'].iloc[0]
-                    
-                    # Punto di arrivo finale: aggiungiamo i minuti di proiezione
+                    t_end_data = df_price['datetime'].iloc[end_idx - 1] if end_idx > 0 else df_price['datetime'].iloc[0]
                     t_end_final = t_end_data + pd.Timedelta(minutes=proiezione)
-                    
                     x_range = [t_start, t_end_final]
                     
-                    # Calcolo Prezzi (Asse Y) basato solo sulle candele effettivamente visibili
                     subset = df_price.iloc[start_idx:end_idx]
                     if not subset.empty:
                         prezzo_min = subset['Low'].min() * (1 - padding/100)
@@ -1139,110 +1120,73 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         prezzo_min = df_price['Low'].min() * (1 - padding/100)
                         prezzo_max = df_price['High'].max() * (1 + padding/100)
 
-                    # Definisci la chiave di sessione per la figura
                     fig_key = f"fig_price_{current_ticker}"
                     
-                    # 1. Se la figura non esiste, la creiamo DA ZERO (Primo caricamento)
+                    # 1. Creazione Figura Base
                     if fig_key not in st.session_state:
                         st.session_state[fig_key] = go.Figure()
-                        
-                        # Aggiungiamo le candele vuote (la traccia base)
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
-                        
-                        # Impostiamo il layout SOLO ORA
                         st.session_state[fig_key].update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                            xaxis_title="Data/Ora",
-                            yaxis_title="Prezzo",
+                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
                             height=700,
-                            uirevision=current_ticker, # FONDAMENTALE
-                            dragmode='pan',
-                            hovermode='x unified'
+                            uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
+                            dragmode='pan', hovermode='x unified'
                         )
                     
-                    # 2. Aggiorniamo SOLO I DATI della traccia Candlestick esistente (Indice 0)
-                    traccia = st.session_state[fig_key].data[0]
+                    fig_price = st.session_state[fig_key]
+                    
+                    # 2. Aggiornamento Dati (Invia tutto per permettere lo scroll)
+                    traccia = fig_price.data[0]
                     traccia.x = df_price['datetime']
                     traccia.open = df_price['Open']
                     traccia.high = df_price['High']
                     traccia.low = df_price['Low']
                     traccia.close = df_price['Close']
-                    
-                    # Sintassi corretta per i colori in Plotly Candlestick
                     traccia.increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
                     traccia.decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
                     
-                    # Usa la figura dalla sessione
-                    fig_price = st.session_state[fig_key]
-                    
-                    # --- APPLICAZIONE RIGIDA AI LIMITI DEL GRAFICO ---
-                    fig_price.update_xaxes(range=x_range, autorange=False)
-                    fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
+                    # 3. AGGIORNAMENTO CONDIZIONALE DEGLI ASSI
+                    # Avviene SOLO se l'utente ha mosso gli slider. Se è un autorefresh, salta e lascia lo zoom intatto!
+                    if st.session_state["force_zoom_update"]:
+                        fig_price.update_xaxes(range=x_range, autorange=False)
+                        fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
+                        st.session_state["force_zoom_update"] = False
                     
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
                     
+                    # 4. Disegno Muri
                     if gamma_mode:
-                        y_max = max(df_price['High'].max(), c_wall, v_trigger) * 1.05
-                        y_min = min(df_price['Low'].min(), p_wall, v_trigger) * 0.95
-                        
                         v_trig_touch = abs(spot - v_trigger) / spot < 0.005
                         v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
-                        
-                        z_w = spot * 0.002
-                        
-                        fig_price.add_hrect(y0=v_trigger - z_w, y1=v_trigger + z_w, fillcolor=v_trig_color, layer="below", line_width=0)
+                        fig_price.add_hrect(y0=v_trigger - spot*0.002, y1=v_trigger + spot*0.002, fillcolor=v_trig_color, layer="below", line_width=0)
                     
                     fig_price.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="Zero Gamma")
                     fig_price.add_hline(y=z_gamma_dyn, line_color="cyan", line_dash="dash", annotation_text="Zero Gamma Dyn")
                     fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
                     
-
-                    
-                    if gamma_mode:
-                        if 'df' in locals() and not df.empty:
-                            xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
-                            max_gex = xray_agg['Gamma'].abs().max()
-                            
-                            if max_gex > 0:
-                                for _, row in xray_agg.iterrows():
-                                    s_val = row['strike']
-                                    g_val = row['Gamma']
-                                    
-                                    if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2:
-                                        continue
-                                        
-                                    intensita = min(1.0, abs(g_val) / max_gex)
-                                    
-                                    if intensita > 0.01:
-                                        colorscale = px.colors.sequential.Viridis
-                                        color_idx = int(intensita * (len(colorscale) - 1))
-                                        base_color = colorscale[color_idx]
-                                        
-                                        rgba_color = base_color.replace('rgb', 'rgba').replace(')', f', {0.1 + intensita*0.5})')
-                                        
-                                        fig_price.add_hrect(
-                                            y0=s_val * 0.9998, 
-                                            y1=s_val * 1.0002, 
-                                            fillcolor=rgba_color, 
-                                            layer='below', 
-                                            line_width=0
-                                        )
-                                        
-                                        fig_price.add_hline(
-                                            y=s_val,
-                                            line_color=base_color,
-                                            line_width=1,
-                                            line_dash="dot",
-                                            layer='below'
-                                        )
+                    if gamma_mode and 'df' in locals() and not df.empty:
+                        xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
+                        max_gex = xray_agg['Gamma'].abs().max()
+                        if max_gex > 0:
+                            for _, row in xray_agg.iterrows():
+                                s_val, g_val = row['strike'], row['Gamma']
+                                if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2: continue
+                                intensita = min(1.0, abs(g_val) / max_gex)
+                                if intensita > 0.01:
+                                    colorscale = px.colors.sequential.Viridis
+                                    base_color = colorscale[int(intensita * (len(colorscale) - 1))]
+                                    rgba_color = base_color.replace('rgb', 'rgba').replace(')', f', {0.1 + intensita*0.5})')
+                                    fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
+                                    fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
                     st.plotly_chart(
-                        st.session_state[fig_key], 
+                        fig_price, 
                         use_container_width=True, 
-                        key=f"fixed_chart_{current_ticker}", 
+                        key=f"fixed_chart_{current_ticker}_render", 
                         theme=None, 
                         config={'scrollZoom': True}
                     )
