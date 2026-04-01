@@ -582,10 +582,10 @@ def get_whale_intelligence(ticker):
                 rename_map_idx = {str(c): str(c).capitalize() for c in df_idx.columns}
                 df_idx.rename(columns=rename_map_idx, inplace=True)
                 
-                last_idx_close = df_idx['Close'].dropna().iloc[-1]
-                last_etf_close = df['Close'].dropna().iloc[-1]
+                last_idx_close = float(df_idx['Close'].dropna().iloc[-1])
+                last_etf_close = float(df['Close'].dropna().iloc[-1])
                 if last_etf_close > 0:
-                    ratio = float(last_idx_close / last_etf_close)
+                    ratio = last_idx_close / last_etf_close
         
         # FIX CHIRURGICO 2: Normalizzazione aggressiva del dataframe multi-indice di Yahoo
         if df.empty:
@@ -607,7 +607,7 @@ def get_whale_intelligence(ticker):
         # Identificazione "Whale Anchored Level" (Livello di Prezzo più martellato nei 5 giorni)
         df['Price_Bin'] = df['Close'].round(1)
         dp_levels = df.groupby('Price_Bin')['Volume'].sum()
-        whale_price = dp_levels.idxmax() if not dp_levels.empty else df['Close'].iloc[-1]
+        whale_price = float(dp_levels.idxmax()) if not dp_levels.empty else float(df['Close'].iloc[-1])
         
         # LOGICA DI PRECISIONE (95% Confidence) - Filtro Recidività
         # Picchi di volume (>3 SD) in almeno 2 degli ultimi 5 giorni
@@ -626,7 +626,7 @@ def get_whale_intelligence(ticker):
             
             if not valid_w_lvls.empty:
                 valid_bins = valid_w_lvls.index
-                whale_price = dp_levels.loc[valid_bins].idxmax()
+                whale_price = float(dp_levels.loc[valid_bins].idxmax())
         
         # Identificazione "Block Trades" dell'ultima ora
         recent_df = df.tail(60)
@@ -638,10 +638,10 @@ def get_whale_intelligence(ticker):
         if not anomalies.empty:
             # Se c'è un blocco recente e non abbiamo un livello recidivo forte, sposta l'ancora
             if valid_w_lvls.empty:
-                whale_price = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
+                whale_price = float(anomalies.loc[anomalies['Volume'].idxmax(), 'Close'])
             intensity += 40
             
-        current_price = df['Close'].iloc[-1]
+        current_price = float(df['Close'].iloc[-1])
         very_recent = df.tail(5) # Ultimi 5 minuti
         recent_anomalies = very_recent[very_recent['Volume'] > (vol_mean + 2.5 * vol_sd)]
         
@@ -942,7 +942,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
                     st.markdown(f"""
                     <div style='background-color:rgba(20, 20, 20, 0.8); padding:15px; border-radius:5px; border: 1px solid #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
-                        <div><b style='color:#FFD700; font-size:1.1em;'>🐳 W-LVL:</b> <span style='font-size:1.2em; font-weight:bold;'>${whale_data['Whale_Price']:.2f}</span>{idx_note}</div>
+                        <div><b style='color:DeepSkyBlue; font-size:1.1em;'>🐳 W-LVL:</b> <span style='font-size:1.2em; font-weight:bold;'>${whale_data['Whale_Price']:.2f}</span>{idx_note}</div>
                         <div><b>Score:</b> {whale_data['Whale_Intensity']}%</div>
                         <div>{status_html}</div>
                     </div>
@@ -1098,7 +1098,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
             
             if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                fig.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_width=2, line_dash="dot", annotation_text="🐳 W-LVL")
+                fig.add_hline(y=whale_data["Whale_Price"], line_color="DeepSkyBlue", line_width=2, line_dash="dot", annotation_text="🐳 W-LVL")
             
             # --- VISUALIZZAZIONE LINEE ASIMMETRICHE ---
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text=f"+1SD (Call IV) {sd1_up:.2f}")
@@ -1306,7 +1306,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     # --- WHALE INTELLIGENCE OVERLAYS ---
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                        fig_price.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_dash="dash", annotation_text="🐳 W-LVL", line_width=2)
+                        fig_price.add_hline(y=whale_data["Whale_Price"], line_color="DeepSkyBlue", line_dash="dot", annotation_text="🐳 W-LVL", line_width=2)
                         
                         if 'df_whale' in whale_data:
                             df_w = whale_data['df_whale']
