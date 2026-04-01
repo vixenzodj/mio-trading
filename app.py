@@ -572,7 +572,7 @@ def get_whale_intelligence(ticker):
     try:
         # Download dati ETF (Sorgente Volumi)
         df_etf = yf.download(target_ticker, period="5d", interval="1m", progress=False, prepost=True)
-        if df_etf.empty: return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A"}
+        if df_etf.empty: return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Whale_Bias": "NEUTRAL", "Volume_Buyers": 0, "Volume_Sellers": 0}
         
         if isinstance(df_etf.columns, pd.MultiIndex): df_etf.columns = df_etf.columns.get_level_values(0)
         df_etf.rename(columns={str(c): str(c).capitalize() for c in df_etf.columns}, inplace=True)
@@ -595,17 +595,29 @@ def get_whale_intelligence(ticker):
         vol_mean = df_etf['Volume'].mean()
         vol_sd = df_etf['Volume'].std()
         
-        # Filtro: Prezzo con più volume aggregato negli ultimi 5 giorni
-        df_etf['Price_Bin'] = df_etf['Close'].round(2)
-        whale_price_etf = df_etf.groupby('Price_Bin')['Volume'].sum().idxmax()
-        
-        # Verifica anomalie recenti (ultime 60 candele)
-        recent = df_etf.tail(60)
-        anomalies = recent[recent['Volume'] > (vol_mean + 2.5 * vol_sd)]
+        # Filtro: Candele Anomale (Volume > 2.5 SD)
+        anomalies = df_etf[df_etf['Volume'] > (vol_mean + 2.5 * vol_sd)].copy()
         
         intensity = 20
+        whale_price_etf = df_etf['Close'].iloc[-1] # Default
+        vol_buyers = 0
+        vol_sellers = 0
+        whale_bias = "NEUTRAL"
+        
         if not anomalies.empty:
-            whale_price_etf = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
+            # Calcolo Whale-VWAP
+            whale_price_etf = (anomalies['Close'] * anomalies['Volume']).sum() / anomalies['Volume'].sum()
+            
+            # Logica Direzionale (Lee-Ready)
+            mid_price = (anomalies['High'] + anomalies['Low']) / 2
+            buyers_mask = anomalies['Close'] > mid_price
+            
+            vol_buyers = anomalies.loc[buyers_mask, 'Volume'].sum()
+            vol_sellers = anomalies.loc[~buyers_mask, 'Volume'].sum()
+            
+            whale_bias = "BULLISH" if vol_buyers > vol_sellers else "BEARISH"
+            
+            # Intensità basata sul numero di anomalie
             intensity = 70 if len(anomalies) > 3 else 50
             
         # 4. CONVERSIONE FINALE PER L'INDICE
@@ -619,13 +631,16 @@ def get_whale_intelligence(ticker):
             "Whale_Price": final_whale_price,
             "Whale_Intensity": intensity,
             "Confluence_Status": confluence,
+            "Whale_Bias": whale_bias,
+            "Volume_Buyers": float(vol_buyers),
+            "Volume_Sellers": float(vol_sellers),
             "Error": None,
             "df_whale": df_etf.tail(100),
             "vol_mean": float(vol_mean),
             "vol_sd": float(vol_sd)
         }
     except Exception as e:
-        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e)}
+        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Whale_Bias": "NEUTRAL", "Volume_Buyers": 0, "Volume_Sellers": 0, "Error": str(e)}
 
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
@@ -883,17 +898,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     idx_note = f"<br><span style='font-size:0.8em; color:#aaa;'>*Price converted from {proxy} (Ratio: {ratio:.2f})</span>" if is_idx else ""
                     
-                    if whale_data['Whale_Intensity'] >= 70:
-                        status_html = "<span style='color:#2ECC40; font-weight:bold;'>🔥 CONFLUENZA ISTITUZIONALE</span>"
-                    elif whale_data['Whale_Intensity'] <= 30:
+                    bias = whale_data.get('Whale_Bias', 'NEUTRAL')
+                    bias_icon = "🟢" if bias == "BULLISH" else ("🔴" if bias == "BEARISH" else "⚪")
+                    w_price = whale_data['Whale_Price']
+                    intensity = whale_data['Whale_Intensity']
+                    
+                    if intensity >= 70:
+                        if spot > w_price and bias == "BULLISH":
+                            status_html = "<span style='color:#2ECC40; font-weight:bold;'>🛡️ STRONG ACCUMULATION</span>"
+                        elif spot < w_price and bias == "BEARISH":
+                            status_html = "<span style='color:#FF4136; font-weight:bold;'>⚠️ HEAVY DISTRIBUTION</span>"
+                        else:
+                            status_html = "<span style='color:#2ECC40; font-weight:bold;'>🔥 CONFLUENZA ISTITUZIONALE</span>"
+                    elif intensity <= 30:
                         status_html = "<span style='color:#0074D9; font-weight:bold;'>💨 RETAIL DRIVEN</span>"
                     else:
                         status_html = "<span style='color:#FFDC00; font-weight:bold;'>⚖️ ZONA MISTA</span>"
 
                     st.markdown(f"""
                     <div style='background-color:rgba(20, 20, 20, 0.8); padding:15px; border-radius:5px; border: 1px solid #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
-                        <div><b style='color:DeepSkyBlue; font-size:1.1em;'>🐳 W-LVL:</b> <span style='font-size:1.2em; font-weight:bold;'>${whale_data['Whale_Price']:.2f}</span>{idx_note}</div>
-                        <div><b>Score:</b> {whale_data['Whale_Intensity']}%</div>
+                        <div><b style='color:DeepSkyBlue; font-size:1.1em;'>🐳 W-LVL:</b> <span style='font-size:1.2em; font-weight:bold;'>${w_price:.2f}</span> <span style='font-size:1.1em;'>{bias_icon} {bias}</span>{idx_note}</div>
+                        <div><b>Score:</b> {intensity}%</div>
                         <div>{status_html}</div>
                     </div>
                     <div style='text-align: right; font-size: 0.8em; color: #888; margin-top: -10px; margin-bottom: 15px;'>Dati triangolati da: FINRA Weekly + IEX Real-Time Tape</div>
@@ -1048,7 +1073,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
             
             if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                fig.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name='🐳 W-LVL')
+                bias_str = whale_data.get('Whale_Bias', '')
+                leg_name = f"🐳 W-LVL ({bias_str})" if bias_str else "🐳 W-LVL"
+                fig.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name=leg_name)
             
             # --- VISUALIZZAZIONE LINEE ASIMMETRICHE ---
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text=f"+1SD (Call IV) {sd1_up:.2f}")
@@ -1256,7 +1283,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     # --- WHALE INTELLIGENCE OVERLAYS ---
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                        fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name='🐳 W-LVL')
+                        bias_str = whale_data.get('Whale_Bias', '')
+                        leg_name = f"🐳 W-LVL ({bias_str})" if bias_str else "🐳 W-LVL"
+                        fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name=leg_name)
                         
                         if 'df_whale' in whale_data:
                             df_w = whale_data['df_whale']
