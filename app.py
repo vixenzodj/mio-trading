@@ -563,119 +563,69 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_whale_intelligence(ticker):
-    # 1. Routing Proxy: Indice -> ETF
-    route_map = {"^NDX": "QQQ", "^SPX": "SPY", "^RUT": "IWM", "NDX": "QQQ", "SPX": "SPY", "RUT": "IWM"}
-    is_index = ticker in route_map
-    target_ticker = route_map.get(ticker, ticker)
-    
+    # 1. Normalizzazione e Routing Proxy
+    clean_ticker = ticker.upper().replace("^", "")
+    route_map = {"NDX": "QQQ", "SPX": "SPY", "RUT": "IWM"}
+    target_ticker = route_map.get(clean_ticker, ticker)
+    is_index = clean_ticker in route_map
+
     try:
-        # FIX CHIRURGICO 1: Aggiunto prepost=True per catturare i movimenti delle balene prima dell'apertura
-        df = yf.download(target_ticker, period="5d", interval="1m", progress=False, prepost=True)
+        # Download dati ETF (Sorgente Volumi)
+        df_etf = yf.download(target_ticker, period="5d", interval="1m", progress=False, prepost=True)
+        if df_etf.empty: return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A"}
         
+        if isinstance(df_etf.columns, pd.MultiIndex): df_etf.columns = df_etf.columns.get_level_values(0)
+        df_etf.rename(columns={str(c): str(c).capitalize() for c in df_etf.columns}, inplace=True)
+
+        # 2. Calcolo Dinamico della Ratio (Index / ETF)
         ratio = 1.0
         if is_index:
-            idx_ticker = ticker if ticker.startswith('^') else f"^{ticker}"
-            df_idx = yf.download(idx_ticker, period="5d", interval="1m", progress=False, prepost=True)
-            if not df_idx.empty and not df.empty:
-                if isinstance(df_idx.columns, pd.MultiIndex):
-                    df_idx.columns = df_idx.columns.get_level_values(0)
-                rename_map_idx = {str(c): str(c).capitalize() for c in df_idx.columns}
-                df_idx.rename(columns=rename_map_idx, inplace=True)
-                
-                last_idx_close = float(df_idx['Close'].dropna().iloc[-1])
-                last_etf_close = float(df['Close'].dropna().iloc[-1])
-                if last_etf_close > 0:
-                    ratio = last_idx_close / last_etf_close
-        
-        # FIX CHIRURGICO 2: Normalizzazione aggressiva del dataframe multi-indice di Yahoo
-        if df.empty:
-            return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": "Dati Yahoo Vuoti"}
-            
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        # Normalizza i nomi delle colonne (evita crash se Yahoo restituisce 'volume' invece di 'Volume')
-        rename_map = {str(c): str(c).capitalize() for c in df.columns}
-        df.rename(columns=rename_map, inplace=True)
-        
-        if 'Volume' not in df.columns or df['Volume'].sum() == 0:
-            return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": "Nessun Volume (Pre-market piatto o Rate Limit)"}
-            
-        vol_mean = df['Volume'].mean()
-        vol_sd = df['Volume'].std()
-        
-        # Identificazione "Whale Anchored Level" (Livello di Prezzo più martellato nei 5 giorni)
-        df['Price_Bin'] = df['Close'].round(1)
-        dp_levels = df.groupby('Price_Bin')['Volume'].sum()
-        whale_price = float(dp_levels.idxmax()) if not dp_levels.empty else float(df['Close'].iloc[-1])
-        
-        # LOGICA DI PRECISIONE (95% Confidence) - Filtro Recidività
-        # Picchi di volume (>3 SD) in almeno 2 degli ultimi 5 giorni
-        anomalies_3sd = df[df['Volume'] > (vol_mean + 3 * vol_sd)].copy()
-        valid_w_lvls = pd.Series(dtype=float)
-        if not anomalies_3sd.empty:
-            if 'Datetime' in anomalies_3sd.columns:
-                anomalies_3sd['Day'] = anomalies_3sd['Datetime'].dt.date
-            elif 'datetime' in anomalies_3sd.columns:
-                anomalies_3sd['Day'] = anomalies_3sd['datetime'].dt.date
+            idx_sym = "^" + clean_ticker if not ticker.startswith("^") else ticker
+            df_idx = yf.download(idx_sym, period="1d", interval="1m", progress=False, prepost=True)
+            if not df_idx.empty:
+                if isinstance(df_idx.columns, pd.MultiIndex): df_idx.columns = df_idx.columns.get_level_values(0)
+                ratio = df_idx['Close'].iloc[-1] / df_etf['Close'].iloc[-1]
             else:
-                anomalies_3sd['Day'] = anomalies_3sd.index.date
-                
-            recidivism = anomalies_3sd.groupby('Price_Bin')['Day'].nunique()
-            valid_w_lvls = recidivism[recidivism >= 2]
-            
-            if not valid_w_lvls.empty:
-                valid_bins = valid_w_lvls.index
-                whale_price = float(dp_levels.loc[valid_bins].idxmax())
+                # Fallback: Ratio basata su prezzi storici se intraday indice fallisce
+                ticker_info = yf.Ticker(idx_sym).fast_info
+                etf_info = yf.Ticker(target_ticker).fast_info
+                ratio = ticker_info.last_price / etf_info.last_price
+
+        # 3. Identificazione Whale Level sull'ETF (Punti di Accumulazione)
+        vol_mean = df_etf['Volume'].mean()
+        vol_sd = df_etf['Volume'].std()
         
-        # Identificazione "Block Trades" dell'ultima ora
-        recent_df = df.tail(60)
-        anomalies = recent_df[recent_df['Volume'] > (vol_mean + 2.5 * vol_sd)]
+        # Filtro: Prezzo con più volume aggregato negli ultimi 5 giorni
+        df_etf['Price_Bin'] = df_etf['Close'].round(2)
+        whale_price_etf = df_etf.groupby('Price_Bin')['Volume'].sum().idxmax()
         
-        intensity = 0
-        confluence = "Low"
+        # Verifica anomalie recenti (ultime 60 candele)
+        recent = df_etf.tail(60)
+        anomalies = recent[recent['Volume'] > (vol_mean + 2.5 * vol_sd)]
         
+        intensity = 20
         if not anomalies.empty:
-            # Se c'è un blocco recente e non abbiamo un livello recidivo forte, sposta l'ancora
-            if valid_w_lvls.empty:
-                whale_price = float(anomalies.loc[anomalies['Volume'].idxmax(), 'Close'])
-            intensity += 40
+            whale_price_etf = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
+            intensity = 70 if len(anomalies) > 3 else 50
             
-        current_price = float(df['Close'].iloc[-1])
-        very_recent = df.tail(5) # Ultimi 5 minuti
-        recent_anomalies = very_recent[very_recent['Volume'] > (vol_mean + 2.5 * vol_sd)]
+        # 4. CONVERSIONE FINALE PER L'INDICE
+        final_whale_price = float(whale_price_etf * ratio)
         
-        if not recent_anomalies.empty:
-            intensity += 30 # Accelerazione immediata
-            
-        # Controllo Confluenza: Il prezzo attuale è sulla tana della balena?
-        if abs(current_price - whale_price) / current_price <= 0.005: # Tolleranza 0.5%
-            intensity += 30
-            
-        if intensity == 0:
-            intensity = 20 # Livello base (solo storico)
-            
-        if intensity >= 70:
-            confluence = "High"
-        elif intensity >= 40:
-            confluence = "Mid"
-        else:
-            confluence = "Low"
-            
+        # Confluenza basata sulla vicinanza al prezzo attuale
+        current_price = df_etf['Close'].iloc[-1] * ratio
+        confluence = "High" if abs(current_price - final_whale_price) / current_price < 0.003 else "Mid"
+
         return {
-            "Whale_Price": float(whale_price * ratio),
-            "Whale_Intensity": int(intensity),
+            "Whale_Price": final_whale_price,
+            "Whale_Intensity": intensity,
             "Confluence_Status": confluence,
             "Error": None,
+            "df_whale": df_etf.tail(100),
             "vol_mean": float(vol_mean),
-            "vol_sd": float(vol_sd),
-            "df_whale": df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(200), # Salviamo solo gli ultimi 200 per non appesantire la RAM
-            "is_index": is_index,
-            "proxy_etf": target_ticker if is_index else None,
-            "ratio": ratio
+            "vol_sd": float(vol_sd)
         }
     except Exception as e:
-        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e), "is_index": False, "proxy_etf": None, "ratio": 1.0}
+        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e)}
 
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
@@ -1098,7 +1048,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
             
             if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                fig.add_hline(y=whale_data["Whale_Price"], line_color="DeepSkyBlue", line_width=2, line_dash="dot", annotation_text="🐳 W-LVL")
+                fig.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name='🐳 W-LVL')
             
             # --- VISUALIZZAZIONE LINEE ASIMMETRICHE ---
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text=f"+1SD (Call IV) {sd1_up:.2f}")
@@ -1306,7 +1256,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     # --- WHALE INTELLIGENCE OVERLAYS ---
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                        fig_price.add_hline(y=whale_data["Whale_Price"], line_color="DeepSkyBlue", line_dash="dot", annotation_text="🐳 W-LVL", line_width=2)
+                        fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name='🐳 W-LVL')
                         
                         if 'df_whale' in whale_data:
                             df_w = whale_data['df_whale']
