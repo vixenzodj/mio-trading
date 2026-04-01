@@ -563,24 +563,37 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_whale_intelligence(ticker):
+    # 1. Routing Proxy: Indice -> ETF
     route_map = {"^NDX": "QQQ", "^SPX": "SPY", "^RUT": "IWM", "NDX": "QQQ", "SPX": "SPY", "RUT": "IWM"}
     target_ticker = route_map.get(ticker, ticker)
     
     try:
-        df = yf.download(target_ticker, period="5d", interval="1m", progress=False)
-        if df.empty or 'Volume' not in df.columns or df['Volume'].sum() == 0:
-            return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": "No Volume Data"}
+        # FIX CHIRURGICO 1: Aggiunto prepost=True per catturare i movimenti delle balene prima dell'apertura
+        df = yf.download(target_ticker, period="5d", interval="1m", progress=False, prepost=True)
+        
+        # FIX CHIRURGICO 2: Normalizzazione aggressiva del dataframe multi-indice di Yahoo
+        if df.empty:
+            return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": "Dati Yahoo Vuoti"}
             
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
+        # Normalizza i nomi delle colonne (evita crash se Yahoo restituisce 'volume' invece di 'Volume')
+        rename_map = {str(c): str(c).capitalize() for c in df.columns}
+        df.rename(columns=rename_map, inplace=True)
+        
+        if 'Volume' not in df.columns or df['Volume'].sum() == 0:
+            return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": "Nessun Volume (Pre-market piatto o Rate Limit)"}
+            
         vol_mean = df['Volume'].mean()
         vol_sd = df['Volume'].std()
         
+        # Identificazione "Whale Anchored Level" (Livello di Prezzo più martellato nei 5 giorni)
         df['Price_Bin'] = df['Close'].round(1)
         dp_levels = df.groupby('Price_Bin')['Volume'].sum()
         whale_price = dp_levels.idxmax() if not dp_levels.empty else df['Close'].iloc[-1]
         
+        # Identificazione "Block Trades" dell'ultima ora
         recent_df = df.tail(60)
         anomalies = recent_df[recent_df['Volume'] > (vol_mean + 2.5 * vol_sd)]
         
@@ -588,21 +601,23 @@ def get_whale_intelligence(ticker):
         confluence = "Low"
         
         if not anomalies.empty:
+            # Se c'è un blocco recente, sposta l'ancora su quel prezzo fresco
             whale_price = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
             intensity += 40
             
         current_price = df['Close'].iloc[-1]
-        very_recent = df.tail(5)
+        very_recent = df.tail(5) # Ultimi 5 minuti
         recent_anomalies = very_recent[very_recent['Volume'] > (vol_mean + 2.5 * vol_sd)]
         
         if not recent_anomalies.empty:
-            intensity += 30
+            intensity += 30 # Accelerazione immediata
             
-        if abs(current_price - whale_price) / current_price <= 0.005:
+        # Controllo Confluenza: Il prezzo attuale è sulla tana della balena?
+        if abs(current_price - whale_price) / current_price <= 0.005: # Tolleranza 0.5%
             intensity += 30
             
         if intensity == 0:
-            intensity = 20
+            intensity = 20 # Livello base (solo storico)
             
         if intensity >= 70:
             confluence = "High"
@@ -612,13 +627,13 @@ def get_whale_intelligence(ticker):
             confluence = "Low"
             
         return {
-            "Whale_Price": whale_price,
-            "Whale_Intensity": intensity,
+            "Whale_Price": float(whale_price),
+            "Whale_Intensity": int(intensity),
             "Confluence_Status": confluence,
             "Error": None,
-            "vol_mean": vol_mean,
-            "vol_sd": vol_sd,
-            "df_whale": df[['Open', 'High', 'Low', 'Close', 'Volume']]
+            "vol_mean": float(vol_mean),
+            "vol_sd": float(vol_sd),
+            "df_whale": df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(200) # Salviamo solo gli ultimi 200 per non appesantire la RAM
         }
     except Exception as e:
         return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e)}
