@@ -561,6 +561,68 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America
 
     return df
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_whale_intelligence(ticker):
+    route_map = {"^NDX": "QQQ", "^SPX": "SPY", "^RUT": "IWM", "NDX": "QQQ", "SPX": "SPY", "RUT": "IWM"}
+    target_ticker = route_map.get(ticker, ticker)
+    
+    try:
+        df = yf.download(target_ticker, period="5d", interval="1m", progress=False)
+        if df.empty or 'Volume' not in df.columns or df['Volume'].sum() == 0:
+            return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": "No Volume Data"}
+            
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        vol_mean = df['Volume'].mean()
+        vol_sd = df['Volume'].std()
+        
+        df['Price_Bin'] = df['Close'].round(1)
+        dp_levels = df.groupby('Price_Bin')['Volume'].sum()
+        whale_price = dp_levels.idxmax() if not dp_levels.empty else df['Close'].iloc[-1]
+        
+        recent_df = df.tail(60)
+        anomalies = recent_df[recent_df['Volume'] > (vol_mean + 2.5 * vol_sd)]
+        
+        intensity = 0
+        confluence = "Low"
+        
+        if not anomalies.empty:
+            whale_price = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
+            intensity += 40
+            
+        current_price = df['Close'].iloc[-1]
+        very_recent = df.tail(5)
+        recent_anomalies = very_recent[very_recent['Volume'] > (vol_mean + 2.5 * vol_sd)]
+        
+        if not recent_anomalies.empty:
+            intensity += 30
+            
+        if abs(current_price - whale_price) / current_price <= 0.005:
+            intensity += 30
+            
+        if intensity == 0:
+            intensity = 20
+            
+        if intensity >= 70:
+            confluence = "High"
+        elif intensity >= 40:
+            confluence = "Mid"
+        else:
+            confluence = "Low"
+            
+        return {
+            "Whale_Price": whale_price,
+            "Whale_Intensity": intensity,
+            "Confluence_Status": confluence,
+            "Error": None,
+            "vol_mean": vol_mean,
+            "vol_sd": vol_sd,
+            "df_whale": df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        }
+    except Exception as e:
+        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e)}
+
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
 st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", value=st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"), type="password")
@@ -806,6 +868,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- INIZIO HUD QUANTISTICO (VERSIONE BILANCIATA PRO) ---
             with st.expander("🔍 🧠 HUD QUANTISTICO: SENTIMENT & CONFLUENZA GREEKS (Clicca per espandere)"):
+                whale_data = get_whale_intelligence(current_ticker)
+                
+                if whale_data.get("Error"):
+                    st.warning("Whale Data: N/A - Switch to ETF for analysis")
+                else:
+                    wc1, wc2, wc3 = st.columns(3)
+                    with wc1:
+                        st.metric("🐳 Whale Floor/Ceiling", f"${whale_data['Whale_Price']:.2f}")
+                    with wc2:
+                        st.markdown("**Whale Confluence Score**")
+                        st.progress(whale_data['Whale_Intensity'] / 100.0)
+                    with wc3:
+                        if whale_data['Whale_Intensity'] >= 70:
+                            st.success("🔥 CONFLUENZA ISTITUZIONALE")
+                        elif whale_data['Whale_Intensity'] <= 30:
+                            st.info("💨 RETAIL DRIVEN")
+                        else:
+                            st.warning("⚖️ ZONA MISTA")
+                    st.caption("Dati triangolati da: FINRA Weekly + IEX Real-Time Tape")
+                    st.markdown("---")
+                    
                 import math 
                 
                 # 1. LOGICA MATEMATICA ORIGINALE (4, 3, 3) - INVARIATA
@@ -953,6 +1036,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
             fig.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
             fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
+            
+            if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
+                fig.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="⚓ Whale Anchored Level")
             
             # --- VISUALIZZAZIONE LINEE ASIMMETRICHE ---
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text=f"+1SD (Call IV) {sd1_up:.2f}")
@@ -1144,6 +1230,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
                     
+                    fig_price.data = (fig_price.data[0],) # Clear old traces
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
                     
@@ -1156,6 +1243,37 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     fig_price.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="Zero Gamma")
                     fig_price.add_hline(y=z_gamma_dyn, line_color="cyan", line_dash="dash", annotation_text="Zero Gamma Dyn")
                     fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
+                    
+                    # --- WHALE INTELLIGENCE OVERLAYS ---
+                    if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
+                        fig_price.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_dash="dash", annotation_text="⚓ Whale Anchored Level", line_width=2)
+                        
+                        if 'df_whale' in whale_data:
+                            df_w = whale_data['df_whale']
+                            vol_mean = whale_data['vol_mean']
+                            vol_sd = whale_data['vol_sd']
+                            whale_candles = df_w[df_w['Volume'] > (vol_mean + 3 * vol_sd)]
+                            
+                            if not whale_candles.empty:
+                                buy_candles = whale_candles[whale_candles['Close'] > whale_candles['Open']]
+                                sell_candles = whale_candles[whale_candles['Close'] <= whale_candles['Open']]
+                                
+                                if not buy_candles.empty:
+                                    fig_price.add_trace(go.Scatter(
+                                        x=buy_candles.index,
+                                        y=buy_candles['Low'] * 0.9995,
+                                        mode='markers',
+                                        marker=dict(symbol='triangle-up', size=12, color='#FFD700', line=dict(width=1, color='black')),
+                                        name='🐳 Whale Buy'
+                                    ))
+                                if not sell_candles.empty:
+                                    fig_price.add_trace(go.Scatter(
+                                        x=sell_candles.index,
+                                        y=sell_candles['High'] * 1.0005,
+                                        mode='markers',
+                                        marker=dict(symbol='triangle-down', size=12, color='#FF8C00', line=dict(width=1, color='black')),
+                                        name='🐳 Whale Sell'
+                                    ))
                     
                     if gamma_mode and 'df' in locals() and not df.empty:
                         xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
