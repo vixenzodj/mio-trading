@@ -565,11 +565,27 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America
 def get_whale_intelligence(ticker):
     # 1. Routing Proxy: Indice -> ETF
     route_map = {"^NDX": "QQQ", "^SPX": "SPY", "^RUT": "IWM", "NDX": "QQQ", "SPX": "SPY", "RUT": "IWM"}
+    is_index = ticker in route_map
     target_ticker = route_map.get(ticker, ticker)
     
     try:
         # FIX CHIRURGICO 1: Aggiunto prepost=True per catturare i movimenti delle balene prima dell'apertura
         df = yf.download(target_ticker, period="5d", interval="1m", progress=False, prepost=True)
+        
+        ratio = 1.0
+        if is_index:
+            idx_ticker = ticker if ticker.startswith('^') else f"^{ticker}"
+            df_idx = yf.download(idx_ticker, period="5d", interval="1m", progress=False, prepost=True)
+            if not df_idx.empty and not df.empty:
+                if isinstance(df_idx.columns, pd.MultiIndex):
+                    df_idx.columns = df_idx.columns.get_level_values(0)
+                rename_map_idx = {str(c): str(c).capitalize() for c in df_idx.columns}
+                df_idx.rename(columns=rename_map_idx, inplace=True)
+                
+                last_idx_close = df_idx['Close'].dropna().iloc[-1]
+                last_etf_close = df['Close'].dropna().iloc[-1]
+                if last_etf_close > 0:
+                    ratio = float(last_idx_close / last_etf_close)
         
         # FIX CHIRURGICO 2: Normalizzazione aggressiva del dataframe multi-indice di Yahoo
         if df.empty:
@@ -593,6 +609,25 @@ def get_whale_intelligence(ticker):
         dp_levels = df.groupby('Price_Bin')['Volume'].sum()
         whale_price = dp_levels.idxmax() if not dp_levels.empty else df['Close'].iloc[-1]
         
+        # LOGICA DI PRECISIONE (95% Confidence) - Filtro Recidività
+        # Picchi di volume (>3 SD) in almeno 2 degli ultimi 5 giorni
+        anomalies_3sd = df[df['Volume'] > (vol_mean + 3 * vol_sd)].copy()
+        valid_w_lvls = pd.Series(dtype=float)
+        if not anomalies_3sd.empty:
+            if 'Datetime' in anomalies_3sd.columns:
+                anomalies_3sd['Day'] = anomalies_3sd['Datetime'].dt.date
+            elif 'datetime' in anomalies_3sd.columns:
+                anomalies_3sd['Day'] = anomalies_3sd['datetime'].dt.date
+            else:
+                anomalies_3sd['Day'] = anomalies_3sd.index.date
+                
+            recidivism = anomalies_3sd.groupby('Price_Bin')['Day'].nunique()
+            valid_w_lvls = recidivism[recidivism >= 2]
+            
+            if not valid_w_lvls.empty:
+                valid_bins = valid_w_lvls.index
+                whale_price = dp_levels.loc[valid_bins].idxmax()
+        
         # Identificazione "Block Trades" dell'ultima ora
         recent_df = df.tail(60)
         anomalies = recent_df[recent_df['Volume'] > (vol_mean + 2.5 * vol_sd)]
@@ -601,8 +636,9 @@ def get_whale_intelligence(ticker):
         confluence = "Low"
         
         if not anomalies.empty:
-            # Se c'è un blocco recente, sposta l'ancora su quel prezzo fresco
-            whale_price = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
+            # Se c'è un blocco recente e non abbiamo un livello recidivo forte, sposta l'ancora
+            if valid_w_lvls.empty:
+                whale_price = anomalies.loc[anomalies['Volume'].idxmax(), 'Close']
             intensity += 40
             
         current_price = df['Close'].iloc[-1]
@@ -627,16 +663,19 @@ def get_whale_intelligence(ticker):
             confluence = "Low"
             
         return {
-            "Whale_Price": float(whale_price),
+            "Whale_Price": float(whale_price * ratio),
             "Whale_Intensity": int(intensity),
             "Confluence_Status": confluence,
             "Error": None,
             "vol_mean": float(vol_mean),
             "vol_sd": float(vol_sd),
-            "df_whale": df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(200) # Salviamo solo gli ultimi 200 per non appesantire la RAM
+            "df_whale": df[['Open', 'High', 'Low', 'Close', 'Volume']].tail(200), # Salviamo solo gli ultimi 200 per non appesantire la RAM
+            "is_index": is_index,
+            "proxy_etf": target_ticker if is_index else None,
+            "ratio": ratio
         }
     except Exception as e:
-        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e)}
+        return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Error": str(e), "is_index": False, "proxy_etf": None, "ratio": 1.0}
 
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
@@ -888,21 +927,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 if whale_data.get("Error"):
                     st.warning("Whale Data: N/A - Switch to ETF for analysis")
                 else:
-                    wc1, wc2, wc3 = st.columns(3)
-                    with wc1:
-                        st.metric("🐳 Whale Floor/Ceiling", f"${whale_data['Whale_Price']:.2f}")
-                    with wc2:
-                        st.markdown("**Whale Confluence Score**")
-                        st.progress(whale_data['Whale_Intensity'] / 100.0)
-                    with wc3:
-                        if whale_data['Whale_Intensity'] >= 70:
-                            st.success("🔥 CONFLUENZA ISTITUZIONALE")
-                        elif whale_data['Whale_Intensity'] <= 30:
-                            st.info("💨 RETAIL DRIVEN")
-                        else:
-                            st.warning("⚖️ ZONA MISTA")
-                    st.caption("Dati triangolati da: FINRA Weekly + IEX Real-Time Tape")
-                    st.markdown("---")
+                    is_idx = whale_data.get('is_index', False)
+                    proxy = whale_data.get('proxy_etf', '')
+                    ratio = whale_data.get('ratio', 1.0)
+                    
+                    idx_note = f"<br><span style='font-size:0.8em; color:#aaa;'>*Price converted from {proxy} (Ratio: {ratio:.2f})</span>" if is_idx else ""
+                    
+                    if whale_data['Whale_Intensity'] >= 70:
+                        status_html = "<span style='color:#2ECC40; font-weight:bold;'>🔥 CONFLUENZA ISTITUZIONALE</span>"
+                    elif whale_data['Whale_Intensity'] <= 30:
+                        status_html = "<span style='color:#0074D9; font-weight:bold;'>💨 RETAIL DRIVEN</span>"
+                    else:
+                        status_html = "<span style='color:#FFDC00; font-weight:bold;'>⚖️ ZONA MISTA</span>"
+
+                    st.markdown(f"""
+                    <div style='background-color:rgba(20, 20, 20, 0.8); padding:15px; border-radius:5px; border: 1px solid #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
+                        <div><b style='color:#FFD700; font-size:1.1em;'>🐳 W-LVL:</b> <span style='font-size:1.2em; font-weight:bold;'>${whale_data['Whale_Price']:.2f}</span>{idx_note}</div>
+                        <div><b>Score:</b> {whale_data['Whale_Intensity']}%</div>
+                        <div>{status_html}</div>
+                    </div>
+                    <div style='text-align: right; font-size: 0.8em; color: #888; margin-top: -10px; margin-bottom: 15px;'>Dati triangolati da: FINRA Weekly + IEX Real-Time Tape</div>
+                    """, unsafe_allow_html=True)
                     
                 import math 
                 
@@ -1053,7 +1098,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             fig.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
             
             if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                fig.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="⚓ Whale Anchored Level")
+                fig.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_width=2, line_dash="dot", annotation_text="🐳 W-LVL")
             
             # --- VISUALIZZAZIONE LINEE ASIMMETRICHE ---
             fig.add_hline(y=sd1_up, line_color="#FFA500", line_dash="dash", annotation_text=f"+1SD (Call IV) {sd1_up:.2f}")
@@ -1261,7 +1306,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     # --- WHALE INTELLIGENCE OVERLAYS ---
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
-                        fig_price.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_dash="dash", annotation_text="⚓ Whale Anchored Level", line_width=2)
+                        fig_price.add_hline(y=whale_data["Whale_Price"], line_color="#FFD700", line_dash="dash", annotation_text="🐳 W-LVL", line_width=2)
                         
                         if 'df_whale' in whale_data:
                             df_w = whale_data['df_whale']
