@@ -605,37 +605,42 @@ def get_whale_intelligence(ticker):
         whale_bias = "NEUTRAL"
         
         if not anomalies.empty:
-            # Filtro di Recenza (Time Decay)
+            # 1. Time-Weighted VWAP (Ultime 4 ore = 3x peso)
             last_timestamp = df_etf.index[-1]
-            delta_days = (last_timestamp - anomalies.index).total_seconds() / (24 * 3600)
-            anomalies['Time_Weight'] = np.clip(2.0 - (delta_days / 5.0), 1.0, 2.0)
+            delta_hours = (last_timestamp - anomalies.index).total_seconds() / 3600
+            anomalies['Time_Weight'] = np.where(delta_hours <= 4.0, 3.0, 1.0)
             anomalies['Weighted_Volume'] = anomalies['Volume'] * anomalies['Time_Weight']
             
-            # Logica di "Prossimità al Prezzo"
+            # Calcolo VWAP Globale
+            global_vwap = (anomalies['Close'] * anomalies['Weighted_Volume']).sum() / anomalies['Weighted_Volume'].sum()
             current_etf_price = df_etf['Close'].iloc[-1]
-            lower_bound = current_etf_price * 0.98
-            upper_bound = current_etf_price * 1.02
-            proximate_anomalies = anomalies[(anomalies['Close'] >= lower_bound) & (anomalies['Close'] <= upper_bound)].copy()
             
-            if not proximate_anomalies.empty:
-                # Raggruppamento in Cluster (ogni 0.5% di distanza)
-                cluster_step = current_etf_price * 0.005
-                proximate_anomalies['Cluster'] = (proximate_anomalies['Close'] / cluster_step).round() * cluster_step
+            # 2. Adaptive Cluster (Se distanza > 1.5%)
+            if abs(current_etf_price - global_vwap) / global_vwap > 0.015:
+                # Filtra anomalie vicine al prezzo (entro 2%)
+                lower_bound = current_etf_price * 0.98
+                upper_bound = current_etf_price * 1.02
+                proximate_anomalies = anomalies[(anomalies['Close'] >= lower_bound) & (anomalies['Close'] <= upper_bound)].copy()
                 
-                # Cluster più significativo (somma del Weighted_Volume)
-                cluster_vols = proximate_anomalies.groupby('Cluster')['Weighted_Volume'].sum()
-                best_cluster = cluster_vols.idxmax()
-                
-                target_anomalies = proximate_anomalies[proximate_anomalies['Cluster'] == best_cluster]
-                
-                # Calcolo Whale-VWAP del Cluster
-                whale_price_etf = (target_anomalies['Close'] * target_anomalies['Weighted_Volume']).sum() / target_anomalies['Weighted_Volume'].sum()
+                if not proximate_anomalies.empty:
+                    # Raggruppamento in Cluster (ogni 0.5% di distanza)
+                    cluster_step = current_etf_price * 0.005
+                    proximate_anomalies['Cluster'] = (proximate_anomalies['Close'] / cluster_step).round() * cluster_step
+                    
+                    # Prendi il cluster dell'anomalia più recente
+                    last_proximate_cluster = proximate_anomalies.iloc[-1]['Cluster']
+                    target_anomalies = proximate_anomalies[proximate_anomalies['Cluster'] == last_proximate_cluster]
+                else:
+                    # Se non ci sono cluster vicini, usa l'anomalia più recente in assoluto
+                    target_anomalies = anomalies.iloc[[-1]]
             else:
-                # Se non ci sono cluster vicini, usa l'anomalia più recente in assoluto
-                target_anomalies = anomalies.iloc[[-1]]
-                whale_price_etf = target_anomalies['Close'].iloc[0]
+                # Usa tutte le anomalie se il prezzo è vicino al VWAP globale
+                target_anomalies = anomalies
+                
+            # Calcolo Whale-VWAP finale (su target_anomalies)
+            whale_price_etf = (target_anomalies['Close'] * target_anomalies['Weighted_Volume']).sum() / target_anomalies['Weighted_Volume'].sum()
             
-            # Logica Direzionale (Lee-Ready) sul cluster scelto
+            # Logica Direzionale (Lee-Ready) sul target scelto
             mid_price = (target_anomalies['High'] + target_anomalies['Low']) / 2
             buyers_mask = target_anomalies['Close'] > mid_price
             
@@ -649,7 +654,7 @@ def get_whale_intelligence(ticker):
             else:
                 whale_bias = "NEUTRAL"
             
-            # Intensità basata sul numero di anomalie nel cluster
+            # Intensità basata sul numero di anomalie nel target
             intensity = 70 if len(target_anomalies) > 3 else 50
             
         # 4. CONVERSIONE FINALE PER L'INDICE
