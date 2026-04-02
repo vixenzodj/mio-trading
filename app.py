@@ -672,9 +672,10 @@ def get_whale_intelligence(ticker):
             "Volume_Buyers": float(vol_buyers),
             "Volume_Sellers": float(vol_sellers),
             "Error": None,
-            "df_whale": df_etf.tail(100),
+            "df_whale": anomalies.copy() if not anomalies.empty else pd.DataFrame(), # FIX: Passiamo solo le vere anomalie, salvando RAM e superando il limite temporale
             "vol_mean": float(vol_mean),
-            "vol_sd": float(vol_sd)
+            "vol_sd": float(vol_sd),
+            "ratio": float(ratio) # FIX: Reintegrata per permettere il rendering corretto sugli indici
         }
     except Exception as e:
         return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Whale_Bias": "NEUTRAL", "Volume_Buyers": 0, "Volume_Sellers": 0, "Error": str(e)}
@@ -1324,37 +1325,34 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         leg_name = f"🐳 W-LVL ({bias_str})" if bias_str else "🐳 W-LVL"
                         fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name=leg_name)
                         
-                        if 'df_whale' in whale_data:
-                            df_w = whale_data['df_whale']
-                            vol_mean = whale_data['vol_mean']
-                            vol_sd = whale_data['vol_sd']
-                            ratio = whale_data.get('ratio', 1.0) # Recupera la ratio
+                        if 'df_whale' in whale_data and not whale_data['df_whale'].empty:
+                            whale_candles = whale_data['df_whale']
+                            ratio = whale_data.get('ratio', 1.0)
                             
-                            whale_candles = df_w[df_w['Volume'] > (vol_mean + 2.5 * vol_sd)]
+                            # Logica Lee-Ready (Mid-Price) coerente con l'HUD
+                            mid_prices = (whale_candles['High'] + whale_candles['Low']) / 2
+                            buy_candles = whale_candles[whale_candles['Close'] > mid_prices]
+                            sell_candles = whale_candles[whale_candles['Close'] <= mid_prices]
                             
-                            if not whale_candles.empty:
-                                buy_candles = whale_candles[whale_candles['Close'] > whale_candles['Open']]
-                                sell_candles = whale_candles[whale_candles['Close'] <= whale_candles['Open']]
-                                
-                                # FIX TIMEZONE: Rimuove il fuso orario per combaciare perfettamente col grafico
-                                if not buy_candles.empty:
-                                    x_buy = buy_candles.index.tz_localize(None) if buy_candles.index.tz is not None else buy_candles.index
-                                    fig_price.add_trace(go.Scatter(
-                                        x=x_buy,
-                                        y=buy_candles['Low'] * ratio * 0.9995, # Moltiplica per la ratio per gli indici
-                                        mode='markers',
-                                        marker=dict(symbol='triangle-up', size=14, color='#00FF00', line=dict(width=1, color='black')),
-                                        name='🐳 Whale Buy'
-                                    ))
-                                if not sell_candles.empty:
-                                    x_sell = sell_candles.index.tz_localize(None) if sell_candles.index.tz is not None else sell_candles.index
-                                    fig_price.add_trace(go.Scatter(
-                                        x=x_sell,
-                                        y=sell_candles['High'] * ratio * 1.0005, # Moltiplica per la ratio per gli indici
-                                        mode='markers',
-                                        marker=dict(symbol='triangle-down', size=14, color='#FF0000', line=dict(width=1, color='black')),
-                                        name='🐳 Whale Sell'
-                                    ))
+                            # FIX TIMEZONE: Rimuove il fuso orario per combaciare perfettamente col grafico (Zero Sfarfallamenti)
+                            if not buy_candles.empty:
+                                x_buy = buy_candles.index.tz_localize(None) if buy_candles.index.tz is not None else buy_candles.index
+                                fig_price.add_trace(go.Scatter(
+                                    x=x_buy,
+                                    y=buy_candles['Low'] * ratio * 0.9995, # Agganciato all'Indice
+                                    mode='markers',
+                                    marker=dict(symbol='triangle-up', size=14, color='#00FF00', line=dict(width=1, color='black')),
+                                    name='🐳 Whale Buy'
+                                ))
+                            if not sell_candles.empty:
+                                x_sell = sell_candles.index.tz_localize(None) if sell_candles.index.tz is not None else sell_candles.index
+                                fig_price.add_trace(go.Scatter(
+                                    x=x_sell,
+                                    y=sell_candles['High'] * ratio * 1.0005, # Agganciato all'Indice
+                                    mode='markers',
+                                    marker=dict(symbol='triangle-down', size=14, color='#FF0000', line=dict(width=1, color='black')),
+                                    name='🐳 Whale Sell'
+                                ))
                     
                     if gamma_mode and 'df' in locals() and not df.empty:
                         xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
