@@ -1328,26 +1328,31 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             df_w = whale_data['df_whale']
                             vol_mean = whale_data['vol_mean']
                             vol_sd = whale_data['vol_sd']
-                            whale_candles = df_w[df_w['Volume'] > (vol_mean + 3 * vol_sd)]
+                            ratio = whale_data.get('ratio', 1.0) # Recupera la ratio
+                            
+                            whale_candles = df_w[df_w['Volume'] > (vol_mean + 2.5 * vol_sd)]
                             
                             if not whale_candles.empty:
                                 buy_candles = whale_candles[whale_candles['Close'] > whale_candles['Open']]
                                 sell_candles = whale_candles[whale_candles['Close'] <= whale_candles['Open']]
                                 
+                                # FIX TIMEZONE: Rimuove il fuso orario per combaciare perfettamente col grafico
                                 if not buy_candles.empty:
+                                    x_buy = buy_candles.index.tz_localize(None) if buy_candles.index.tz is not None else buy_candles.index
                                     fig_price.add_trace(go.Scatter(
-                                        x=buy_candles.index,
-                                        y=buy_candles['Low'] * 0.9995,
+                                        x=x_buy,
+                                        y=buy_candles['Low'] * ratio * 0.9995, # Moltiplica per la ratio per gli indici
                                         mode='markers',
-                                        marker=dict(symbol='triangle-up', size=12, color='#FFD700', line=dict(width=1, color='black')),
+                                        marker=dict(symbol='triangle-up', size=14, color='#00FF00', line=dict(width=1, color='black')),
                                         name='🐳 Whale Buy'
                                     ))
                                 if not sell_candles.empty:
+                                    x_sell = sell_candles.index.tz_localize(None) if sell_candles.index.tz is not None else sell_candles.index
                                     fig_price.add_trace(go.Scatter(
-                                        x=sell_candles.index,
-                                        y=sell_candles['High'] * 1.0005,
+                                        x=x_sell,
+                                        y=sell_candles['High'] * ratio * 1.0005, # Moltiplica per la ratio per gli indici
                                         mode='markers',
-                                        marker=dict(symbol='triangle-down', size=12, color='#FF8C00', line=dict(width=1, color='black')),
+                                        marker=dict(symbol='triangle-down', size=14, color='#FF0000', line=dict(width=1, color='black')),
                                         name='🐳 Whale Sell'
                                     ))
                     
