@@ -85,6 +85,7 @@ def calculate_0g_dynamic(price, df, r=0.045, q=0.0):
     side = np.where(df['type'] == 'call', 1, -1)
     return np.sum(gamma * exposure_size * 100 * price * side)
 
+@st.cache_data(ttl=60)
 def get_greeks_pro(df, S, r=0.045, q=0.0):
     if df.empty: return df
     df = df[df['impliedVolatility'] > 0.01].copy()
@@ -561,7 +562,7 @@ def fetch_data_smart(ticker, timeframe, start_date, end_date, target_tz="America
 
     return df
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60)
 def get_whale_intelligence(ticker):
     # 1. Normalizzazione e Routing Proxy
     clean_ticker = ticker.upper().replace("^", "")
@@ -663,6 +664,11 @@ def get_whale_intelligence(ticker):
         # Confluenza basata sulla vicinanza al prezzo attuale
         current_price = df_etf['Close'].iloc[-1] * ratio
         confluence = "High" if abs(current_price - final_whale_price) / current_price < 0.003 else "Mid"
+
+        # Mostra i diamanti/marker solo per le ultime 24 ore
+        if not anomalies.empty:
+            cutoff_24h = datetime.now(anomalies.index.tz) - timedelta(hours=24)
+            anomalies = anomalies[anomalies.index >= cutoff_24h]
 
         return {
             "Whale_Price": final_whale_price,
