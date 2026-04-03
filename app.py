@@ -1234,6 +1234,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.plotly_chart(fig_skew, use_container_width=True)
 
             with tab_price:
+                # --- INIZIO MIGLIORIE UX ---
+                st.markdown("### 🧱 Livelli Quantistici Chiave")
+                c_m1, c_m2, c_m3 = st.columns(3)
+                c_m1.metric("🟢 CALL WALL", f"{c_wall:.0f}")
+                c_m2.metric("🟡 ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
+                c_m3.metric("🔴 PUT WALL", f"{p_wall:.0f}")
+                
+                # Legenda HTML personalizzata (fuori dal grafico Plotly per non interferire)
+                st.markdown("""
+                <div style="display: flex; gap: 15px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #00ff88;">█</span> <span style="color: lightgray; font-size: 14px;">Prezzo</span></div>
+                    <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #00FFCC;">▲</span> <span style="color: lightgray; font-size: 14px;">Whale Buy (Accumulo)</span></div>
+                    <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #FF3366;">▼</span> <span style="color: lightgray; font-size: 14px;">Whale Sell (Distribuzione)</span></div>
+                    <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #FFFF00;">--</span> <span style="color: lightgray; font-size: 14px;">Zero Gamma</span></div>
+                    <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #32CD32;">--</span> <span style="color: lightgray; font-size: 14px;">Call Wall</span></div>
+                    <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #FF4500;">--</span> <span style="color: lightgray; font-size: 14px;">Put Wall</span></div>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("---")
+                # --- FINE MIGLIORIE UX ---
+
                 # 1. Inizializzazione chiavi robuste
                 def init_slider(key, default_val):
                     if key not in st.session_state:
@@ -1298,9 +1319,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=700,
+                            height=850, # Aumentato verticalmente da 700 a 850
                             uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
-                            dragmode='pan', hovermode='x unified'
+                            dragmode='pan', hovermode='x unified',
+                            showlegend=False, # Elimina la legenda interna di Plotly
+                            paper_bgcolor='rgba(0,0,0,0)', # Sfondo esterno trasparente
+                            plot_bgcolor='rgba(0,0,0,0)',  # Sfondo interno trasparente
+                            margin=dict(l=10, r=10, t=50, b=10) # Riduci i margini per massimizzare la larghezza
                         )
                     
                     fig_price = st.session_state[fig_key]
