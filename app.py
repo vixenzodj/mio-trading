@@ -1234,12 +1234,24 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.plotly_chart(fig_skew, use_container_width=True)
 
             with tab_price:
-                # --- DUPLICAZIONE DASHBOARD PER USABILITÀ ---
+                # 1. Metriche Duplicate (Dashboard Superiore)
                 st.markdown("### 🧱 Livelli Quantistici Chiave")
                 c_m1, c_m2, c_m3 = st.columns(3)
                 c_m1.metric("🟢 CALL WALL", f"{c_wall:.0f}")
                 c_m2.metric("🟡 ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
                 c_m3.metric("🔴 PUT WALL", f"{p_wall:.0f}")
+                
+                # 2. LEGENDA ESTERNA (Sopra il grafico, non interferisce con Plotly)
+                st.markdown("""
+                <div style="padding: 10px; border-radius: 5px; background-color: rgba(255,255,255,0.05); margin-bottom: 10px;">
+                    <span style="color: #FFFFFF; font-weight: bold; margin-right: 15px;">⚪ Prezzo (Candele)</span>
+                    <span style="color: #00FF00; font-weight: bold; margin-right: 15px;">💹 Whale Buy</span>
+                    <span style="color: #FF0000; font-weight: bold; margin-right: 15px;">📉 Whale Sell</span>
+                    <span style="color: #FFA500; font-weight: bold; margin-right: 15px;">🟡 Zero Gamma</span>
+                    <span style="color: #00FFFF; font-weight: bold;">🔵 Muri (Call/Put)</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 st.markdown("---")
 
                 # 1. Inizializzazione chiavi robuste
@@ -1302,31 +1314,22 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key] = go.Figure()
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
-                            # Titolo spostato leggermente a destra per far spazio alla legenda
                             title=dict(
                                 text=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                                x=0.3, 
-                                y=0.95
+                                x=0.5, xanchor='center' # Titolo centrato perfettamente
                             ),
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
                             height=700,
-                            uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
+                            uirevision=current_ticker, 
                             dragmode='pan', hovermode='x unified',
-                            # Legenda in alto a sinistra, orizzontale, sfondo semi-trasparente
-                            legend=dict(
-                                orientation="h",
-                                yanchor="top",
-                                y=0.99,
-                                xanchor="left",
-                                x=0.01,
-                                bgcolor="rgba(0,0,0,0.3)"
-                            ),
-                            margin=dict(t=80, b=20, l=10, r=50) # Margine superiore aumentato per la legenda
+                            showlegend=False, # DISATTIVA LEGENDA INTERNA PER EVITARE CONFLITTI
+                            margin=dict(t=50, b=20, l=10, r=50)
                         )
                     
                     fig_price = st.session_state[fig_key]
+                    fig_price.data = [] # PULIZIA TRACCE: Rimuove i dati vecchi per evitare sfarfallio
                     
                     # 2. Aggiornamento Dati (Invia tutto per permettere lo scroll)
                     traccia = fig_price.data[0]
