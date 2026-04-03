@@ -1234,6 +1234,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.plotly_chart(fig_skew, use_container_width=True)
 
             with tab_price:
+                # --- DUPLICAZIONE DASHBOARD PER USABILITÀ ---
+                st.markdown("### 🧱 Livelli Quantistici Chiave")
+                c_m1, c_m2, c_m3 = st.columns(3)
+                c_m1.metric("🟢 CALL WALL", f"{c_wall:.0f}")
+                c_m2.metric("🟡 ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
+                c_m3.metric("🔴 PUT WALL", f"{p_wall:.0f}")
+                st.markdown("---")
+
                 # 1. Inizializzazione chiavi robuste
                 def init_slider(key, default_val):
                     if key not in st.session_state:
@@ -1294,13 +1302,28 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key] = go.Figure()
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
-                            title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                            # Titolo spostato leggermente a destra per far spazio alla legenda
+                            title=dict(
+                                text=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                                x=0.3, 
+                                y=0.95
+                            ),
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
                             height=700,
                             uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
-                            dragmode='pan', hovermode='x unified'
+                            dragmode='pan', hovermode='x unified',
+                            # Legenda in alto a sinistra, orizzontale, sfondo semi-trasparente
+                            legend=dict(
+                                orientation="h",
+                                yanchor="top",
+                                y=0.99,
+                                xanchor="left",
+                                x=0.01,
+                                bgcolor="rgba(0,0,0,0.3)"
+                            ),
+                            margin=dict(t=80, b=20, l=10, r=50) # Margine superiore aumentato per la legenda
                         )
                     
                     fig_price = st.session_state[fig_key]
