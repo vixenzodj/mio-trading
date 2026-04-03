@@ -1305,27 +1305,22 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key].update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
                             template="plotly_dark",
-                            xaxis=dict(
-                                rangeslider=dict(visible=False), 
-                                type='date',
-                                title="Data/Ora"
-                            ),
-                            yaxis=dict(
-                                title="Prezzo", 
-                                side="right", 
-                                autorange=True, 
-                                fixedrange=False # Permette lo zoom verticale libero
-                            ),
-                            height=750, 
-                            # FIX SALTELLAMENTO: uirevision impostato su True fisso
-                            uirevision=True, 
+                            xaxis=dict(rangeslider=dict(visible=False), type='date', title="Data/Ora"),
+                            yaxis=dict(title="Prezzo", side="right"),
+                            height=700, # Ripristino altezza originale stabile
+                            uirevision=current_ticker, # Ripristino revisione originale stabile
                             dragmode='pan', 
                             hovermode='x unified',
+                            # FIX UX: Legenda ESTERNA al grafico (sopra a sinistra)
                             legend=dict(
-                                yanchor="top", y=0.99, xanchor="left", x=0.01,
-                                orientation="h", bgcolor="rgba(0,0,0,0.5)"
+                                orientation="h",
+                                yanchor="bottom",
+                                y=1.05, # La sposta fuori dall'area di disegno
+                                xanchor="left",
+                                x=0,
+                                bgcolor="rgba(0,0,0,0)"
                             ),
-                            margin=dict(l=10, r=50, t=40, b=10)
+                            margin=dict(l=10, r=50, t=80, b=10) # t=80 dà spazio alla legenda esterna
                         )
                     
                     fig_price = st.session_state[fig_key]
@@ -1464,17 +1459,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
                                     fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
+                    # Forza la stabilità dello zoom durante il refresh ogni 20s
+                    fig_price.update_layout(uirevision=current_ticker)
+
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
                         key=f"fixed_chart_{current_ticker}_render", 
                         theme=None, 
-                        # FIX FLUIDITÀ: Attiviamo lo scrollZoom senza restrizioni
                         config={
-                            'scrollZoom': True, 
-                            'displayModeBar': True, 
+                            'scrollZoom': True,      # Zoom fluido con rotellina
+                            'displayModeBar': True,  # Barra strumenti visibile per Fullscreen
                             'displaylogo': False,
-                            'modeBarButtonsToRemove': ['select2d', 'lasso2d']
+                            'doubleClick': 'reset'   # Reset rapido con doppio click
                         }
                     )
                 else:
