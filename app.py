@@ -1243,7 +1243,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 # Legenda HTML personalizzata (fuori dal grafico Plotly per non interferire)
                 st.markdown("""
-                <div style="display: flex; gap: 15px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 15px; padding: 10px; background: #1E2329; border: 1px solid #333; border-radius: 8px; margin-bottom: 10px; flex-wrap: wrap;">
                     <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #00ff88;">█</span> <span style="color: lightgray; font-size: 14px;">Prezzo</span></div>
                     <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #00FFCC;">▲</span> <span style="color: lightgray; font-size: 14px;">Whale Buy (Accumulo)</span></div>
                     <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #FF3366;">▼</span> <span style="color: lightgray; font-size: 14px;">Whale Sell (Distribuzione)</span></div>
@@ -1319,13 +1319,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=850, # Aumentato verticalmente da 700 a 850
-                            uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
-                            dragmode='pan', hovermode='x unified',
-                            showlegend=False, # Elimina la legenda interna di Plotly
-                            paper_bgcolor='rgba(0,0,0,0)', # Sfondo esterno trasparente
-                            plot_bgcolor='rgba(0,0,0,0)',  # Sfondo interno trasparente
-                            margin=dict(l=10, r=10, t=50, b=10) # Riduci i margini per massimizzare la larghezza
+                            height=850, 
+                            uirevision=current_ticker, 
+                            dragmode='pan', 
+                            hovermode='x unified',
+                            showlegend=False,
+                            # FIX PROFESSIONALE SFARFALLIO:
+                            # Sostituiamo rgba(0,0,0,0) con il colore nativo Streamlit #0E1117
+                            # Questo elimina il ricalcolo dell'alpha channel durante lo zoom/scroll
+                            paper_bgcolor='#0E1117',
+                            plot_bgcolor='#0E1117',
+                            # Ottimizzazione margini per evitare scrollbar fantasma
+                            margin=dict(l=10, r=50, t=50, b=20)
                         )
                     
                     fig_price = st.session_state[fig_key]
