@@ -1234,6 +1234,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.plotly_chart(fig_skew, use_container_width=True)
 
             with tab_price:
+                # --- INIZIO MIGLIORIA UX: Metriche Duplicate ---
+                st.markdown("### 🧱 Livelli Quantistici Chiave")
+                c_m1, c_m2, c_m3 = st.columns(3)
+                c_m1.metric("🟢 CALL WALL", f"{c_wall:.0f}")
+                c_m2.metric("🟡 ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
+                c_m3.metric("🔴 PUT WALL", f"{p_wall:.0f}")
+                st.markdown("---")
+                # --- FINE MIGLIORIA UX ---
+
                 # 1. Inizializzazione chiavi robuste
                 def init_slider(key, default_val):
                     if key not in st.session_state:
@@ -1298,7 +1307,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=700,
+                            height=950, # UX: DIMENSIONE AUMENTATA DA 700 A 950
                             uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
                             dragmode='pan', hovermode='x unified'
                         )
@@ -1444,7 +1453,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         use_container_width=True, 
                         key=f"fixed_chart_{current_ticker}_render", 
                         theme=None, 
-                        config={'scrollZoom': True}
+                        # UX: Aggiunto displayModeBar per garantire il tasto Fullscreen
+                        config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False} 
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
