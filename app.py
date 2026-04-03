@@ -1308,43 +1308,25 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         prezzo_min = df_price['Low'].min() * (1 - padding/100)
                         prezzo_max = df_price['High'].max() * (1 + padding/100)
 
-                    fig_key = f"fig_price_{current_ticker}"
+                    # 1. Creazione diretta (molto più veloce)
+                    fig_price = go.Figure(data=[go.Candlestick(
+                        x=df_price['datetime'],
+                        open=df_price['Open'],
+                        high=df_price['High'],
+                        low=df_price['Low'],
+                        close=df_price['Close'],
+                        name='Price',
+                        increasing=dict(line=dict(color='#00ff88'), fillcolor='#00A666'),
+                        decreasing=dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
+                    )])
                     
-                    # 1. Creazione Figura Base
-                    if fig_key not in st.session_state:
-                        st.session_state[fig_key] = go.Figure()
-                        st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
-                        st.session_state[fig_key].update_layout(
-                            title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
-                            template="plotly_dark",
-                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=850, 
-                            uirevision=current_ticker, 
-                            dragmode='pan', 
-                            hovermode='x unified',
-                            showlegend=False,
-                            # FIX PROFESSIONALE SFARFALLIO:
-                            # Sostituiamo rgba(0,0,0,0) con il colore nativo Streamlit #0E1117
-                            # Questo elimina il ricalcolo dell'alpha channel durante lo zoom/scroll
-                            paper_bgcolor='#0E1117',
-                            plot_bgcolor='#0E1117',
-                            # Ottimizzazione margini per evitare scrollbar fantasma
-                            margin=dict(l=10, r=50, t=50, b=20)
-                        )
-                    
-                    fig_price = st.session_state[fig_key]
-                    
-                    # 2. Aggiornamento Dati (Invia tutto per permettere lo scroll)
-                    traccia = fig_price.data[0]
-                    traccia.x = df_price['datetime']
-                    traccia.open = df_price['Open']
-                    traccia.high = df_price['High']
-                    traccia.low = df_price['Low']
-                    traccia.close = df_price['Close']
-                    traccia.increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
-                    traccia.decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
-                    
+                    # Aggiunta livelli statici (Logica 74)
+                    fig_price.add_hline(y=z_gamma, line_color="white", line_width=2, annotation_text="0-G STATIC")
+                    fig_price.add_hline(y=z_gamma_dyn, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC")
+                    fig_price.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
+                    fig_price.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
+                    fig_price.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
+
                     # 3. AGGIORNAMENTO CONDIZIONALE DEGLI ASSI
                     # Avviene SOLO se l'utente ha mosso gli slider. Se è un autorefresh, salta e lascia lo zoom intatto!
                     if st.session_state["force_zoom_update"]:
@@ -1352,19 +1334,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
                     
-                    fig_price.data = (fig_price.data[0],) # Clear old traces
-                    fig_price.layout.shapes = ()
-                    fig_price.layout.annotations = ()
-                    
                     # 4. Disegno Muri
                     if gamma_mode:
                         v_trig_touch = abs(spot - v_trigger) / spot < 0.005
                         v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
                         fig_price.add_hrect(y0=v_trigger - spot*0.002, y1=v_trigger + spot*0.002, fillcolor=v_trig_color, layer="below", line_width=0)
-                    
-                    fig_price.add_hline(y=z_gamma, line_color="yellow", line_dash="dash", annotation_text="Zero Gamma")
-                    fig_price.add_hline(y=z_gamma_dyn, line_color="cyan", line_dash="dash", annotation_text="Zero Gamma Dyn")
-                    fig_price.add_hline(y=v_trigger, line_color="magenta", line_dash="dash", annotation_text="Vol Trigger")
                     
                     # --- WHALE INTELLIGENCE OVERLAYS ---
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
@@ -1469,12 +1443,28 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
                                     fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
+                    # Configurazione Layout
+                    fig_price.update_layout(
+                        title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                        xaxis_title="Data/Ora", yaxis_title="Prezzo",
+                        template="plotly_dark",
+                        xaxis=dict(rangeslider=dict(visible=False), type='date'),
+                        height=800, 
+                        uirevision=current_ticker, 
+                        dragmode='pan', 
+                        hovermode='x unified',
+                        showlegend=False,
+                        paper_bgcolor='#0E1117',
+                        plot_bgcolor='#0E1117',
+                        margin=dict(l=0, r=50, t=30, b=0)
+                    )
+
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"fixed_chart_{current_ticker}_render", 
+                        key=f"p_chart_{current_ticker}", 
                         theme=None, 
-                        config={'scrollZoom': True}
+                        config={'scrollZoom': True, 'displayModeBar': False}
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
