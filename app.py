@@ -1304,22 +1304,28 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
-                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=750, # UX: Ripristino proporzioni per evitare effetto allungato
-                            uirevision=current_ticker, 
-                            dragmode='pan', hovermode='x unified',
-                            # UX: Legenda orizzontale in alto a sinistra per non rubare spazio laterale
-                            legend=dict(
-                                yanchor="top",
-                                y=0.99,
-                                xanchor="left",
-                                x=0.01,
-                                orientation="h",
-                                bgcolor="rgba(0,0,0,0.5)"
+                            xaxis=dict(
+                                rangeslider=dict(visible=False), 
+                                type='date',
+                                title="Data/Ora"
                             ),
-                            margin=dict(l=10, r=10, t=40, b=10) # UX: Margini ridotti per massimizzare il grafico
+                            yaxis=dict(
+                                title="Prezzo", 
+                                side="right", 
+                                autorange=True, 
+                                fixedrange=False # Permette lo zoom verticale libero
+                            ),
+                            height=750, 
+                            # FIX SALTELLAMENTO: uirevision impostato su True fisso
+                            uirevision=True, 
+                            dragmode='pan', 
+                            hovermode='x unified',
+                            legend=dict(
+                                yanchor="top", y=0.99, xanchor="left", x=0.01,
+                                orientation="h", bgcolor="rgba(0,0,0,0.5)"
+                            ),
+                            margin=dict(l=10, r=50, t=40, b=10)
                         )
                     
                     fig_price = st.session_state[fig_key]
@@ -1463,8 +1469,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         use_container_width=True, 
                         key=f"fixed_chart_{current_ticker}_render", 
                         theme=None, 
-                        # UX: Aggiunto displayModeBar per garantire il tasto Fullscreen
-                        config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False} 
+                        # FIX FLUIDITÀ: Attiviamo lo scrollZoom senza restrizioni
+                        config={
+                            'scrollZoom': True, 
+                            'displayModeBar': True, 
+                            'displaylogo': False,
+                            'modeBarButtonsToRemove': ['select2d', 'lasso2d']
+                        }
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
