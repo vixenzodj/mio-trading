@@ -1316,13 +1316,27 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
                             template="plotly_dark",
-                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            yaxis=dict(side="right", autorange=True, fixedrange=False),
+                            yaxis=dict(
+                                title="Prezzo",
+                                side="right",
+                                autorange=True,     # Mantiene le candele visibili
+                                fixedrange=False,   # Permette lo zoom verticale
+                                nticks=10,          # Riduce il carico di calcolo delle etichette
+                                gridcolor='rgba(128,128,128,0.1)' # Griglia leggera
+                            ),
+                            xaxis=dict(
+                                rangeslider=dict(visible=False),
+                                type='date',
+                                fixedrange=False
+                            ),
+                            # DISATTIVA l'animazione degli assi che causa il salto
+                            transition={'duration': 0}, 
+                            uirevision='costante',
                             height=700,
-                            uirevision="constant_view", # FIX: Stringa fissa per bloccare lo zoom
                             dragmode='pan',
                             showlegend=False, # Legenda gestita esternamente
-                            margin=dict(t=30, b=20, l=10, r=50)
+                            margin=dict(t=30, b=30, l=10, r=60),
+                            hovermode='x unified'
                         )
 
                     fig_price = st.session_state[fig_key]
@@ -1331,9 +1345,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     if not fig_price.data:
                         fig_price.add_trace(go.Candlestick(name="Price"))
                     
-                    # Mantieni solo la traccia 0 (Candele) e pulisci il resto (Muri/Balene) 
-                    # per evitare sfarfallio e accumulo di tracce
-                    fig_price.data = (fig_price.data[0],)
+                    # Mantieni solo la traccia base (candele)
+                    if len(fig_price.data) > 1:
+                        fig_price.data = (fig_price.data[0],)
                     
                     # 2. Aggiornamento Dati (Invia tutto per permettere lo scroll)
                     traccia = fig_price.data[0]
@@ -1352,7 +1366,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
                     
-                    fig_price.data = (fig_price.data[0],) # Clear old traces
+                    if len(fig_price.data) > 1:
+                        fig_price.data = (fig_price.data[0],) # Clear old traces
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
                     
@@ -1469,15 +1484,20 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
                                     fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
+                    # Usiamo theme=None per caricare Plotly in modalità nativa ultra-rapida
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"chart_{current_ticker}_stable",
+                        key=f"fluid_chart_{current_ticker}",
+                        theme=None, # Fondamentale: elimina lo sfarfallio durante lo zoom
                         config={
-                            'scrollZoom': True,      # Abilita rotellina
-                            'displayModeBar': True,
-                            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
-                            'responsive': True
+                            'scrollZoom': True,
+                            'displayModeBar': False,
+                            'editable': False,
+                            'showAxisDragHandles': False,
+                            'showAxisRangeEntryBoxes': False,
+                            'frameMargins': 0,
+                            'queueLength': 0 # Riduce il lag dei comandi della rotellina
                         }
                     )
                 else:
