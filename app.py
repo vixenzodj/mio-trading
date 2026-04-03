@@ -1241,14 +1241,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 c_m2.metric("🟡 ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
                 c_m3.metric("🔴 PUT WALL", f"{p_wall:.0f}")
                 
-                # 2. LEGENDA ESTERNA (Sopra il grafico, non interferisce con Plotly)
+                # --- LEGENDA ESTERNA PROFESSIONALE ---
                 st.markdown("""
-                <div style="padding: 10px; border-radius: 5px; background-color: rgba(255,255,255,0.05); margin-bottom: 10px;">
-                    <span style="color: #FFFFFF; font-weight: bold; margin-right: 15px;">⚪ Prezzo (Candele)</span>
-                    <span style="color: #00FF00; font-weight: bold; margin-right: 15px;">💹 Whale Buy</span>
-                    <span style="color: #FF0000; font-weight: bold; margin-right: 15px;">📉 Whale Sell</span>
-                    <span style="color: #FFA500; font-weight: bold; margin-right: 15px;">🟡 Zero Gamma</span>
-                    <span style="color: #00FFFF; font-weight: bold;">🔵 Muri (Call/Put)</span>
+                <div style="display: flex; gap: 20px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 5px;">
+                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #00ff88;">●</span> <small>PREZZO</small></div>
+                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #00FF00;">◆</span> <small>WHALE BUY</small></div>
+                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #FF0000;">◆</span> <small>WHALE SELL</small></div>
+                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #FFA500;">—</span> <small>ZERO GAMMA</small></div>
+                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #00FFFF;">—</span> <small>MURI QUANT</small></div>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -1312,24 +1312,28 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     # 1. Creazione Figura Base
                     if fig_key not in st.session_state:
                         st.session_state[fig_key] = go.Figure()
+                        # Aggiungiamo la traccia base (Candele) una sola volta
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
-                            title=dict(
-                                text=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                                x=0.5, xanchor='center' # Titolo centrato perfettamente
-                            ),
-                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
+                            yaxis=dict(side="right", autorange=True, fixedrange=False),
                             height=700,
-                            uirevision=current_ticker, 
-                            dragmode='pan', hovermode='x unified',
-                            showlegend=False, # DISATTIVA LEGENDA INTERNA PER EVITARE CONFLITTI
-                            margin=dict(t=50, b=20, l=10, r=50)
+                            uirevision="constant_view", # FIX: Stringa fissa per bloccare lo zoom
+                            dragmode='pan',
+                            showlegend=False, # Legenda gestita esternamente
+                            margin=dict(t=30, b=20, l=10, r=50)
                         )
-                    
+
                     fig_price = st.session_state[fig_key]
-                    fig_price.data = [] # PULIZIA TRACCE: Rimuove i dati vecchi per evitare sfarfallio
+                    
+                    # FIX INDEX ERROR: Se per qualche motivo il grafico è vuoto, ricrealo
+                    if not fig_price.data:
+                        fig_price.add_trace(go.Candlestick(name="Price"))
+                    
+                    # Mantieni solo la traccia 0 (Candele) e pulisci il resto (Muri/Balene) 
+                    # per evitare sfarfallio e accumulo di tracce
+                    fig_price.data = (fig_price.data[0],)
                     
                     # 2. Aggiornamento Dati (Invia tutto per permettere lo scroll)
                     traccia = fig_price.data[0]
@@ -1468,9 +1472,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"fixed_chart_{current_ticker}_render", 
-                        theme=None, 
-                        config={'scrollZoom': True}
+                        key=f"chart_{current_ticker}_stable",
+                        config={
+                            'scrollZoom': True,      # Abilita rotellina
+                            'displayModeBar': True,
+                            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                            'responsive': True
+                        }
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
