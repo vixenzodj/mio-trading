@@ -1307,9 +1307,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=950, # UX: DIMENSIONE AUMENTATA DA 700 A 950
-                            uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
-                            dragmode='pan', hovermode='x unified'
+                            height=750, # UX: Ripristino proporzioni per evitare effetto allungato
+                            uirevision=current_ticker, 
+                            dragmode='pan', hovermode='x unified',
+                            # UX: Legenda orizzontale in alto a sinistra per non rubare spazio laterale
+                            legend=dict(
+                                yanchor="top",
+                                y=0.99,
+                                xanchor="left",
+                                x=0.01,
+                                orientation="h",
+                                bgcolor="rgba(0,0,0,0.5)"
+                            ),
+                            margin=dict(l=10, r=10, t=40, b=10) # UX: Margini ridotti per massimizzare il grafico
                         )
                     
                     fig_price = st.session_state[fig_key]
