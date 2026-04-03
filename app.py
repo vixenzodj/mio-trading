@@ -586,9 +586,13 @@ def get_whale_intelligence(ticker):
             if not df_idx.empty:
                 if isinstance(df_idx.columns, pd.MultiIndex): df_idx.columns = df_idx.columns.get_level_values(0)
                 # Calcolo Vettoriale (Candela per Candela)
-                aligned_idx, aligned_etf = df_idx['Close'].align(df_etf['Close'], join='inner')
-                df_etf['Dynamic_Ratio'] = aligned_idx / aligned_etf
+                idx_aligned, etf_aligned = df_idx['Close'].align(df_etf['Close'], join='inner')
+                df_etf['Dynamic_Ratio'] = (idx_aligned / etf_aligned).replace([np.inf, -np.inf], np.nan)
+                # Molto importante: riempiamo i buchi e garantiamo che ci sia sempre un valore
                 df_etf['Dynamic_Ratio'] = df_etf['Dynamic_Ratio'].ffill().bfill()
+                # Se dopo la pulizia è ancora vuoto, usa la ratio dell'ultimo minuto
+                if df_etf['Dynamic_Ratio'].isnull().all():
+                    df_etf['Dynamic_Ratio'] = df_idx['Close'].iloc[-1] / df_etf['Close'].iloc[-1]
                 ratio_val = df_etf['Dynamic_Ratio'].iloc[-1]
             else:
                 # Fallback
@@ -683,7 +687,7 @@ def get_whale_intelligence(ticker):
             "Volume_Buyers": float(vol_buyers),
             "Volume_Sellers": float(vol_sellers),
             "Error": None,
-            "df_whale": anomalies.copy() if not anomalies.empty else pd.DataFrame(), # FIX: Passiamo solo le vere anomalie, salvando RAM e superando il limite temporale
+            "df_whale": df_etf.copy() if not df_etf.empty else pd.DataFrame(), # FIX: Esportiamo l'intero ETF per la Dynamic Ratio
             "vol_mean": float(vol_mean),
             "vol_sd": float(vol_sd),
             "ratio": float(ratio_val) # FIX: Reintegrata per permettere il rendering corretto sugli indici
@@ -1337,29 +1341,58 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name=leg_name)
                         
                         if 'df_whale' in whale_data and not whale_data['df_whale'].empty:
+                            # Allineamento ratio sul dataframe principale del grafico
+                            df_price.set_index('datetime', inplace=True)
+                            df_whale_ratio = whale_data['df_whale'][['Dynamic_Ratio']].copy()
+                            if df_whale_ratio.index.tz is not None:
+                                df_whale_ratio.index = df_whale_ratio.index.tz_localize(None)
+                            df_price = df_price.merge(df_whale_ratio, left_index=True, right_index=True, how='left')
+                            df_price['Dynamic_Ratio'] = df_price['Dynamic_Ratio'].ffill().bfill()
+                            df_price.reset_index(inplace=True)
+
+                            # Recupero anomalie per i marker
+                            vol_mean = whale_data.get('vol_mean', 0)
+                            vol_sd = whale_data.get('vol_sd', 0)
                             whale_candles = whale_data['df_whale']
-                            ratio = whale_data.get('ratio', 1.0)
+                            whale_candles = whale_candles[whale_candles['Volume'] > (vol_mean + 2.5 * vol_sd)].copy()
+                            
+                            # Mostra i diamanti/marker solo per le ultime 24 ore
+                            if not whale_candles.empty:
+                                cutoff_24h = datetime.now(whale_candles.index.tz) - timedelta(hours=24)
+                                whale_candles = whale_candles[whale_candles.index >= cutoff_24h]
                             
                             # Logica Lee-Ready (Mid-Price) coerente con l'HUD
                             mid_prices = (whale_candles['High'] + whale_candles['Low']) / 2
                             buy_candles = whale_candles[whale_candles['Close'] > mid_prices]
                             sell_candles = whale_candles[whale_candles['Close'] <= mid_prices]
                             
-                            # FIX TIMEZONE: Rimuove il fuso orario per combaciare perfettamente col grafico (Zero Sfarfallamenti)
+                            # FIX TIMEZONE E COORDINATE Y CON DYNAMIC RATIO DEL DF_PRICE
+                            df_price['Whale_Buy'] = False
+                            df_price['Whale_Sell'] = False
+                            
                             if not buy_candles.empty:
                                 x_buy = buy_candles.index.tz_localize(None) if buy_candles.index.tz is not None else buy_candles.index
+                                df_price.loc[df_price['datetime'].isin(x_buy), 'Whale_Buy'] = True
+                            
+                            if not sell_candles.empty:
+                                x_sell = sell_candles.index.tz_localize(None) if sell_candles.index.tz is not None else sell_candles.index
+                                df_price.loc[df_price['datetime'].isin(x_sell), 'Whale_Sell'] = True
+                                
+                            buy_points = df_price[df_price['Whale_Buy']]
+                            sell_points = df_price[df_price['Whale_Sell']]
+                            
+                            if not buy_points.empty:
                                 fig_price.add_trace(go.Scatter(
-                                    x=x_buy,
-                                    y=buy_candles['Low'] * buy_candles['Dynamic_Ratio'] * 0.9995,
+                                    x=buy_points['datetime'],
+                                    y=buy_points['Low'] * buy_points['Dynamic_Ratio'] * 0.9995,
                                     mode='markers',
                                     marker=dict(symbol='triangle-up', size=14, color='#00FF00', line=dict(width=1, color='black')),
                                     name='🐳 Whale Buy'
                                 ))
-                            if not sell_candles.empty:
-                                x_sell = sell_candles.index.tz_localize(None) if sell_candles.index.tz is not None else sell_candles.index
+                            if not sell_points.empty:
                                 fig_price.add_trace(go.Scatter(
-                                    x=x_sell,
-                                    y=sell_candles['High'] * sell_candles['Dynamic_Ratio'] * 1.0005,
+                                    x=sell_points['datetime'],
+                                    y=sell_points['High'] * sell_points['Dynamic_Ratio'] * 1.0005,
                                     mode='markers',
                                     marker=dict(symbol='triangle-down', size=14, color='#FF0000', line=dict(width=1, color='black')),
                                     name='🐳 Whale Sell'
