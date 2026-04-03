@@ -1234,26 +1234,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.plotly_chart(fig_skew, use_container_width=True)
 
             with tab_price:
-                # 1. Metriche Duplicate (Dashboard Superiore)
-                st.markdown("### 🧱 Livelli Quantistici Chiave")
-                c_m1, c_m2, c_m3 = st.columns(3)
-                c_m1.metric("🟢 CALL WALL", f"{c_wall:.0f}")
-                c_m2.metric("🟡 ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
-                c_m3.metric("🔴 PUT WALL", f"{p_wall:.0f}")
-                
-                # --- LEGENDA ESTERNA PROFESSIONALE ---
-                st.markdown("""
-                <div style="display: flex; gap: 20px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 5px;">
-                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #00ff88;">●</span> <small>PREZZO</small></div>
-                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #00FF00;">◆</span> <small>WHALE BUY</small></div>
-                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #FF0000;">◆</span> <small>WHALE SELL</small></div>
-                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #FFA500;">—</span> <small>ZERO GAMMA</small></div>
-                    <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #00FFFF;">—</span> <small>MURI QUANT</small></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown("---")
-
                 # 1. Inizializzazione chiavi robuste
                 def init_slider(key, default_val):
                     if key not in st.session_state:
@@ -1312,42 +1292,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     # 1. Creazione Figura Base
                     if fig_key not in st.session_state:
                         st.session_state[fig_key] = go.Figure()
-                        # Aggiungiamo la traccia base (Candele) una sola volta
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
+                            title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
-                            yaxis=dict(
-                                title="Prezzo",
-                                side="right",
-                                autorange=True,     # Mantiene le candele visibili
-                                fixedrange=False,   # Permette lo zoom verticale
-                                nticks=10,          # Riduce il carico di calcolo delle etichette
-                                gridcolor='rgba(128,128,128,0.1)' # Griglia leggera
-                            ),
-                            xaxis=dict(
-                                rangeslider=dict(visible=False),
-                                type='date',
-                                fixedrange=False
-                            ),
-                            # DISATTIVA l'animazione degli assi che causa il salto
-                            transition={'duration': 0}, 
-                            uirevision='costante',
+                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
                             height=700,
-                            dragmode='pan',
-                            showlegend=False, # Legenda gestita esternamente
-                            margin=dict(t=30, b=30, l=10, r=60),
-                            hovermode='x unified'
+                            uirevision=current_ticker, # Fondamentale per mantenere lo zoom client-side
+                            dragmode='pan', hovermode='x unified'
                         )
-
+                    
                     fig_price = st.session_state[fig_key]
-                    
-                    # FIX INDEX ERROR: Se per qualche motivo il grafico è vuoto, ricrealo
-                    if not fig_price.data:
-                        fig_price.add_trace(go.Candlestick(name="Price"))
-                    
-                    # Mantieni solo la traccia base (candele)
-                    if len(fig_price.data) > 1:
-                        fig_price.data = (fig_price.data[0],)
                     
                     # 2. Aggiornamento Dati (Invia tutto per permettere lo scroll)
                     traccia = fig_price.data[0]
@@ -1366,8 +1322,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
                     
-                    if len(fig_price.data) > 1:
-                        fig_price.data = (fig_price.data[0],) # Clear old traces
+                    fig_price.data = (fig_price.data[0],) # Clear old traces
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
                     
@@ -1484,21 +1439,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
                                     fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
-                    # Usiamo theme=None per caricare Plotly in modalità nativa ultra-rapida
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"fluid_chart_{current_ticker}",
-                        theme=None, # Fondamentale: elimina lo sfarfallio durante lo zoom
-                        config={
-                            'scrollZoom': True,
-                            'displayModeBar': False,
-                            'editable': False,
-                            'showAxisDragHandles': False,
-                            'showAxisRangeEntryBoxes': False,
-                            'frameMargins': 0,
-                            'queueLength': 0 # Riduce il lag dei comandi della rotellina
-                        }
+                        key=f"fixed_chart_{current_ticker}_render", 
+                        theme=None, 
+                        config={'scrollZoom': True}
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
