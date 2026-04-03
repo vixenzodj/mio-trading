@@ -1315,17 +1315,22 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key] = go.Figure()
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
+                            title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
-                            paper_bgcolor='#0E1117', # Colore solido (Zero sfarfallio)
-                            plot_bgcolor='#0E1117',  # Colore solido (Zero sfarfallio)
-                            height=800,
-                            margin=dict(l=0, r=50, t=30, b=0),
-                            uirevision='constant_view', # Fondamentale: blocca la visuale
-                            dragmode='pan',
+                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
+                            height=850, 
+                            uirevision=current_ticker, 
+                            dragmode='pan', 
                             hovermode='x unified',
                             showlegend=False,
-                            xaxis=dict(rangeslider=dict(visible=False), type='date', gridcolor='#1E2329'),
-                            yaxis=dict(side="right", gridcolor='#1E2329')
+                            # FIX PROFESSIONALE SFARFALLIO:
+                            # Sostituiamo rgba(0,0,0,0) con il colore nativo Streamlit #0E1117
+                            # Questo elimina il ricalcolo dell'alpha channel durante lo zoom/scroll
+                            paper_bgcolor='#0E1117',
+                            plot_bgcolor='#0E1117',
+                            # Ottimizzazione margini per evitare scrollbar fantasma
+                            margin=dict(l=10, r=50, t=50, b=20)
                         )
                     
                     fig_price = st.session_state[fig_key]
@@ -1347,7 +1352,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
                     
-                    fig_price.data = [fig_price.data[0]] if len(fig_price.data) > 0 else [] # Clear old traces
+                    fig_price.data = (fig_price.data[0],) # Clear old traces
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
                     
@@ -1467,15 +1472,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"p_chart_{current_ticker}",
-                        theme=None, # Rimuove l'overhead di Streamlit (Fix sfarfallio)
-                        config={
-                            'scrollZoom': True,
-                            'displayModeBar': False,
-                            'responsive': True,
-                            'displaylogo': False,
-                            'queueLength': 0
-                        }
+                        key=f"fixed_chart_{current_ticker}_render", 
+                        theme=None, 
+                        config={'scrollZoom': True}
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
