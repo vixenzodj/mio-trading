@@ -578,19 +578,26 @@ def get_whale_intelligence(ticker):
         if isinstance(df_etf.columns, pd.MultiIndex): df_etf.columns = df_etf.columns.get_level_values(0)
         df_etf.rename(columns={str(c): str(c).capitalize() for c in df_etf.columns}, inplace=True)
 
-        # 2. Calcolo Dinamico della Ratio (Index / ETF)
-        ratio = 1.0
+        # 2. Calcolo Dinamico della Ratio (Index / ETF) - ROLLING MINUTE-BY-MINUTE
+        ratio_val = 1.0
         if is_index:
             idx_sym = "^" + clean_ticker if not ticker.startswith("^") else ticker
-            df_idx = yf.download(idx_sym, period="1d", interval="1m", progress=False, prepost=True)
+            df_idx = yf.download(idx_sym, period="5d", interval="1m", progress=False, prepost=True) # Allineato a 5d come l'ETF
             if not df_idx.empty:
                 if isinstance(df_idx.columns, pd.MultiIndex): df_idx.columns = df_idx.columns.get_level_values(0)
-                ratio = df_idx['Close'].iloc[-1] / df_etf['Close'].iloc[-1]
+                # Calcolo Vettoriale (Candela per Candela)
+                aligned_idx, aligned_etf = df_idx['Close'].align(df_etf['Close'], join='inner')
+                df_etf['Dynamic_Ratio'] = aligned_idx / aligned_etf
+                df_etf['Dynamic_Ratio'] = df_etf['Dynamic_Ratio'].ffill().bfill()
+                ratio_val = df_etf['Dynamic_Ratio'].iloc[-1]
             else:
-                # Fallback: Ratio basata su prezzi storici se intraday indice fallisce
+                # Fallback
                 ticker_info = yf.Ticker(idx_sym).fast_info
                 etf_info = yf.Ticker(target_ticker).fast_info
-                ratio = ticker_info.last_price / etf_info.last_price
+                ratio_val = ticker_info.last_price / etf_info.last_price
+                df_etf['Dynamic_Ratio'] = ratio_val
+        else:
+            df_etf['Dynamic_Ratio'] = 1.0
 
         # 3. Identificazione Whale Level sull'ETF (Punti di Accumulazione)
         vol_mean = df_etf['Volume'].mean()
@@ -638,8 +645,9 @@ def get_whale_intelligence(ticker):
                 # Usa tutte le anomalie se il prezzo è vicino al VWAP globale
                 target_anomalies = anomalies
                 
-            # Calcolo Whale-VWAP finale (su target_anomalies)
-            whale_price_etf = (target_anomalies['Close'] * target_anomalies['Weighted_Volume']).sum() / target_anomalies['Weighted_Volume'].sum()
+            # Calcolo Whale-VWAP scalato millimetricamente minuto per minuto
+            idx_closes = target_anomalies['Close'] * target_anomalies['Dynamic_Ratio']
+            final_whale_price = float((idx_closes * target_anomalies['Weighted_Volume']).sum() / target_anomalies['Weighted_Volume'].sum())
             
             # Logica Direzionale (Lee-Ready) sul target scelto
             mid_price = (target_anomalies['High'] + target_anomalies['Low']) / 2
@@ -658,11 +666,8 @@ def get_whale_intelligence(ticker):
             # Intensità basata sul numero di anomalie nel target
             intensity = 70 if len(target_anomalies) > 3 else 50
             
-        # 4. CONVERSIONE FINALE PER L'INDICE
-        final_whale_price = float(whale_price_etf * ratio)
-        
         # Confluenza basata sulla vicinanza al prezzo attuale
-        current_price = df_etf['Close'].iloc[-1] * ratio
+        current_price = df_etf['Close'].iloc[-1] * ratio_val
         confluence = "High" if abs(current_price - final_whale_price) / current_price < 0.003 else "Mid"
 
         # Mostra i diamanti/marker solo per le ultime 24 ore
@@ -681,7 +686,7 @@ def get_whale_intelligence(ticker):
             "df_whale": anomalies.copy() if not anomalies.empty else pd.DataFrame(), # FIX: Passiamo solo le vere anomalie, salvando RAM e superando il limite temporale
             "vol_mean": float(vol_mean),
             "vol_sd": float(vol_sd),
-            "ratio": float(ratio) # FIX: Reintegrata per permettere il rendering corretto sugli indici
+            "ratio": float(ratio_val) # FIX: Reintegrata per permettere il rendering corretto sugli indici
         }
     except Exception as e:
         return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Whale_Bias": "NEUTRAL", "Volume_Buyers": 0, "Volume_Sellers": 0, "Error": str(e)}
@@ -1345,7 +1350,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                 x_buy = buy_candles.index.tz_localize(None) if buy_candles.index.tz is not None else buy_candles.index
                                 fig_price.add_trace(go.Scatter(
                                     x=x_buy,
-                                    y=buy_candles['Low'] * ratio * 0.9995, # Agganciato all'Indice
+                                    y=buy_candles['Low'] * buy_candles['Dynamic_Ratio'] * 0.9995,
                                     mode='markers',
                                     marker=dict(symbol='triangle-up', size=14, color='#00FF00', line=dict(width=1, color='black')),
                                     name='🐳 Whale Buy'
@@ -1354,7 +1359,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                 x_sell = sell_candles.index.tz_localize(None) if sell_candles.index.tz is not None else sell_candles.index
                                 fig_price.add_trace(go.Scatter(
                                     x=x_sell,
-                                    y=sell_candles['High'] * ratio * 1.0005, # Agganciato all'Indice
+                                    y=sell_candles['High'] * sell_candles['Dynamic_Ratio'] * 1.0005,
                                     mode='markers',
                                     marker=dict(symbol='triangle-down', size=14, color='#FF0000', line=dict(width=1, color='black')),
                                     name='🐳 Whale Sell'
