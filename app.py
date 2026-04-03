@@ -1243,7 +1243,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
                 # Legenda HTML personalizzata (fuori dal grafico Plotly per non interferire)
                 st.markdown("""
-                <div style="display: flex; gap: 15px; height: 50px; overflow: hidden; padding: 10px; background: #1E2329; border: 1px solid #333; border-radius: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 15px; padding: 10px; background: #1E2329; border: 1px solid #333; border-radius: 8px; margin-bottom: 10px; flex-wrap: wrap;">
                     <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #00ff88;">█</span> <span style="color: lightgray; font-size: 14px;">Prezzo</span></div>
                     <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #00FFCC;">▲</span> <span style="color: lightgray; font-size: 14px;">Whale Buy (Accumulo)</span></div>
                     <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #FF3366;">▼</span> <span style="color: lightgray; font-size: 14px;">Whale Sell (Distribuzione)</span></div>
@@ -1315,27 +1315,22 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         st.session_state[fig_key] = go.Figure()
                         st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
                         st.session_state[fig_key].update_layout(
-                            template="plotly_dark", # Manteniamo la base dark
-                            paper_bgcolor='#0E1117', # Colore solido Streamlit
-                            plot_bgcolor='#0E1117',  # Colore solido Streamlit
-                            xaxis=dict(
-                                rangeslider=dict(visible=False),
-                                type='date',
-                                gridcolor='#1E2329', # Griglia sottile per meno carico visivo
-                                zeroline=False
-                            ),
-                            yaxis=dict(
-                                side="right",
-                                gridcolor='#1E2329',
-                                zeroline=False,
-                                fixedrange=False # Permette zoom verticale fluido
-                            ),
-                            height=800, # Ridotto leggermente da 850 per dare respiro al browser
-                            margin=dict(l=0, r=40, t=20, b=0), # Margini azzerati per stabilità
-                            uirevision='stabile', # Stringa statica: non deve MAI cambiare
-                            dragmode='pan',
+                            title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                            xaxis_title="Data/Ora", yaxis_title="Prezzo",
+                            template="plotly_dark",
+                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
+                            height=850, 
+                            uirevision=current_ticker, 
+                            dragmode='pan', 
                             hovermode='x unified',
-                            showlegend=False
+                            showlegend=False,
+                            # FIX PROFESSIONALE SFARFALLIO:
+                            # Sostituiamo rgba(0,0,0,0) con il colore nativo Streamlit #0E1117
+                            # Questo elimina il ricalcolo dell'alpha channel durante lo zoom/scroll
+                            paper_bgcolor='#0E1117',
+                            plot_bgcolor='#0E1117',
+                            # Ottimizzazione margini per evitare scrollbar fantasma
+                            margin=dict(l=10, r=50, t=50, b=20)
                         )
                     
                     fig_price = st.session_state[fig_key]
@@ -1477,18 +1472,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"chart_stable_{current_ticker}",
-                        theme=None,  # Fondamentale per evitare il ricalcolo CSS di Streamlit
-                        config={
-                            'scrollZoom': True,
-                            'displayModeBar': False,
-                            'responsive': True,
-                            'displaylogo': False,
-                            'frameMargins': 0,
-                            'autosize': True,
-                            'doubleClick': 'reset+autosize',
-                            'queueLength': 0  # Forza l'esecuzione immediata senza lag
-                        }
+                        key=f"fixed_chart_{current_ticker}_render", 
+                        theme=None, 
+                        config={'scrollZoom': True}
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
