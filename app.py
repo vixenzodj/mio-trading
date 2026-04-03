@@ -574,6 +574,7 @@ def get_whale_intelligence(ticker):
         # Download dati ETF (Sorgente Volumi)
         df_etf = yf.download(target_ticker, period="5d", interval="1m", progress=False, prepost=True)
         if df_etf.empty: return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Whale_Bias": "NEUTRAL", "Volume_Buyers": 0, "Volume_Sellers": 0}
+        if df_etf.index.tz is not None: df_etf.index = df_etf.index.tz_localize(None)
         
         if isinstance(df_etf.columns, pd.MultiIndex): df_etf.columns = df_etf.columns.get_level_values(0)
         df_etf.rename(columns={str(c): str(c).capitalize() for c in df_etf.columns}, inplace=True)
@@ -584,6 +585,7 @@ def get_whale_intelligence(ticker):
             idx_sym = "^" + clean_ticker if not ticker.startswith("^") else ticker
             df_idx = yf.download(idx_sym, period="5d", interval="1m", progress=False, prepost=True) # Allineato a 5d come l'ETF
             if not df_idx.empty:
+                if df_idx.index.tz is not None: df_idx.index = df_idx.index.tz_localize(None)
                 if isinstance(df_idx.columns, pd.MultiIndex): df_idx.columns = df_idx.columns.get_level_values(0)
                 # Calcolo Vettoriale (Candela per Candela)
                 idx_aligned, etf_aligned = df_idx['Close'].align(df_etf['Close'], join='inner')
@@ -1343,11 +1345,23 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         if 'df_whale' in whale_data and not whale_data['df_whale'].empty:
                             # Allineamento ratio sul dataframe principale del grafico
                             df_price.set_index('datetime', inplace=True)
-                            df_whale_ratio = whale_data['df_whale'][['Dynamic_Ratio']].copy()
-                            if df_whale_ratio.index.tz is not None:
-                                df_whale_ratio.index = df_whale_ratio.index.tz_localize(None)
+                            
+                            # Protezione contro errori di Timezone e allineamento dati balene
+                            df_whale_data = whale_data['df_whale'].copy()
+                            
+                            # Rendiamo entrambi i dataframe "Naive" prima del merge per evitare il TypeError
+                            if df_price.index.tz is not None: df_price.index = df_price.index.tz_localize(None)
+                            if df_whale_data.index.tz is not None: df_whale_data.index = df_whale_data.index.tz_localize(None)
+                            
+                            # Merge chirurgico della sola colonna Dynamic_Ratio
+                            df_whale_ratio = df_whale_data[['Dynamic_Ratio']]
                             df_price = df_price.merge(df_whale_ratio, left_index=True, right_index=True, how='left')
                             df_price['Dynamic_Ratio'] = df_price['Dynamic_Ratio'].ffill().bfill()
+                            
+                            # Fallback di sicurezza se la ratio è ancora nulla
+                            if df_price['Dynamic_Ratio'].isnull().all():
+                                df_price['Dynamic_Ratio'] = whale_data.get('ratio', 1.0)
+                                
                             df_price.reset_index(inplace=True)
 
                             # Recupero anomalie per i marker
