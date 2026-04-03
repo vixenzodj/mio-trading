@@ -1395,21 +1395,33 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             buy_points = df_price[df_price['Whale_Buy']]
                             sell_points = df_price[df_price['Whale_Sell']]
                             
+                            # Determinazione corretta della coordinata Y per i Marker
+                            # Se il prezzo dell'indice è già > 1000 e la ratio è > 1, non moltiplichiamo (evitiamo double scaling)
+                            price_sample = df_price['Close'].iloc[-1]
+                            current_ratio = df_price['Dynamic_Ratio'].iloc[-1]
+                            
+                            # Fattore di correzione: moltiplica solo se i dati NON sono già stati scalati dal motore Alpaca
+                            scaling_factor = 1.0 if (price_sample > 1000 and current_ratio > 5) else df_price['Dynamic_Ratio']
+                            
                             if not buy_points.empty:
+                                y_buy = buy_points['Low'] * (scaling_factor if isinstance(scaling_factor, float) else buy_points['Dynamic_Ratio']) * 0.9992
                                 fig_price.add_trace(go.Scatter(
                                     x=buy_points['datetime'],
-                                    y=buy_points['Low'] * buy_points['Dynamic_Ratio'] * 0.9995,
+                                    y=y_buy,
                                     mode='markers',
-                                    marker=dict(symbol='triangle-up', size=14, color='#00FF00', line=dict(width=1, color='black')),
-                                    name='🐳 Whale Buy'
+                                    name='Whale Buy (Accumulo)',
+                                    marker=dict(symbol='triangle-up', size=14, color='#00FFCC', line=dict(width=2, color='white')),
+                                    hovertemplate="<b>Whale Buy</b><br>Prezzo: %{y:.2f}<br>%{x}<extra></extra>"
                                 ))
                             if not sell_points.empty:
+                                y_sell = sell_points['High'] * (scaling_factor if isinstance(scaling_factor, float) else sell_points['Dynamic_Ratio']) * 1.0008
                                 fig_price.add_trace(go.Scatter(
                                     x=sell_points['datetime'],
-                                    y=sell_points['High'] * sell_points['Dynamic_Ratio'] * 1.0005,
+                                    y=y_sell,
                                     mode='markers',
-                                    marker=dict(symbol='triangle-down', size=14, color='#FF0000', line=dict(width=1, color='black')),
-                                    name='🐳 Whale Sell'
+                                    name='Whale Sell (Distribuzione)',
+                                    marker=dict(symbol='triangle-down', size=14, color='#FF3366', line=dict(width=2, color='white')),
+                                    hovertemplate="<b>Whale Sell</b><br>Prezzo: %{y:.2f}<br>%{x}<extra></extra>"
                                 ))
                     
                     if gamma_mode and 'df' in locals() and not df.empty:
