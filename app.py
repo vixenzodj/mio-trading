@@ -1445,18 +1445,38 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
                     # Configurazione Layout
                     fig_price.update_layout(
-                        title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                        xaxis_title="Data/Ora", yaxis_title="Prezzo",
+                        title=dict(
+                            text=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                            x=0.5, xanchor='center'
+                        ),
+                        xaxis_title="Data/Ora", 
+                        yaxis_title="Prezzo",
                         template="plotly_dark",
-                        xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                        height=800, 
+                        
+                        # FIX 1: Rimuove i buchi temporali (notti e weekend) che causano salti orizzontali
+                        xaxis=dict(
+                            rangeslider=dict(visible=False), 
+                            type='date',
+                            rangebreaks=[
+                                dict(bounds=["16:00", "09:30"]), # Salta le ore di chiusura (Night gaps)
+                                dict(bounds=["sat", "mon"])      # Salta i weekend
+                            ],
+                            fixedrange=False # Permette lo scroll orizzontale
+                        ),
+                        
+                        # FIX 2: Blocca lo zoom verticale con la rotellina per impedire alle candele di uscire dallo schermo
+                        yaxis=dict(
+                            side="right", 
+                            autorange=False, 
+                            fixedrange=True  # <--- CRITICO: La rotellina ora non deformerà l'altezza delle candele
+                        ),
+                        
+                        height=700,
                         uirevision=current_ticker, 
                         dragmode='pan', 
                         hovermode='x unified',
-                        showlegend=False,
-                        paper_bgcolor='#0E1117',
-                        plot_bgcolor='#0E1117',
-                        margin=dict(l=0, r=50, t=30, b=0)
+                        showlegend=False, 
+                        margin=dict(t=50, b=20, l=10, r=50)
                     )
 
                     st.plotly_chart(
