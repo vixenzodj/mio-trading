@@ -1452,39 +1452,36 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         xaxis_title="Data/Ora", 
                         yaxis_title="Prezzo",
                         template="plotly_dark",
-                        
-                        # FIX 1: Rimuove i buchi temporali (notti e weekend) che causano salti orizzontali
-                        xaxis=dict(
-                            rangeslider=dict(visible=False), 
-                            type='date',
-                            rangebreaks=[
-                                dict(bounds=["16:00", "09:30"]), # Salta le ore di chiusura (Night gaps)
-                                dict(bounds=["sat", "mon"])      # Salta i weekend
-                            ],
-                            fixedrange=False # Permette lo scroll orizzontale
-                        ),
-                        
-                        # FIX 2: Blocca lo zoom verticale con la rotellina per impedire alle candele di uscire dallo schermo
+                        paper_bgcolor='rgba(0,0,0,0)', # Torna alla trasparenza originale
+                        plot_bgcolor='rgba(0,0,0,0)',
                         yaxis=dict(
-                            side="right", 
-                            autorange=False, 
-                            fixedrange=True  # <--- CRITICO: La rotellina ora non deformerà l'altezza delle candele
+                            side="left", # Riporta la scala a SINISTRA come prima
+                            fixedrange=True, # FIX: Blocca lo zoom verticale della rotellina
+                            gridcolor='#1E2329'
                         ),
-                        
+                        xaxis=dict(
+                            rangeslider=dict(visible=False),
+                            type='date',
+                            fixedrange=False # Permette lo zoom orizzontale
+                        ),
                         height=700,
                         uirevision=current_ticker, 
                         dragmode='pan', 
                         hovermode='x unified',
                         showlegend=False, 
-                        margin=dict(t=50, b=20, l=10, r=50)
+                        margin=dict(l=50, r=10, t=30, b=20) # Margini originali
                     )
 
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"p_chart_{current_ticker}", 
-                        theme=None, 
-                        config={'scrollZoom': True, 'displayModeBar': False}
+                        key=f"chart_{current_ticker}",
+                        theme="streamlit", # Torna al tema Streamlit se era quello stabile per te
+                        config={
+                            'scrollZoom': True, # La rotellina ora muoverà solo l'asse X grazie al punto 1
+                            'displayModeBar': False,
+                            'responsive': True
+                        }
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
