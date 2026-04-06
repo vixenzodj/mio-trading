@@ -1308,18 +1308,23 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         prezzo_min = df_price['Low'].min() * (1 - padding/100)
                         prezzo_max = df_price['High'].max() * (1 + padding/100)
 
-                    fig_key = f"fig_price_{current_ticker}"
+                    fig_key = f"fig_price_{current_ticker}_v3"
                     
-                    # 1. Creazione Figura Base (State-Aware per zoom fluido)
                     if fig_key not in st.session_state:
-                        st.session_state[fig_key] = go.Figure()
-                        st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
-                        st.session_state[fig_key].update_layout(
+                        fig = go.Figure()
+                        fig.add_trace(go.Candlestick(name="Price"))
+                        fig.add_trace(go.Scatter(name="0-G Static", mode="lines", line=dict(color="white", width=2, dash="dash")))
+                        fig.add_trace(go.Scatter(name="0-G Dynamic", mode="lines", line=dict(color="#00BFFF", width=2, dash="dot")))
+                        fig.add_trace(go.Scatter(name="Call Wall", mode="lines", line=dict(color="#32CD32", width=2)))
+                        fig.add_trace(go.Scatter(name="Put Wall", mode="lines", line=dict(color="#FF4500", width=2)))
+                        fig.add_trace(go.Scatter(name="Vanna Trigger", mode="lines", line=dict(color="#FF00FF", width=2, dash="longdash")))
+                        
+                        fig.update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            height=800, 
+                            height=850, 
                             uirevision=current_ticker, 
                             dragmode='pan', hovermode='x unified',
                             showlegend=False,
@@ -1327,36 +1332,41 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             plot_bgcolor='#0E1117',
                             margin=dict(l=0, r=50, t=30, b=0)
                         )
+                        st.session_state[fig_key] = fig
                     
                     fig_price = st.session_state[fig_key]
                     
-                    # 2. Aggiornamento Dati Diretto (Mantiene fluido lo zoom)
-                    traccia = fig_price.data[0]
-                    traccia.x = df_price['datetime']
-                    traccia.open = df_price['Open']
-                    traccia.high = df_price['High']
-                    traccia.low = df_price['Low']
-                    traccia.close = df_price['Close']
-                    traccia.increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
-                    traccia.decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
+                    # Aggiornamento Dati Diretto
+                    fig_price.data[0].x = df_price['datetime']
+                    fig_price.data[0].open = df_price['Open']
+                    fig_price.data[0].high = df_price['High']
+                    fig_price.data[0].low = df_price['Low']
+                    fig_price.data[0].close = df_price['Close']
+                    fig_price.data[0].increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
+                    fig_price.data[0].decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
                     
-                    # 3. AGGIORNAMENTO CONDIZIONALE DEGLI ASSI
+                    # Aggiornamento Linee
+                    x_line = [df_price['datetime'].iloc[0], df_price['datetime'].iloc[-1]]
+                    fig_price.data[1].x = x_line
+                    fig_price.data[1].y = [z_gamma, z_gamma]
+                    fig_price.data[2].x = x_line
+                    fig_price.data[2].y = [z_gamma_dyn, z_gamma_dyn]
+                    fig_price.data[3].x = x_line
+                    fig_price.data[3].y = [c_wall, c_wall]
+                    fig_price.data[4].x = x_line
+                    fig_price.data[4].y = [p_wall, p_wall]
+                    fig_price.data[5].x = x_line
+                    fig_price.data[5].y = [v_trigger, v_trigger]
+                    
                     if st.session_state["force_zoom_update"]:
                         fig_price.update_xaxes(range=x_range, autorange=False)
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
-
-                    # 4. Pulizia Tracce e Forme Secondarie (Ridisegna i muri puliti)
-                    fig_price.data = (fig_price.data[0],) 
+                    
+                    # Pulizia Tracce Dinamiche (Mantiene le prime 6 tracce base)
+                    fig_price.data = fig_price.data[:6]
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
-
-                    # Aggiunta livelli statici
-                    fig_price.add_hline(y=z_gamma, line_color="white", line_width=2, annotation_text="0-G STATIC")
-                    fig_price.add_hline(y=z_gamma_dyn, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC")
-                    fig_price.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
-                    fig_price.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
-                    fig_price.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
                     
                     # 4. Disegno Muri
                     if gamma_mode:
@@ -1467,14 +1477,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
                                     fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
-                    # Sostituisci il vecchio st.plotly_chart con questo:
-                    st.plotly_chart(
-                        fig_price, 
-                        use_container_width=True, 
-                        key=f"fixed_chart_{current_ticker}_render", 
-                        theme=None, 
-                        config={'scrollZoom': True, 'displayModeBar': False}
-                    )
+                    st.plotly_chart(fig_price, use_container_width=True, key=f"chart_{current_ticker}")
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
