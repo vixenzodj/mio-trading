@@ -1445,43 +1445,26 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
                     # Configurazione Layout
                     fig_price.update_layout(
-                        title=dict(
-                            text=f"Price Action (1m) vs Muri Quant - {current_ticker}",
-                            x=0.5, xanchor='center'
-                        ),
-                        xaxis_title="Data/Ora", 
-                        yaxis_title="Prezzo",
+                        title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
+                        xaxis_title="Data/Ora", yaxis_title="Prezzo",
                         template="plotly_dark",
-                        paper_bgcolor='rgba(0,0,0,0)', # Torna alla trasparenza originale
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        yaxis=dict(
-                            side="left", # Riporta la scala a SINISTRA come prima
-                            fixedrange=True, # FIX: Blocca lo zoom verticale della rotellina
-                            gridcolor='#1E2329'
-                        ),
-                        xaxis=dict(
-                            rangeslider=dict(visible=False),
-                            type='date',
-                            fixedrange=False # Permette lo zoom orizzontale
-                        ),
-                        height=700,
+                        xaxis=dict(rangeslider=dict(visible=False), type='date'),
+                        height=800, 
                         uirevision=current_ticker, 
                         dragmode='pan', 
                         hovermode='x unified',
-                        showlegend=False, 
-                        margin=dict(l=50, r=10, t=30, b=20) # Margini originali
+                        showlegend=False,
+                        paper_bgcolor='#0E1117',
+                        plot_bgcolor='#0E1117',
+                        margin=dict(l=0, r=50, t=30, b=0)
                     )
 
                     st.plotly_chart(
                         fig_price, 
                         use_container_width=True, 
-                        key=f"chart_{current_ticker}",
-                        theme="streamlit", # Torna al tema Streamlit se era quello stabile per te
-                        config={
-                            'scrollZoom': True, # La rotellina ora muoverà solo l'asse X grazie al punto 1
-                            'displayModeBar': False,
-                            'responsive': True
-                        }
+                        key=f"p_chart_{current_ticker}", 
+                        theme=None, 
+                        config={'scrollZoom': True, 'displayModeBar': False}
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
