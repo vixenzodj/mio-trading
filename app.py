@@ -1308,22 +1308,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         prezzo_min = df_price['Low'].min() * (1 - padding/100)
                         prezzo_max = df_price['High'].max() * (1 + padding/100)
 
-                    fig_key = f"fig_price_{current_ticker}_v4"
+                    fig_key = f"fig_price_{current_ticker}"
                     
+                    # 1. Creazione Figura Base (State-Aware per zoom fluido)
                     if fig_key not in st.session_state:
-                        fig = go.Figure()
-                        # Pre-allocazione tracce base
-                        fig.add_trace(go.Candlestick(name="Price"))
-                        fig.add_trace(go.Scatter(name="Whale Buy", mode="markers", marker=dict(symbol='triangle-up', size=14, color='#00FFCC', line=dict(width=2, color='white'))))
-                        fig.add_trace(go.Scatter(name="Whale Sell", mode="markers", marker=dict(symbol='triangle-down', size=14, color='#FF3366', line=dict(width=2, color='white'))))
-                        
-                        fig.update_layout(
+                        st.session_state[fig_key] = go.Figure()
+                        st.session_state[fig_key].add_trace(go.Candlestick(name="Price"))
+                        st.session_state[fig_key].update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
                             xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            yaxis=dict(fixedrange=False), # SBLOCCO ASSE Y
-                            height=850, 
+                            height=800, 
                             uirevision=current_ticker, 
                             dragmode='pan', hovermode='x unified',
                             showlegend=False,
@@ -1331,77 +1327,88 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             plot_bgcolor='#0E1117',
                             margin=dict(l=0, r=50, t=30, b=0)
                         )
-                        st.session_state[fig_key] = fig
                     
                     fig_price = st.session_state[fig_key]
                     
-                    # 1. Aggiornamento Dati Candele
-                    fig_price.data[0].x = df_price['datetime']
-                    fig_price.data[0].open = df_price['Open']
-                    fig_price.data[0].high = df_price['High']
-                    fig_price.data[0].low = df_price['Low']
-                    fig_price.data[0].close = df_price['Close']
-                    fig_price.data[0].increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
-                    fig_price.data[0].decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
+                    # 2. Aggiornamento Dati Diretto (Mantiene fluido lo zoom)
+                    traccia = fig_price.data[0]
+                    traccia.x = df_price['datetime']
+                    traccia.open = df_price['Open']
+                    traccia.high = df_price['High']
+                    traccia.low = df_price['Low']
+                    traccia.close = df_price['Close']
+                    traccia.increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
+                    traccia.decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
                     
-                    # 2. Gestione Zoom Manuale
+                    # 3. AGGIORNAMENTO CONDIZIONALE DEGLI ASSI
                     if st.session_state["force_zoom_update"]:
                         fig_price.update_xaxes(range=x_range, autorange=False)
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
-                    
-                    # 3. Pulizia Layout (Rimuove vecchie linee/forme)
-                    fig_price.data = fig_price.data[:3] # Mantiene solo Candele e Whale Markers
+
+                    # 4. Pulizia Tracce e Forme Secondarie (Ridisegna i muri puliti)
+                    fig_price.data = (fig_price.data[0],) 
                     fig_price.layout.shapes = ()
                     fig_price.layout.annotations = ()
-                    
-                    # 4. Disegno Linee Orizzontali (Infinite)
-                    fig_price.add_hline(y=z_gamma, line_color="white", line_width=2, line_dash="dash", annotation_text="0-G STATIC")
-                    fig_price.add_hline(y=z_gamma_dyn, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC (VOL)")
+
+                    # Aggiunta livelli statici
+                    fig_price.add_hline(y=z_gamma, line_color="white", line_width=2, annotation_text="0-G STATIC")
+                    fig_price.add_hline(y=z_gamma_dyn, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC")
                     fig_price.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
                     fig_price.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
                     fig_price.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
                     
+                    # 4. Disegno Muri
                     if gamma_mode:
                         v_trig_touch = abs(spot - v_trigger) / spot < 0.005
                         v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
                         fig_price.add_hrect(y0=v_trigger - spot*0.002, y1=v_trigger + spot*0.002, fillcolor=v_trig_color, layer="below", line_width=0)
                     
-                    # 5. WHALE INTELLIGENCE OVERLAYS
+                    # --- WHALE INTELLIGENCE OVERLAYS ---
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
                         bias_str = whale_data.get('Whale_Bias', '')
                         leg_name = f"🐳 W-LVL ({bias_str})" if bias_str else "🐳 W-LVL"
                         fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name=leg_name)
                         
                         if 'df_whale' in whale_data and not whale_data['df_whale'].empty:
+                            # Allineamento ratio sul dataframe principale del grafico
                             df_price.set_index('datetime', inplace=True)
+                            
+                            # Protezione contro errori di Timezone e allineamento dati balene
                             df_whale_data = whale_data['df_whale'].copy()
                             
+                            # Rendiamo entrambi i dataframe "Naive" prima del merge per evitare il TypeError
                             if df_price.index.tz is not None: df_price.index = df_price.index.tz_localize(None)
                             if df_whale_data.index.tz is not None: df_whale_data.index = df_whale_data.index.tz_localize(None)
                             
+                            # Merge chirurgico della sola colonna Dynamic_Ratio
                             df_whale_ratio = df_whale_data[['Dynamic_Ratio']]
                             df_price = df_price.merge(df_whale_ratio, left_index=True, right_index=True, how='left')
                             df_price['Dynamic_Ratio'] = df_price['Dynamic_Ratio'].ffill().bfill()
                             
+                            # Fallback di sicurezza se la ratio è ancora nulla
                             if df_price['Dynamic_Ratio'].isnull().all():
                                 df_price['Dynamic_Ratio'] = whale_data.get('ratio', 1.0)
                                 
                             df_price.reset_index(inplace=True)
 
+                            # Recupero anomalie per i marker
                             vol_mean = whale_data.get('vol_mean', 0)
                             vol_sd = whale_data.get('vol_sd', 0)
                             whale_candles = whale_data['df_whale']
                             whale_candles = whale_candles[whale_candles['Volume'] > (vol_mean + 2.5 * vol_sd)].copy()
                             
+                            # Mostra i diamanti/marker solo per le ultime 24 ore
                             if not whale_candles.empty:
                                 cutoff_24h = datetime.now(whale_candles.index.tz) - timedelta(hours=24)
                                 whale_candles = whale_candles[whale_candles.index >= cutoff_24h]
                             
+                            # Logica Lee-Ready (Mid-Price) coerente con l'HUD
                             mid_prices = (whale_candles['High'] + whale_candles['Low']) / 2
                             buy_candles = whale_candles[whale_candles['Close'] > mid_prices]
                             sell_candles = whale_candles[whale_candles['Close'] <= mid_prices]
                             
+                            # FIX TIMEZONE E COORDINATE Y CON DYNAMIC RATIO DEL DF_PRICE
                             df_price['Whale_Buy'] = False
                             df_price['Whale_Sell'] = False
                             
@@ -1416,27 +1423,35 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             buy_points = df_price[df_price['Whale_Buy']]
                             sell_points = df_price[df_price['Whale_Sell']]
                             
+                            # Determinazione corretta della coordinata Y per i Marker
+                            # Se il prezzo dell'indice è già > 1000 e la ratio è > 1, non moltiplichiamo (evitiamo double scaling)
                             price_sample = df_price['Close'].iloc[-1]
                             current_ratio = df_price['Dynamic_Ratio'].iloc[-1]
+                            
+                            # Fattore di correzione: moltiplica solo se i dati NON sono già stati scalati dal motore Alpaca
                             scaling_factor = 1.0 if (price_sample > 1000 and current_ratio > 5) else df_price['Dynamic_Ratio']
                             
                             if not buy_points.empty:
                                 y_buy = buy_points['Low'] * (scaling_factor if isinstance(scaling_factor, float) else buy_points['Dynamic_Ratio']) * 0.9992
-                                fig_price.data[1].x = buy_points['datetime']
-                                fig_price.data[1].y = y_buy
-                            else:
-                                fig_price.data[1].x = [None]
-                                fig_price.data[1].y = [None]
-                                
+                                fig_price.add_trace(go.Scatter(
+                                    x=buy_points['datetime'],
+                                    y=y_buy,
+                                    mode='markers',
+                                    name='Whale Buy (Accumulo)',
+                                    marker=dict(symbol='triangle-up', size=14, color='#00FFCC', line=dict(width=2, color='white')),
+                                    hovertemplate="<b>Whale Buy</b><br>Prezzo: %{y:.2f}<br>%{x}<extra></extra>"
+                                ))
                             if not sell_points.empty:
                                 y_sell = sell_points['High'] * (scaling_factor if isinstance(scaling_factor, float) else sell_points['Dynamic_Ratio']) * 1.0008
-                                fig_price.data[2].x = sell_points['datetime']
-                                fig_price.data[2].y = y_sell
-                            else:
-                                fig_price.data[2].x = [None]
-                                fig_price.data[2].y = [None]
+                                fig_price.add_trace(go.Scatter(
+                                    x=sell_points['datetime'],
+                                    y=y_sell,
+                                    mode='markers',
+                                    name='Whale Sell (Distribuzione)',
+                                    marker=dict(symbol='triangle-down', size=14, color='#FF3366', line=dict(width=2, color='white')),
+                                    hovertemplate="<b>Whale Sell</b><br>Prezzo: %{y:.2f}<br>%{x}<extra></extra>"
+                                ))
                     
-                    # 6. GAMMA OVERLAYS
                     if gamma_mode and 'df' in locals() and not df.empty:
                         xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
                         max_gex = xray_agg['Gamma'].abs().max()
@@ -1452,7 +1467,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
                                     fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
 
-                    st.plotly_chart(fig_price, use_container_width=True, key=f"fixed_chart_{current_ticker}_render_v4", theme=None, config={'scrollZoom': True, 'displayModeBar': False})
+                    # Sostituisci il vecchio st.plotly_chart con questo:
+                    st.plotly_chart(
+                        fig_price, 
+                        use_container_width=True, 
+                        key=f"fixed_chart_{current_ticker}_render", 
+                        theme=None, 
+                        config={'scrollZoom': True, 'displayModeBar': False}
+                    )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
