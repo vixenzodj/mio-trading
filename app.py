@@ -1308,21 +1308,31 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         prezzo_min = df_price['Low'].min() * (1 - padding/100)
                         prezzo_max = df_price['High'].max() * (1 + padding/100)
 
-                    fig_key = f"fig_price_{current_ticker}_v4"
+                    fig_key = f"fig_price_{current_ticker}_v5"
                     
+                    # 1. Creazione Figura Base ALL-IN-ONE (Zero distruzioni, zero memory leak)
                     if fig_key not in st.session_state:
                         fig = go.Figure()
-                        # Pre-allocazione tracce base
+                        # Traccia 0: Price
                         fig.add_trace(go.Candlestick(name="Price"))
-                        fig.add_trace(go.Scatter(name="Whale Buy", mode="markers", marker=dict(symbol='triangle-up', size=14, color='#00FFCC', line=dict(width=2, color='white'))))
-                        fig.add_trace(go.Scatter(name="Whale Sell", mode="markers", marker=dict(symbol='triangle-down', size=14, color='#FF3366', line=dict(width=2, color='white'))))
+                        # Tracce 1 e 2: Whale Markers
+                        fig.add_trace(go.Scatter(name='Whale Buy', mode='markers', marker=dict(symbol='triangle-up', size=14, color='#00FFCC', line=dict(width=2, color='white'))))
+                        fig.add_trace(go.Scatter(name='Whale Sell', mode='markers', marker=dict(symbol='triangle-down', size=14, color='#FF3366', line=dict(width=2, color='white'))))
+                        
+                        # Pre-allocazione Muri Quantistici Continui (Tracce 3-8)
+                        fig.add_trace(go.Scatter(name="0-G STATIC", mode="lines+text", line=dict(color="yellow", width=2, dash="dash"), textfont=dict(color="yellow", size=12)))
+                        fig.add_trace(go.Scatter(name="0-G DYNAMIC", mode="lines+text", line=dict(color="white", width=2, dash="dot"), textfont=dict(color="white", size=12)))
+                        fig.add_trace(go.Scatter(name="CW", mode="lines+text", line=dict(color="#32CD32", width=2), textfont=dict(color="#32CD32", size=12)))
+                        fig.add_trace(go.Scatter(name="PW", mode="lines+text", line=dict(color="#FF4500", width=2), textfont=dict(color="#FF4500", size=12)))
+                        fig.add_trace(go.Scatter(name="VANNA TRIGGER", mode="lines+text", line=dict(color="#FF00FF", width=2, dash="longdash"), textfont=dict(color="#FF00FF", size=12)))
+                        fig.add_trace(go.Scatter(name="WHALE LEVEL", mode="lines+text", line=dict(color="DeepSkyBlue", width=2, dash="dot"), textfont=dict(color="DeepSkyBlue", size=12)))
                         
                         fig.update_layout(
                             title=f"Price Action (1m) vs Muri Quant - {current_ticker}",
                             xaxis_title="Data/Ora", yaxis_title="Prezzo",
                             template="plotly_dark",
-                            xaxis=dict(rangeslider=dict(visible=False), type='date'),
-                            yaxis=dict(fixedrange=False), # SBLOCCO ASSE Y
+                            xaxis=dict(rangeslider=dict(visible=False), type='date', fixedrange=False),
+                            yaxis=dict(fixedrange=False), # SBLOCCA ZOOM E PAN MANUALE ASSE Y
                             height=850, 
                             uirevision=current_ticker, 
                             dragmode='pan', hovermode='x unified',
@@ -1335,7 +1345,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     
                     fig_price = st.session_state[fig_key]
                     
-                    # 1. Aggiornamento Dati Candele
+                    # 2. Aggiornamento Dati Candele In-Place
                     fig_price.data[0].x = df_price['datetime']
                     fig_price.data[0].open = df_price['Open']
                     fig_price.data[0].high = df_price['High']
@@ -1344,34 +1354,32 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     fig_price.data[0].increasing = dict(line=dict(color='#00ff88'), fillcolor='#00A666')
                     fig_price.data[0].decreasing = dict(line=dict(color='#ff3333'), fillcolor='#EF4F4F')
                     
-                    # 2. Gestione Zoom Manuale
+                    # 3. Gestione Zoom Preservato
                     if st.session_state["force_zoom_update"]:
                         fig_price.update_xaxes(range=x_range, autorange=False)
                         fig_price.update_yaxes(range=[prezzo_min, prezzo_max], autorange=False)
                         st.session_state["force_zoom_update"] = False
+
+                    # 4. Aggiornamento Sicuro Muri Orizzontali (Senza usare add_hline che causa il crash)
+                    x_muri = [df_price['datetime'].iloc[0], df_price['datetime'].iloc[-1]] if not df_price.empty else [None, None]
                     
-                    # 3. Pulizia Layout (Rimuove vecchie linee/forme)
-                    fig_price.data = fig_price.data[:3] # Mantiene solo Candele e Whale Markers
-                    fig_price.layout.shapes = ()
-                    fig_price.layout.annotations = ()
-                    
-                    # 4. Disegno Linee Orizzontali (Infinite)
-                    fig_price.add_hline(y=z_gamma, line_color="white", line_width=2, line_dash="dash", annotation_text="0-G STATIC")
-                    fig_price.add_hline(y=z_gamma_dyn, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC (VOL)")
-                    fig_price.add_hline(y=c_wall, line_color="#32CD32", line_width=2, annotation_text="CW")
-                    fig_price.add_hline(y=p_wall, line_color="#FF4500", line_width=2, annotation_text="PW")
-                    fig_price.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="longdash", annotation_text="VANNA TRIGGER")
-                    
-                    if gamma_mode:
-                        v_trig_touch = abs(spot - v_trigger) / spot < 0.005
-                        v_trig_color = "rgba(255, 0, 255, 0.5)" if v_trig_touch else "rgba(255, 0, 255, 0.2)"
-                        fig_price.add_hrect(y0=v_trigger - spot*0.002, y1=v_trigger + spot*0.002, fillcolor=v_trig_color, layer="below", line_width=0)
+                    def update_wall(idx, y_val, label):
+                        fig_price.data[idx].x = x_muri
+                        fig_price.data[idx].y = [y_val, y_val]
+                        fig_price.data[idx].text = ["", label]
+                        fig_price.data[idx].textposition = "top left"
+
+                    update_wall(3, z_gamma, "0-G STATIC")
+                    update_wall(4, z_gamma_dyn, "0-G DYNAMIC")
+                    update_wall(5, c_wall, "CW")
+                    update_wall(6, p_wall, "PW")
+                    update_wall(7, v_trigger, "VANNA TRIGGER")
                     
                     # 5. WHALE INTELLIGENCE OVERLAYS
                     if 'whale_data' in locals() and not whale_data.get("Error") and whale_data.get("Whale_Price"):
                         bias_str = whale_data.get('Whale_Bias', '')
                         leg_name = f"🐳 W-LVL ({bias_str})" if bias_str else "🐳 W-LVL"
-                        fig_price.add_hline(y=whale_data["Whale_Price"], line=dict(color='DeepSkyBlue', width=2, dash='dot'), annotation_text="🐳 W-LVL", name=leg_name)
+                        update_wall(8, whale_data["Whale_Price"], leg_name)
                         
                         if 'df_whale' in whale_data and not whale_data['df_whale'].empty:
                             df_price.set_index('datetime', inplace=True)
@@ -1424,6 +1432,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                 y_buy = buy_points['Low'] * (scaling_factor if isinstance(scaling_factor, float) else buy_points['Dynamic_Ratio']) * 0.9992
                                 fig_price.data[1].x = buy_points['datetime']
                                 fig_price.data[1].y = y_buy
+                                fig_price.data[1].hovertemplate = "<b>Whale Buy</b><br>Prezzo: %{y:.2f}<br>%{x}<extra></extra>"
                             else:
                                 fig_price.data[1].x = [None]
                                 fig_price.data[1].y = [None]
@@ -1432,11 +1441,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                 y_sell = sell_points['High'] * (scaling_factor if isinstance(scaling_factor, float) else sell_points['Dynamic_Ratio']) * 1.0008
                                 fig_price.data[2].x = sell_points['datetime']
                                 fig_price.data[2].y = y_sell
+                                fig_price.data[2].hovertemplate = "<b>Whale Sell</b><br>Prezzo: %{y:.2f}<br>%{x}<extra></extra>"
                             else:
                                 fig_price.data[2].x = [None]
                                 fig_price.data[2].y = [None]
+                    else:
+                        update_wall(8, None, "")
                     
-                    # 6. GAMMA OVERLAYS
+                    # 6. PULIZIA CONTROLLATA SHAPES (Evita il crash per la Gamma Mode)
+                    fig_price.layout.shapes = tuple()
+                    
                     if gamma_mode and 'df' in locals() and not df.empty:
                         xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
                         max_gex = xray_agg['Gamma'].abs().max()
@@ -1449,10 +1463,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                                     colorscale = px.colors.sequential.Viridis
                                     base_color = colorscale[int(intensita * (len(colorscale) - 1))]
                                     rgba_color = base_color.replace('rgb', 'rgba').replace(')', f', {0.1 + intensita*0.5})')
-                                    fig_price.add_hrect(y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, layer='below', line_width=0)
-                                    fig_price.add_hline(y=s_val, line_color=base_color, line_width=1, line_dash="dot", layer='below')
+                                    # Usa il metodo nativo sicuro per non interferire con le traces
+                                    fig_price.add_shape(type="rect", xref="paper", yref="y", x0=0, x1=1, y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, line_width=0, layer="below")
 
-                    st.plotly_chart(fig_price, use_container_width=True, key=f"fixed_chart_{current_ticker}_render_v4", theme=None, config={'scrollZoom': True, 'displayModeBar': False})
+                    st.plotly_chart(
+                        fig_price, 
+                        use_container_width=True, 
+                        key=f"fixed_chart_{current_ticker}_render_v5", 
+                        theme=None, 
+                        config={'scrollZoom': True, 'displayModeBar': False}
+                    )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
 
