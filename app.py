@@ -85,12 +85,37 @@ def calculate_0g_dynamic(price, df, r=0.045, q=0.0):
     side = np.where(df['type'] == 'call', 1, -1)
     return np.sum(gamma * exposure_size * 100 * price * side)
 
+def bs_price(S, K, T, r, q, iv, option_type='call'):
+    d1 = (np.log(S/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    d2 = d1 - iv * np.sqrt(T)
+    if option_type == 'call':
+        return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    else:
+        return K * np.exp(-r * T) * norm.cdf(-d2) - S * np.exp(-q * T) * norm.cdf(-d1)
+
+def find_iv(target_price, S, K, T, r, q, option_type):
+    if target_price <= 0 or T <= 0: return np.nan
+    try:
+        return brentq(lambda x: bs_price(S, K, T, r, q, x, option_type) - target_price, 0.0001, 5.0, xtol=1e-5)
+    except:
+        return np.nan
+
 @st.cache_data(ttl=60)
 def get_greeks_pro(df, S, r=0.045, q=0.0):
     if df.empty: return df
     
     # Pre-processing anti-crash
     df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
+    
+    # 1. Calcolo Mid Price e IV Locale
+    df['mid_price'] = (df['bid'] + df['ask']) / 2
+    df['local_iv'] = df.apply(lambda row: find_iv(row['mid_price'], S, row['strike'], 
+                                                 max(row['dte_years'], 0.0001), r, q, row['type']), axis=1)
+    
+    # 2. Fallback su Yahoo IV se il ricalcolo locale fallisce o è NaN
+    df['impliedVolatility'] = df['local_iv'].fillna(df['impliedVolatility'])
+    
+    # 3. Pulizia e Filtro
     df = df.dropna(subset=['impliedVolatility'])
     df = df[df['impliedVolatility'] > 0.001].copy()
     
