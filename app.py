@@ -85,29 +85,45 @@ def calculate_0g_dynamic(price, df, r=0.045, q=0.0):
     side = np.where(df['type'] == 'call', 1, -1)
     return np.sum(gamma * exposure_size * 100 * price * side)
 
-@st.cache_data
-def get_greeks_pro(S, K_arr, T_arr, iv_arr, r, q, type_arr, volume_arr):
-    T_arr = np.maximum(T_arr, 0.0001)
-    d1 = (np.log(S / K_arr) + (r - q + 0.5 * iv_arr**2) * T_arr) / (iv_arr * np.sqrt(T_arr))
-    d2 = d1 - iv_arr * np.sqrt(T_arr)
+@st.cache_data(ttl=60)
+def get_greeks_pro(df, S, r=0.045, q=0.0):
+    if df.empty: return df
     
-    # Greche Standard
-    delta = np.where(type_arr == 'call', norm.cdf(d1), -norm.cdf(-d1))
-    gamma = norm.pdf(d1) / (S * iv_arr * np.sqrt(T_arr))
-    vega = S * norm.pdf(d1) * np.sqrt(T_arr)
-    theta = np.where(type_arr == 'call',
-                     -(S * norm.pdf(d1) * iv_arr) / (2 * np.sqrt(T_arr)) - r * K_arr * np.exp(-r * T_arr) * norm.cdf(d2),
-                     -(S * norm.pdf(d1) * iv_arr) / (2 * np.sqrt(T_arr)) + r * K_arr * np.exp(-r * T_arr) * norm.cdf(-d2)) / 252.0
+    # 1. FIX TYPE-ERROR: Pulizia dei NoneType e valori corrotti
+    df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
+    df = df.dropna(subset=['impliedVolatility'])
+    df = df[df['impliedVolatility'] > 0.01].copy()
     
-    # Esposizioni Monetarie Istituzionali (Cash Weighted)
-    vanna = (vega / S) * (1 - d1 / (iv_arr * np.sqrt(T_arr)))
-    vomma_exp = (vega * (d1 * d2 / iv_arr)) * volume_arr * 100 * S
-    speed_exp = (-gamma / S * (d1 / (iv_arr * np.sqrt(T_arr)) + 1)) * volume_arr * 100 * (S**2)
+    K, iv, T = df['strike'].values, df['impliedVolatility'].values, np.maximum(df['dte_years'].values, 0.0001)
     
-    return pd.DataFrame({
-        'Delta': delta, 'Gamma': gamma, 'Vega': vega, 'Theta': theta,
-        'Vanna': vanna, 'Vomma_Exp': vomma_exp, 'Speed_Exp': speed_exp
-    })
+    # 2. DEFINIZIONE DEI PESI
+    # Exposure standard (Open Interest + 50% Volume per i Muri)
+    oi_vol_weighted = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
+    # Exposure Dinamica Squeeze (Solo Volume Intraday Reale)
+    volume_arr = df['volume'].fillna(0).values
+    
+    d1 = (np.log(S/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    d2 = d1 - iv * np.sqrt(T)
+    pdf = norm.pdf(d1)
+    side = np.where(df['type'] == 'call', 1, -1)
+    
+    # 3. GRECHE STANDARD (Mantenute identiche per non rompere la Dashboard)
+    df['Gamma'] = (pdf * np.exp(-q * T) / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi_vol_weighted * 100 * side
+    df['Vanna'] = S * np.exp(-q * T) * pdf * (d1 / iv) * 0.01 * oi_vol_weighted * side
+    df['Charm'] = (pdf * np.exp(-q * T) * ((r - q) / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi_vol_weighted * 100 * side
+    df['Vega']  = S * np.exp(-q * T) * pdf * np.sqrt(T) * 0.01 * oi_vol_weighted * 100
+    df['Theta'] = ((-(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side)) + side * (q * S * np.exp(-q * T) * norm.cdf(d1 * side))) * (1/252.0) * oi_vol_weighted * 100
+    
+    # 4. GRECHE 3° ORDINE (VOMMA & SPEED) PONDERATE SOLO SUI VOLUMI (CASH EXPOSURE)
+    # Calcoliamo i valori "Raw" non pesati per applicare l'esposizione corretta
+    gamma_raw = (pdf * np.exp(-q * T)) / (S * iv * np.sqrt(T))
+    vega_raw = S * np.exp(-q * T) * pdf * np.sqrt(T)
+    
+    # Volume * 100 * S (o S^2 per Gamma)
+    df['Vomma_Exp'] = (vega_raw * (d1 * d2 / iv)) * volume_arr * 100 * S
+    df['Speed_Exp'] = (-gamma_raw / S * (d1 / (iv * np.sqrt(T)) + 1)) * volume_arr * 100 * (S**2)
+    
+    return df
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker, dates):
