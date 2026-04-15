@@ -88,41 +88,24 @@ def calculate_0g_dynamic(price, df, r=0.045, q=0.0):
 @st.cache_data(ttl=60)
 def get_greeks_pro(df, S, r=0.045, q=0.0):
     if df.empty: return df
-    
-    # 1. FIX TYPE-ERROR: Pulizia dei NoneType e valori corrotti
-    df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
-    df = df.dropna(subset=['impliedVolatility'])
     df = df[df['impliedVolatility'] > 0.01].copy()
-    
     K, iv, T = df['strike'].values, df['impliedVolatility'].values, np.maximum(df['dte_years'].values, 0.0001)
-    
-    # 2. DEFINIZIONE DEI PESI
-    # Exposure standard (Open Interest + 50% Volume per i Muri)
     oi_vol_weighted = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
-    # Exposure Dinamica Squeeze (Solo Volume Intraday Reale)
-    volume_arr = df['volume'].fillna(0).values
     
     d1 = (np.log(S/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     d2 = d1 - iv * np.sqrt(T)
     pdf = norm.pdf(d1)
     side = np.where(df['type'] == 'call', 1, -1)
     
-    # 3. GRECHE STANDARD (Mantenute identiche per non rompere la Dashboard)
     df['Gamma'] = (pdf * np.exp(-q * T) / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi_vol_weighted * 100 * side
     df['Vanna'] = S * np.exp(-q * T) * pdf * (d1 / iv) * 0.01 * oi_vol_weighted * side
     df['Charm'] = (pdf * np.exp(-q * T) * ((r - q) / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi_vol_weighted * 100 * side
     df['Vega']  = S * np.exp(-q * T) * pdf * np.sqrt(T) * 0.01 * oi_vol_weighted * 100
     df['Theta'] = ((-(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side)) + side * (q * S * np.exp(-q * T) * norm.cdf(d1 * side))) * (1/252.0) * oi_vol_weighted * 100
-    
-    # 4. GRECHE 3° ORDINE (VOMMA & SPEED) PONDERATE SOLO SUI VOLUMI (CASH EXPOSURE)
-    # Calcoliamo i valori "Raw" non pesati per applicare l'esposizione corretta
-    gamma_raw = (pdf * np.exp(-q * T)) / (S * iv * np.sqrt(T))
-    vega_raw = S * np.exp(-q * T) * pdf * np.sqrt(T)
-    
-    # Volume * 100 * S (o S^2 per Gamma)
-    df['Vomma_Exp'] = (vega_raw * (d1 * d2 / iv)) * volume_arr * 100 * S
-    df['Speed_Exp'] = (-gamma_raw / S * (d1 / (iv * np.sqrt(T)) + 1)) * volume_arr * 100 * (S**2)
-    
+    # Vomma: Sensibilità del Vega alla Volatilità
+    df['Vomma'] = df['Vega'] * (d1 * d2 / iv)
+    # Speed: Derivata del Gamma rispetto al Prezzo (Accelerazione)
+    df['Speed'] = -df['Gamma'] / S * (d1 / (iv * np.sqrt(T)) + 1)
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -797,7 +780,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         raw_data = fetch_data(current_ticker, target_dates)
         
         if not raw_data.empty:
-            raw_data = raw_data[(raw_data['volume'] > 0) | (raw_data['openInterest'] > 0)].copy()
+            raw_data = raw_data[(raw_data['volume'].fillna(0) > 0) | (raw_data['openInterest'].fillna(0) > 0)].copy()
             raw_data['dte_years'] = raw_data['exp'].apply(lambda x: max((datetime.strptime(x, '%Y-%m-%d') - today).days, 0.5)) / 252.0
             
             # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
@@ -890,9 +873,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 'Charm': 'sum', 
                 'Vega': 'sum', 
                 'Theta': 'sum',
-                'Vomma_Exp': 'sum',
-                'Speed_Exp': 'sum',
-                'volume': 'sum'
+                'Vomma': 'sum',
+                'Speed': 'sum'
             }).reset_index()
             
             # Rinomina la colonna pivot
@@ -927,8 +909,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 direction = "🔵 LONG GAMMA / STABILITÀ (Contrazione Volatilità)"; bias_color = "#0074D9"
             
             st.markdown(f"### 📊 Real-Time Metric Regime")
-            net_vomma = agg['Vomma_Exp'].sum() if 'Vomma_Exp' in agg.columns else 0
-            net_speed = agg['Speed_Exp'].sum() if 'Speed_Exp' in agg.columns else 0
+            net_vomma = agg['Vomma'].sum() if 'Vomma' in agg.columns else 0
+            net_speed = agg['Speed'].sum() if 'Speed' in agg.columns else 0
             c_reg1, c_reg2, c_reg3, c_reg4, c_reg5, c_reg6 = st.columns(6)
             c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta=f"{'LONG' if net_gamma > 0 else 'SHORT'}")
             c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}", delta=f"{'STABLE' if net_vanna > 0 else 'UNSTABLE'}")
@@ -1509,16 +1491,13 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 st.markdown("### 🌪️ Squeeze Radar: Vomma & Speed")
                 col_v, col_s = st.columns(2)
                 
-                # Applica un filtro rigoroso per escludere i livelli con Volume = 0 dai grafici
-                plot_df = visible_agg[visible_agg['volume'] > 0]
-                
                 with col_v:
                     fig_vomma = go.Figure()
                     fig_vomma.add_trace(go.Bar(
-                        x=plot_df['Vomma_Exp'],
-                        y=plot_df['strike'],
+                        y=visible_agg['strike'],
+                        x=visible_agg['Vomma'],
                         orientation='h',
-                        marker_color='#FF00FF',
+                        marker=dict(color='#FF00FF'),
                         name='Vomma'
                     ))
                     fig_vomma.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
@@ -1538,10 +1517,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 with col_s:
                     fig_speed = go.Figure()
                     fig_speed.add_trace(go.Bar(
-                        x=plot_df['Speed_Exp'],
-                        y=plot_df['strike'],
+                        y=visible_agg['strike'],
+                        x=visible_agg['Speed'],
                         orientation='h',
-                        marker_color='#FFFF00',
+                        marker=dict(color='#FFFF00'),
                         name='Speed'
                     ))
                     fig_speed.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
@@ -1952,7 +1931,7 @@ elif menu == "🔙 BACKTESTING STRATEGIA":
 
     with c2: timeframe = st.selectbox("Timeframe", ["1D", "1H", "15Min", "5Min"], index=0)
     with c3: 
-        start_date = st.date_input("Data Inizio", value=datetime.now() - timedelta(days=252*2))
+        start_date = st.date_input("Data Inizio", value=datetime.now() - timedelta(days=365*2))
     with c4: 
         end_date = st.date_input("Data Fine", value=datetime.now())
         initial_capital = st.number_input("Capitale Iniziale ($)", value=10000)
