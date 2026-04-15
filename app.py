@@ -101,7 +101,11 @@ def get_greeks_pro(df, S, r=0.045, q=0.0):
     df['Vanna'] = S * np.exp(-q * T) * pdf * (d1 / iv) * 0.01 * oi_vol_weighted * side
     df['Charm'] = (pdf * np.exp(-q * T) * ((r - q) / (iv * np.sqrt(T)) - d1 / (2 * T))) * oi_vol_weighted * 100 * side
     df['Vega']  = S * np.exp(-q * T) * pdf * np.sqrt(T) * 0.01 * oi_vol_weighted * 100
-    df['Theta'] = ((-(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side)) + side * (q * S * np.exp(-q * T) * norm.cdf(d1 * side))) * (1/365) * oi_vol_weighted * 100
+    df['Theta'] = ((-(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))) - side * (r * K * np.exp(-r * T) * norm.cdf(d2 * side)) + side * (q * S * np.exp(-q * T) * norm.cdf(d1 * side))) * (1/252.0) * oi_vol_weighted * 100
+    # Vomma: Sensibilità del Vega alla Volatilità
+    df['Vomma'] = df['Vega'] * (d1 * d2 / iv)
+    # Speed: Derivata del Gamma rispetto al Prezzo (Accelerazione)
+    df['Speed'] = -df['Gamma'] / S * (d1 / (iv * np.sqrt(T)) + 1)
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -131,7 +135,7 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
         
         # Conversione stringa a datetime
         today_obj = datetime.strptime(today_str, '%Y-%m-%d')
-        dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today_obj).days + 1, 0.5) / 365
+        dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today_obj).days + 1, 0.5) / 252.0
         df_scan['dte_years'] = dte_years
         df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
         
@@ -776,7 +780,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         raw_data = fetch_data(current_ticker, target_dates)
         
         if not raw_data.empty:
-            raw_data['dte_years'] = raw_data['exp'].apply(lambda x: max((datetime.strptime(x, '%Y-%m-%d') - today).days, 0.5)) / 365
+            raw_data = raw_data[(raw_data['volume'].fillna(0) > 0) | (raw_data['openInterest'].fillna(0) > 0)].copy()
+            raw_data['dte_years'] = raw_data['exp'].apply(lambda x: max((datetime.strptime(x, '%Y-%m-%d') - today).days, 0.5)) / 252.0
             
             # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
             try:
@@ -867,7 +872,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 'Vanna': 'sum', 
                 'Charm': 'sum', 
                 'Vega': 'sum', 
-                'Theta': 'sum'
+                'Theta': 'sum',
+                'Vomma': 'sum',
+                'Speed': 'sum'
             }).reset_index()
             
             # Rinomina la colonna pivot
@@ -902,11 +909,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 direction = "🔵 LONG GAMMA / STABILITÀ (Contrazione Volatilità)"; bias_color = "#0074D9"
             
             st.markdown(f"### 📊 Real-Time Metric Regime")
-            c_reg1, c_reg2, c_reg3, c_reg4 = st.columns(4)
+            net_vomma = agg['Vomma'].sum() if 'Vomma' in agg.columns else 0
+            net_speed = agg['Speed'].sum() if 'Speed' in agg.columns else 0
+            c_reg1, c_reg2, c_reg3, c_reg4, c_reg5, c_reg6 = st.columns(6)
             c_reg1.metric("Net Gamma", f"{net_gamma:,.0f}", delta=f"{'LONG' if net_gamma > 0 else 'SHORT'}")
             c_reg2.metric("Net Vanna", f"{net_vanna:,.0f}", delta=f"{'STABLE' if net_vanna > 0 else 'UNSTABLE'}")
             c_reg3.metric("Net Charm", f"{net_charm:,.0f}", delta=f"{'SUPPORT' if net_charm < 0 else 'DECAY'}")
             c_reg4.metric("SKEW FACTOR (P/C)", f"{skew_factor:.2f}x")
+            c_reg5.metric("Net Vomma", f"{net_vomma:,.0f}", help="Risk of IV explosion")
+            c_reg6.metric("Net Speed", f"{net_speed:,.0f}", help="Gamma Acceleration / Squeeze Risk")
 
             st.markdown(f"""
                 <div style='background-color:{bias_color}; padding:15px; border-radius:10px; text-align:center; margin-top: 10px; margin-bottom: 25px;'>
@@ -1160,7 +1171,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             st.plotly_chart(fig, use_container_width=True)
 
             # --- NUOVE FUNZIONALITÀ VISIVE AVANZATE ---
-            tab_iv, tab_price = st.tabs(["🔥 Analisi Volatilità Implicita (Heatmap)", "📈 Price Action vs Muri Quant"])
+            tab_iv, tab_price, tab_squeeze = st.tabs(["🔥 Analisi Volatilità Implicita (Heatmap)", "📈 Price Action vs Muri Quant", "🌪️ Squeeze Radar (Vomma & Speed)"])
 
             with tab_iv:
                 if 'raw_data' in locals() and not raw_data.empty:
@@ -1475,6 +1486,56 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     )
                 else:
                     st.warning("Dati intraday non disponibili per il grafico Price Action.")
+
+            with tab_squeeze:
+                st.markdown("### 🌪️ Squeeze Radar: Vomma & Speed")
+                col_v, col_s = st.columns(2)
+                
+                with col_v:
+                    fig_vomma = go.Figure()
+                    fig_vomma.add_trace(go.Bar(
+                        y=visible_agg['strike'],
+                        x=visible_agg['Vomma'],
+                        orientation='h',
+                        marker=dict(color='#FF00FF'),
+                        name='Vomma'
+                    ))
+                    fig_vomma.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
+                    fig_vomma.add_hline(y=c_wall, line_color="#32CD32", line_width=2, line_dash="dot", annotation_text="CW")
+                    fig_vomma.add_hline(y=p_wall, line_color="#FF4500", line_width=2, line_dash="dot", annotation_text="PW")
+                    fig_vomma.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="dot", annotation_text="VT")
+                    fig_vomma.update_layout(
+                        title="Vomma Profile",
+                        xaxis_title="Net Vomma",
+                        yaxis_title="Strike",
+                        template="plotly_dark",
+                        height=600,
+                        yaxis=dict(range=[lo, hi], dtick=gran)
+                    )
+                    st.plotly_chart(fig_vomma, use_container_width=True)
+                
+                with col_s:
+                    fig_speed = go.Figure()
+                    fig_speed.add_trace(go.Bar(
+                        y=visible_agg['strike'],
+                        x=visible_agg['Speed'],
+                        orientation='h',
+                        marker=dict(color='#FFFF00'),
+                        name='Speed'
+                    ))
+                    fig_speed.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
+                    fig_speed.add_hline(y=c_wall, line_color="#32CD32", line_width=2, line_dash="dot", annotation_text="CW")
+                    fig_speed.add_hline(y=p_wall, line_color="#FF4500", line_width=2, line_dash="dot", annotation_text="PW")
+                    fig_speed.add_hline(y=v_trigger, line_color="#FF00FF", line_width=2, line_dash="dot", annotation_text="VT")
+                    fig_speed.update_layout(
+                        title="Speed Profile",
+                        xaxis_title="Net Speed",
+                        yaxis_title="Strike",
+                        template="plotly_dark",
+                        height=600,
+                        yaxis=dict(range=[lo, hi], dtick=gran)
+                    )
+                    st.plotly_chart(fig_speed, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
