@@ -5644,7 +5644,6 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.markdown("---")
 
     # --- CONFIGURAZIONE DATABASE ESTESO ---
-    # Liste di base (Magnifici 7, Big Pharma, Financials, Top EU)
     DB_USA = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "BRK-B", "V", "JNJ", "WMT", "JPM", "PG", "MA", "UNH", "HD", "BAC", "DIS", "ADBE", "NFLX", "CRM", "AMD", "INTC", "PYPL", "COST", "PEP", "KO"]
     DB_EU = ["MC.PA", "ASML", "OR.PA", "SAP", "RMS.PA", "NESN.SW", "TTE.PA", "SIE.DE", "IDNA.MI", "RACE.MI", "ENI.MI", "UCG.MI", "ISP.MI", "ENEL.MI", "STLAM.MI", "PRY.MI", "AZM.MI"]
     
@@ -5653,7 +5652,6 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     
     custom_input = st.sidebar.text_area("Aggiungi Ticker personalizzati (es: F, GM, PFE):", help="Puoi incollare centinaia di ticker separati da virgola")
 
-    # Costruzione Database Dinamico
     full_db = []
     if "USA Standard" in db_scelta: full_db.extend(DB_USA)
     if "Europa/Italia" in db_scelta: full_db.extend(DB_EU)
@@ -5662,7 +5660,6 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     
     st.info(f"🔍 Scanner pronto: **{len(full_db)}** aziende nel database di ricerca.")
 
-    # Parametri Algoritmici
     c1, c2, c3 = st.columns(3)
     with c1: min_m = st.number_input("Margine Sicurezza Min (%)", value=15)
     with c2: min_roe = st.slider("ROE Minimo (%)", 0, 50, 10)
@@ -5671,29 +5668,25 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     if st.button("ESEGUI SCANSIONE GLOBALE 🚀"):
         results = []
         prog = st.progress(0)
-        status = st.empty()
+        status_msg = st.empty()
         
         for i, ticker in enumerate(full_db):
-            status.text(f"Analisi Quantitativa: {ticker}...")
+            status_msg.text(f"Analisi Quantitativa in corso: {ticker}...")
             try:
                 t = yf.Ticker(ticker)
                 inf = t.info
                 
-                # Valuta e Prezzo
                 curr = inf.get('financialCurrency', inf.get('currency', '$'))
                 s_curr = "€" if curr == "EUR" else "$"
                 price = inf.get('currentPrice', 0)
                 
-                # Calcolo Intrinseco (Modello Graham)
                 eps = inf.get('trailingEps', 0)
                 bvps = inf.get('bookValue', 0)
-                fair_v = np.sqrt(22.5 * eps * bvps) if eps is not None and bvps is not None and eps > 0 and bvps > 0 else 0
+                fair_v = np.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
                 margin = ((fair_v - price)/fair_v*100) if fair_v > 0 else -100
                 
-                # Efficienza (ROE)
                 roe = inf.get('returnOnEquity', 0) * 100
                 
-                # Filtro Alpha
                 if margin >= min_m and roe >= min_roe:
                     results.append({
                         "Ticker": ticker,
@@ -5703,15 +5696,15 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
                         "ROE %": round(roe, 2),
                         "Settore": inf.get('sector', 'N/D')
                     })
-            except: continue
+            except:
+                continue
             prog.progress((i + 1) / len(full_db))
             
-        status.success(f"Scansione completata. Trovate {len(results)} opportunità.")
+        status_msg.success(f"Scansione completata. Trovate {len(results)} opportunità.")
 
         if results:
             df_res = pd.DataFrame(results).sort_values(by="Margine", ascending=False).head(limit)
             
-            # Formattazione condizionale per la tabella
             def color_margin(val):
                 c = '#2ecc71' if val > 25 else '#f1c40f'
                 return f'color: {c}; font-weight: bold'
@@ -5722,24 +5715,22 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
                 else:
                     styled_df = df_res.style.applymap(color_margin, subset=['Margine'])
                 st.dataframe(styled_df, use_container_width=True, hide_index=True)
-            except Exception as e:
+            except:
                 st.dataframe(df_res, use_container_width=True, hide_index=True)
             
-            # Deep Dive sulle Top 3
             st.markdown("---")
-            st.subheader("💡 Focus Opportunità #1")
+            st.subheader("💡 Focus Migliore Opportunità")
             top_t = df_res.iloc[0]['Ticker']
             t_data = yf.Ticker(top_t)
             col_t1, col_t2 = st.columns([2, 1])
             with col_t1:
-                st.write(f"**{top_t}** mostra il miglior rapporto valore/prezzo attuale.")
-                try: # FIX T.NEWS ERROR
+                st.write(f"**{top_t}** è attualmente l'azienda più sottovalutata nel database con i criteri scelti.")
+                try:
                     if t_data.news:
-                        st.write("*Ultime News:* " + t_data.news[0].get('title', ''))
-                except: pass
+                        st.write(f"*Ultima News:* {t_data.news[0].get('title', 'N/D')}")
+                except:
+                    pass
             with col_t2:
-                st.button(f"Vai a Terminale {top_t}", on_click=lambda: st.write("Copia il ticker nel menu Terminale"))
+                st.info(f"Copia '{top_t}' e torna nella sezione TERMINALE per l'analisi tecnica completa.")
         else:
-            st.warning("Nessuna azienda soddisfa i criteri. Prova ad abbassare il Margine di Sicurezza.")
-        else:
-            st.error("Errore critico: Asset non trovato o limite API raggiunto.")
+            st.warning("Nessuna azienda soddisfa i criteri impostati. Prova ad abbassare il Margine di Sicurezza o il ROE minimo.")
