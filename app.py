@@ -773,7 +773,7 @@ if uploaded_file is not None:
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
-menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER"])
+menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)"])
 
 # --- REFRESH CONFIG ---
 # Dashboard: refresh ogni 1 minuto (60000 ms)
@@ -5464,3 +5464,99 @@ elif menu == "🛠️ STRATEGY BUILDER":
                     st.warning("Nessun trade generato con questi parametri.")
             else:
                 st.error("Errore nel recupero dei dati storici.")
+
+elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
+    st.title("🏛️ Institutional Research Terminal")
+    st.caption("Valutazione Quantitativa Interbancaria & Flussi Smart Money")
+
+    @st.cache_data(ttl=3600)
+    def get_institutional_data(ticker):
+        t = yf.Ticker(ticker)
+        # Recupero dati fondamentali (Limite 4 anni YF per bilanci)
+        info = t.info
+        fin = t.financials
+        bs = t.balance_sheet
+        cf = t.cashflow
+        inst_h = t.institutional_holders
+        insider_t = t.insider_transactions
+        news = t.news
+        return {"info": info, "fin": fin, "bs": bs, "cf": cf, "inst": inst_h, "insider": insider_t, "news": news}
+
+    t_input = st.text_input("Inserisci Asset Ticker:", value="AAPL").upper()
+
+    if t_input:
+        with st.spinner("Calcolo metriche accademiche in corso..."):
+            d = get_institutional_data(t_input)
+            info = d["info"]
+            
+            # --- MOTORE DI CALCOLO ISTITUZIONALE ---
+            price = info.get('currentPrice', info.get('regularMarketPrice', 1))
+            eps = info.get('trailingEps', 0)
+            bvps = info.get('bookValue', 0)
+            roe = info.get('returnOnEquity', 0)
+            cur_ratio = info.get('currentRatio', 0)
+            debt_eq = info.get('debtToEquity', 0)
+            
+            # 1. Modello Graham (Valore Intrinseco)
+            graham = np.sqrt(22.5 * eps * bvps) if eps > 0 and bvps > 0 else 0
+            m_safety = ((graham - price) / graham) * 100 if graham > 0 else 0
+
+            # 2. Altman Z-Score Proxy (Rischio Fallimento)
+            # Formula: (1.2*A + 1.4*B + 3.3*C + 0.6*D + 1.0*E) - Semplificata per YF
+            z_score = (cur_ratio * 1.2) + (info.get('profitMargins', 0) * 3.3)
+            
+            # 3. Piotroski F-Score (Proxy Forza Contabile su 9 punti)
+            f_score = 0
+            if roe > 0: f_score += 2
+            if cur_ratio > 1.5: f_score += 2
+            if info.get('operatingCashflow', 0) > info.get('netIncomeToCommon', 0): f_score += 2
+            if debt_eq < 100: f_score += 3
+
+            # --- INTERFACCIA ---
+            t1, t2, t3, t4 = st.tabs(["⚖️ VALUTAZIONE", "🏥 SALUTE", "🐋 SMART MONEY", "📰 NEWS"])
+
+            with t1:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Prezzo Attuale", f"${price}")
+                c2.metric("Fair Value (Graham)", f"${graham:.2f}")
+                c3.metric("Margine Sicurezza", f"{m_safety:.1f}%")
+                
+                verdetto = "SOTTOVALUTATA" if m_safety > 15 else "SOPRAVVALUTATA"
+                col_v = "green" if m_safety > 15 else "red"
+                st.markdown(f"<div style='padding:20px; border-radius:10px; background:rgba(0,0,0,0.3); border:2px solid {col_v}; text-align:center'><h2>VERDETTO: <span style='color:{col_v}'>{verdetto}</span></h2></div>", unsafe_allow_html=True)
+
+            with t2:
+                st.subheader("Algoritmi di Rischio")
+                col_z1, col_z2 = st.columns(2)
+                with col_z1:
+                    z_status = "SICURA" if z_score > 2.6 else "RISCHIO"
+                    st.write(f"**Altman Z-Score:** {z_score:.2f} ({z_status})")
+                    st.progress(min(z_score/5, 1.0))
+                with col_z2:
+                    f_status = "ECCELLENTE" if f_score >= 7 else "DEBOLE"
+                    st.write(f"**Piotroski F-Score:** {f_score}/9 ({f_status})")
+                    st.progress(f_score/9)
+
+            with t3:
+                st.subheader("Insider & Istituzioni (Form 13F)")
+                ci1, ci2 = st.columns(2)
+                with ci1:
+                    st.write("**Top Holders Istituzionali:**")
+                    st.dataframe(d["inst"][['Holder', 'Shares', 'Value']].head(5)) if d["inst"] is not None else st.write("N/A")
+                with ci2:
+                    st.write("**Transazioni Insider (CEO/CFO):**")
+                    if d["insider"] is not None:
+                        st.dataframe(d["insider"][['Text', 'Shares']].head(5))
+                    else: st.write("Nessun movimento recente.")
+
+            with t4:
+                st.subheader("Event-Driven Sentiment (NLP)")
+                for n in d["news"][:8]:
+                    title = n['title']
+                    # Semplice Score NLP
+                    pos = sum(1 for w in ['buy', 'growth', 'beat', 'up', 'surge'] if w in title.lower())
+                    neg = sum(1 for w in ['sell', 'drop', 'miss', 'down', 'plunge'] if w in title.lower())
+                    impact = "🟢 BULLISH" if pos > neg else ("🔴 BEARISH" if neg > pos else "⚪ NEUTRAL")
+                    with st.expander(f"{impact} | {title[:60]}..."):
+                        st.write(title)
+                        st.write(f"[Leggi Notizia]({n['link']})")
