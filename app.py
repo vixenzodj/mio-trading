@@ -5466,22 +5466,23 @@ elif menu == "🛠️ STRATEGY BUILDER":
                 st.error("Errore nel recupero dei dati storici.")
 
 elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
-    # CSS per stile Investing.com (Header compatto e Dark)
-    st.markdown("""
-        <style>
-        .main-header { font-size: 48px !important; font-weight: 700; color: #ffffff; margin-bottom: 0px; }
-        .price-delta { font-size: 24px !important; }
-        .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-        .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #1e1e1e; border-radius: 5px 5px 0 0; }
-        </style>
-    """, unsafe_allow_html=True)
+    st.markdown("""<style>
+        .metric-card { background: #1a1a1a; padding: 15px; border-radius: 10px; border: 1px solid #333; text-align: center; }
+        .status-pill { padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 0.9em; }
+    </style>""", unsafe_allow_html=True)
 
     @st.cache_data(ttl=3600)
-    def get_full_institutional_data(ticker):
+    def get_terminal_data(ticker):
         t = yf.Ticker(ticker)
         try:
+            # Recupero info e valuta
+            inf = t.info
+            currency = inf.get('financialCurrency', inf.get('currency', '$'))
+            sym = '€' if currency == 'EUR' else ('$' if currency == 'USD' else currency + " ")
+            
             return {
-                "info": t.info,
+                "info": inf,
+                "sym": sym,
                 "history": t.history(period="2y"),
                 "fin": t.financials,
                 "bs": t.balance_sheet,
@@ -5492,89 +5493,89 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             }
         except: return None
 
-    t_symbol = st.sidebar.text_input("Ricerca Simbolo (Bloomberg Style):", value="AAPL").upper()
+    def format_big_num(val, sym):
+        if pd.isna(val) or not isinstance(val, (int, float)): return "N/A"
+        abs_v = abs(val)
+        sign = "-" if val < 0 else ""
+        if abs_v >= 1e12: return f"{sign}{sym}{abs_v/1e12:.2f}T"
+        if abs_v >= 1e9: return f"{sign}{sym}{abs_v/1e9:.2f}B"
+        if abs_v >= 1e6: return f"{sign}{sym}{abs_v/1e6:.2f}M"
+        return f"{sign}{sym}{abs_v:,.0f}"
+
+    t_code = st.sidebar.text_input("Ticker Bloomberg:", value="AAPL").upper()
     
-    if t_symbol:
-        d = get_full_institutional_data(t_symbol)
-        if d and d["info"]:
-            inf = d["info"]
+    if t_code:
+        data = get_terminal_data(t_code)
+        if data and data["info"]:
+            inf = data["info"]
+            s = data["sym"]
             
-            # --- HEADER STILE INVESTING.COM ---
-            curr_p = inf.get('currentPrice', inf.get('regularMarketPrice', 0))
-            prev_c = inf.get('previousClose', curr_p)
-            change = curr_p - prev_c
-            pct_ch = (change / prev_c) * 100
-            ch_col = "#00ff00" if change >= 0 else "#ff4b4b"
+            # --- HEADER ---
+            c_price = inf.get('currentPrice', 0)
+            st.title(f"{inf.get('shortName', t_code)} | {t_code}")
             
-            st.markdown(f"<p class='main-header'>{inf.get('shortName', t_symbol)} ({t_symbol})</p>", unsafe_allow_html=True)
-            st.markdown(f"<p class='price-delta' style='color:{ch_col};'>${curr_p:,.2f} &nbsp; {change:+.2f} ({pct_ch:+.2f}%)</p>", unsafe_allow_html=True)
+            # --- SEMAFORI ISTITUZIONALI (VISUAL IMPACT) ---
+            st.subheader("🚀 Analisi Rapida Wall Street")
+            col_a, col_b, col_c = st.columns(3)
+            
+            # Calcolo Score di Impatto
+            eps, bvps = inf.get('trailingEps', 0), inf.get('bookValue', 0)
+            graham = np.sqrt(22.5 * eps * bvps) if eps is not None and bvps is not None and eps > 0 and bvps > 0 else 0
+            m_safety = ((graham - c_price)/graham*100) if graham > 0 else -100
+            
+            with col_a:
+                color = "#2ecc71" if m_safety > 20 else ("#f1c40f" if m_safety > 0 else "#e74c3c")
+                txt = "SOTTOVALUTATA" if m_safety > 20 else ("EQUA" if m_safety > 0 else "SOPRAVVALUTATA")
+                st.markdown(f"<div class='metric-card'>Valutazione Graham<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Safety: {m_safety:.1f}%</small></div>", unsafe_allow_html=True)
 
-            # --- GRAFICO PRINCIPALE (FOCUS) ---
-            fig_main = go.Figure(data=[go.Candlestick(x=d["history"].index,
-                            open=d["history"]['Open'], high=d["history"]['High'],
-                            low=d["history"]['Low'], close=d["history"]['Close'], name="Prezzo")])
-            fig_main.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig_main, use_container_width=True)
+            with col_b:
+                z = (inf.get('currentRatio', 0) * 1.2) + (inf.get('profitMargins', 0) * 3.3)
+                color = "#2ecc71" if z > 2.6 else ("#f1c40f" if z > 1.1 else "#e74c3c")
+                txt = "SOLIDA" if z > 2.6 else "ALLERTA"
+                st.markdown(f"<div class='metric-card'>Rischio Fallimento<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Z-Score: {z:.2f}</small></div>", unsafe_allow_html=True)
 
-            # --- NAVIGAZIONE DATI PROFONDI ---
-            tabs = st.tabs(["📊 FINANCIALS (Bilanci)", "⚖️ VALUATION", "🐋 SMART MONEY", "📰 TERMINAL NEWS"])
+            with col_c:
+                roe = inf.get('returnOnEquity', 0)
+                color = "#2ecc71" if roe > 0.15 else "#e74c3c"
+                txt = "ALTA REDDITIVITÀ" if roe > 0.15 else "BASSA EFFICIENZA"
+                st.markdown(f"<div class='metric-card'>Performance Capitale<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>ROE: {roe*100:.1f}%</small></div>", unsafe_allow_html=True)
 
-            with tabs[0]:
-                st.subheader("Rendiconti Finanziari Completi")
-                sub_t1, sub_t2, sub_t3 = st.tabs(["Conto Economico", "Stato Patrimoniale", "Cash Flow"])
-                with sub_t1: st.dataframe(d["fin"], use_container_width=True)
-                with sub_t2: st.dataframe(d["bs"], use_container_width=True)
-                with sub_t3: st.dataframe(d["cf"], use_container_width=True)
+            # --- TABS DATI PROFONDI ---
+            t1, t2, t3, t4 = st.tabs(["📊 BILANCI DETTAGLIATI", "📈 GRAFICO INTERATTIVO", "🐋 FLUSSI WHALES", "📰 NEWS"])
 
-            with tabs[1]:
-                st.subheader("Modelli di Valutazione Quantitativa")
-                col_v1, col_v2, col_v3 = st.columns(3)
+            with t1:
+                st.write(f"Valori espressi in **{inf.get('financialCurrency', 'Valuta Locale')}**")
+                report = st.selectbox("Seleziona Rendiconto:", ["Conto Economico", "Stato Patrimoniale", "Cash Flow"])
                 
-                # Calcolo Graham Intrinsic Value
-                eps = inf.get('trailingEps', 0)
-                bvps = inf.get('bookValue', 0)
-                graham = np.sqrt(22.5 * eps * bvps) if (eps is not None and bvps is not None and eps > 0 and bvps > 0) else 0
+                raw_df = data["fin"] if report == "Conto Economico" else (data["bs"] if report == "Stato Patrimoniale" else data["cf"])
                 
-                col_v1.metric("Graham Fair Value", f"${graham:.2f}" if graham > 0 else "N/A")
-                col_v2.metric("P/E Ratio", f"{inf.get('trailingPE', 0):.2f}")
-                col_v3.metric("Dividend Yield", f"{inf.get('dividendYield', 0)*100:.2f}%" if inf.get('dividendYield') else "0.00%")
-                
-                # Radar Salute Finanziaria
-                st.markdown("---")
-                st.write("**Health Check (Piotroski & Altman Proxy)**")
-                f_score = 0
-                if inf.get('returnOnEquity', 0) > 0.15: f_score += 3
-                if inf.get('currentRatio', 0) > 1.5: f_score += 3
-                if inf.get('profitMargins', 0) > 0.10: f_score += 3
-                st.progress(f_score/9)
-                st.caption(f"Punteggio di affidabilità aziendale: {f_score}/9")
+                if not raw_df.empty:
+                    # Formattazione per la lettura umana
+                    fmt_df = raw_df.applymap(lambda x: format_big_num(x, s))
+                    st.table(fmt_df.head(15)) # Uso st.table per un look più pulito e fisso
+                else:
+                    st.warning("Dati di bilancio non disponibili per questo asset.")
 
-            with tabs[2]:
-                st.subheader("Institutional & Insider Holdings")
-                c_s1, c_s2 = st.columns(2)
-                with c_s1:
-                    st.write("**Grandi Fondi (13F):**")
-                    if d["inst"] is not None: st.dataframe(d["inst"], hide_index=True)
-                with c_s2:
-                    st.write("**Insider Transactions (Manager):**")
-                    if d["insider"] is not None: st.dataframe(d["insider"], hide_index=True)
+            with t2:
+                fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
+                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
 
-            with tabs[3]:
-                st.subheader("Live News Feed (Sentiment Analysis)")
-                if d["news"]:
-                    for n in d["news"]:
-                        # FIX: Fallback intelligente per le chiavi del titolo
-                        title = n.get('title', n.get('content', {}).get('title', 'Titolo Non Disponibile'))
-                        link = n.get('link', n.get('content', {}).get('canonicalUrl', {}).get('url', '#'))
-                        provider = n.get('publisher', 'Finance Source')
-                        
-                        if title != 'Titolo Non Disponibile':
-                            with st.expander(f"📌 {provider} | {title[:80]}..."):
-                                st.write(title)
-                                st.markdown(f"[Apri Notizia Bloomberg]({link})")
-                                # Sentiment Engine Leggero
-                                sent_score = "Bullish 🟢" if any(w in title.lower() for w in ['up','buy','growth','beat']) else "Neutral ⚪"
-                                st.caption(f"AI Sentiment: {sent_score}")
+            with t3:
+                st.subheader("Insider Trading & Istituzioni")
+                if data["insider"] is not None:
+                    st.dataframe(data["insider"], use_container_width=True)
+                else: st.info("Nessun dato insider recente.")
+
+            with t4:
+                st.subheader("Bloomberg Live Feed")
+                if data["news"]:
+                    for n in data["news"]:
+                        title = n.get('title', n.get('content', {}).get('title', 'N/A'))
+                        link = n.get('link', '#')
+                        if title != 'N/A':
+                            st.markdown(f"🔹 **[{title}]({link})**")
+                            st.caption(f"Sentiment: {'🟢 Bullish' if 'buy' in title.lower() or 'growth' in title.lower() else '⚪ Neutral'}")
                 else:
                     st.info("Nessuna notizia rilevante trovata dai server.")
         else:
