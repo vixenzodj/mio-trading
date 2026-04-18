@@ -5579,10 +5579,53 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 st.plotly_chart(fig, use_container_width=True)
 
             with t3:
-                st.subheader("Insider Trading & Istituzioni")
-                if data["insider"] is not None:
-                    st.dataframe(data["insider"], use_container_width=True)
-                else: st.info("Nessun dato insider recente.")
+                st.subheader("🐋 Whale Activity: Intelligence & Flussi Smart Money")
+                
+                # Indicatori di Sintesi
+                col_inst, col_ins = st.columns(2)
+                
+                with col_inst:
+                    st.markdown("### 🏛️ Fondi di Investimento (13F)")
+                    if data["inst"] is not None and not data["inst"].empty:
+                        inst_df = data["inst"].copy()
+                        # Pulizia e Formattazione
+                        if 'Value' in inst_df.columns:
+                            inst_df['Valore Totale'] = inst_df['Value'].apply(lambda x: format_big_num(x, s))
+                        if 'Shares' in inst_df.columns:
+                            inst_df['Azioni'] = inst_df['Shares'].apply(lambda x: format_big_num(x, ""))
+                            
+                        # Mostriamo solo le colonne che contano per capire il peso dei Fondi
+                        view_cols = [c for c in ['Holder', 'Azioni', 'Valore Totale', '% Out'] if c in inst_df.columns]
+                        st.dataframe(inst_df[view_cols].head(10), hide_index=True, use_container_width=True)
+                        st.caption("I fondi indicano la stabilità del titolo nel lungo periodo.")
+                    else:
+                        st.info("Dati istituzionali non disponibili per questo asset.")
+
+                with col_ins:
+                    st.markdown("### 👔 Insider Intelligence (Management)")
+                    if data["insider"] is not None and not data["insider"].empty:
+                        ins_df = data["insider"].copy()
+                        
+                        # Logica Chirurgica per identificare Direzione e Ruolo
+                        def format_insider_trade(val):
+                            v = str(val).lower()
+                            if 'sale' in v or 'sell' in v: return "🔴 VENDITA"
+                            if 'purchase' in v or 'buy' in v: return "🟢 ACQUISTO"
+                            return "⚪ OPZIONI/ALTRO"
+
+                        if 'Transaction' in ins_df.columns:
+                            ins_df['Operazione'] = ins_df['Transaction'].apply(format_insider_trade)
+                        
+                        # Formattazione volumi insider
+                        if 'Shares' in ins_df.columns:
+                            ins_df['Volume'] = ins_df['Shares'].apply(lambda x: format_big_num(x, ""))
+
+                        # Riordino Colonne per impatto visivo immediato (Chi? Cosa? Quanto?)
+                        ins_view = [c for c in ['Date', 'Insider', 'Position', 'Operazione', 'Volume'] if c in ins_df.columns]
+                        st.dataframe(ins_df[ins_view].head(15), hide_index=True, use_container_width=True)
+                        st.caption("Gli acquisti degli Insider (🟢) sono segnali rialzisti molto potenti.")
+                    else:
+                        st.info("Nessuna transazione recente dei direttori commerciali o CEO rilevata.")
 
             with t4:
                 st.subheader("Bloomberg Live Feed")
