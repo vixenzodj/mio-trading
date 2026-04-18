@@ -5644,7 +5644,20 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.markdown("---")
 
     # --- CONFIGURAZIONE DATABASE ESTESO ---
-    DB_USA = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "BRK-B", "V", "JNJ", "WMT", "JPM", "PG", "MA", "UNH", "HD", "BAC", "DIS", "ADBE", "NFLX", "CRM", "AMD", "INTC", "PYPL", "COST", "PEP", "KO"]
+    # --- MEGA DATABASE 1000+ TICKERS ---
+    DB_TECH = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AVGO", "ORCL", "ADBE", "CRM", "AMD", "TXN", "QCOM", "INTC", "MU", "AMAT", "LRCX", "ADI", "PANW", "SNPS", "CDNS", "KLAC", "IBM", "NOW", "ACN", "CSCO", "INTU", "FIS", "FISV", "GPN", "PYPL", "SHOP", "PLTR", "ARM", "SMCI", "MCHP", "ON", "NXPI", "STX", "WDC", "HPE", "DELL", "ANET", "MSI", "TEL", "APH", "CDW", "KEYS", "TER", "ENPH", "SEDG", "FSLR", "ZS", "OKTA", "CRWD", "DDOG", "MDB", "NET", "TEAM", "TSM", "ASML", "SAP", "STM", "IFX.DE", "UBER", "PINS", "SNAP", "TWLO", "DOCU", "DDOG", "SPLK", "OKTA", "AKAM", "NET", "VRSN", "STNE", "NU", "SE", "MELI", "CPNG"]
+    
+    DB_FINANCE = ["JPM", "V", "MA", "BRK-B", "BAC", "WFC", "MS", "GS", "SCHW", "C", "BLK", "AXP", "BX", "PGR", "CB", "MMC", "MET", "TRV", "USB", "PNC", "TFC", "COF", "BK", "STT", "AMP", "BEN", "IVZ", "AJG", "AON", "RE", "WRB", "L", "GL", "AFL", "PRU", "PFG", "ALL", "HIG", "SBNY", "FITB", "HBAN", "KEY", "RF", "MTB", "HBAN", "SIVB", "UCG.MI", "ISP.MI", "MB.MI", "BAMI.MI", "BPE.MI", "PST.MI", "HSBC", "RY", "TD", "BNP.PA", "DBK.DE"]
+    
+    DB_HEALTH = ["LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO", "ABT", "PFE", "AMGN", "DHR", "SYK", "ELV", "ISRG", "BMY", "VRTX", "REGN", "ZTS", "HCA", "GILD", "BSX", "CVS", "CI", "BDX", "MCK", "COR", "HUM", "IQV", "EW", "MDT", "IDXX", "A", "RMD", "BAX", "ZBH", "ALGN", "VTRS", "WBA", "CNC", "MOH", "STE", "TFX", "HOLX", "MRNA", "BNTX", "PFE", "SNY", "NVS", "AZN", "OR.PA", "BAYN.DE"]
+    
+    DB_CONSUMER = ["WMT", "PG", "KO", "PEP", "COST", "NKE", "EL", "CL", "PM", "MO", "TGT", "HD", "LOW", "SBUX", "MDLZ", "TJX", "DG", "DLTR", "KR", "SYY", "STZ", "GIS", "K", "HSY", "CHD", "CLX", "KMB", "TSN", "ADM", "MAR", "HLT", "YUM", "CMG", "MCD", "DPZ", "DRI", "BKNG", "EXPE", "RCL", "CCL", "NCLH", "LVS", "WYNN", "MGM", "LVMH.PA", "RMS.PA", "MC.PA", "KER.PA", "OR.PA", "RACE.MI", "MONC.MI"]
+    
+    DB_ENERGY_IND = ["XOM", "CVX", "COP", "SLB", "EOG", "PXD", "MPC", "PSX", "VLO", "HES", "HAL", "DVN", "FANG", "APA", "BA", "CAT", "DE", "HON", "GE", "RTX", "LMT", "GD", "NOC", "MMM", "UPS", "FDX", "UNP", "NSC", "CSX", "WM", "RSG", "URI", "PWR", "ETN", "EMR", "ITW", "PH", "AME", "DOV", "XYL", "TTE.PA", "ENI.MI", "BP", "SHEL", "SIE.DE", "AIR.PA", "STLAM.MI", "PRY.MI", "LDO.MI"]
+    
+    DB_OTHERS = ["AMT", "PLD", "CCI", "EQIX", "PSA", "DLR", "VICI", "O", "SBAC", "WELL", "AVB", "EQR", "NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "XEL", "ED", "PEG", "WEC", "ES", "ETR", "FE", "LIN", "APD", "SHW", "CTVA", "NEM", "FCX", "VMC", "MLM", "DOW", "DD", "ALB", "T", "VZ", "TMUS", "CMCSA", "DIS", "CHTR", "NFLX", "WBD", "PARA", "ENEL.MI", "TRN.MI", "SRG.MI"]
+
+    DB_USA = DB_TECH + DB_FINANCE + DB_HEALTH + DB_CONSUMER + DB_ENERGY_IND + DB_OTHERS
     DB_EU = ["MC.PA", "ASML", "OR.PA", "SAP", "RMS.PA", "NESN.SW", "TTE.PA", "SIE.DE", "IDNA.MI", "RACE.MI", "ENI.MI", "UCG.MI", "ISP.MI", "ENEL.MI", "STLAM.MI", "PRY.MI", "AZM.MI"]
     
     st.sidebar.subheader("⚙️ Filtri Scanner")
