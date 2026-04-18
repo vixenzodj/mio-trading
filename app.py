@@ -5547,14 +5547,31 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 st.write(f"Valori espressi in **{inf.get('financialCurrency', 'Valuta Locale')}**")
                 report = st.selectbox("Seleziona Rendiconto:", ["Conto Economico", "Stato Patrimoniale", "Cash Flow"])
                 
-                raw_df = data["fin"] if report == "Conto Economico" else (data["bs"] if report == "Stato Patrimoniale" else data["cf"])
+                # Selezione del DataFrame grezzo
+                if report == "Conto Economico": raw_df = data["fin"]
+                elif report == "Stato Patrimoniale": raw_df = data["bs"]
+                else: raw_df = data["cf"]
                 
-                if not raw_df.empty:
-                    # Formattazione per la lettura umana
-                    fmt_df = raw_df.applymap(lambda x: format_big_num(x, s))
-                    st.table(fmt_df.head(15)) # Uso st.table per un look più pulito e fisso
+                if raw_df is not None and not raw_df.empty:
+                    # FIX CHIRURGICO: Uso di map() per Pandas moderno o applymap per versioni vecchie
+                    try:
+                        if hasattr(raw_df, 'map'):
+                            fmt_df = raw_df.map(lambda x: format_big_num(x, s))
+                        else:
+                            fmt_df = raw_df.applymap(lambda x: format_big_num(x, s))
+                    except Exception as e:
+                        # Fallback se il mapping fallisce su qualche cella strana
+                        fmt_df = raw_df.astype(str)
+
+                    # Pulizia intestazioni (Date leggibili)
+                    fmt_df.columns = [col.strftime('%Y-%m-%d') if hasattr(col, 'strftime') else str(col) for col in fmt_df.columns]
+                    
+                    # Visualizzazione Tabella Professionale
+                    st.dataframe(fmt_df, use_container_width=True)
+                    
+                    st.caption("💡 Suggerimento: I valori sono abbreviati (B = Miliardi, M = Milioni). Scorri la tabella per vedere gli anni precedenti.")
                 else:
-                    st.warning("Dati di bilancio non disponibili per questo asset.")
+                    st.warning("Dati di bilancio non disponibili per questo specifico Ticker.")
 
             with t2:
                 fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
