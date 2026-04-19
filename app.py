@@ -5768,50 +5768,47 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 
                 if data["news"]:
                     for n in data["news"]:
-                        # 1. Estrazione Dati Base
-                        title = n.get('title', 'Notizia non disponibile')
-                        publisher = n.get('publisher', 'Fonte Istituzionale')
+                        # --- ESTRAZIONE DEEP (Fix per nuovi formati Yahoo) ---
+                        # Cerchiamo il titolo ovunque sia nascosto
+                        title = n.get('title') or n.get('content', {}).get('title', 'Titolo non disponibile')
                         
-                        # 2. Estrazione Link Ultra-Robusta (Fix per i nuovi formati Yahoo/Bloomberg)
-                        link = n.get('link', n.get('url', '#'))
-                        if link == '#' and 'content' in n:
-                            link = n['content'].get('canonicalUrl', {}).get('url', '#')
+                        # Cerchiamo il link (priorità a quello canonico)
+                        link = n.get('link') or n.get('url')
+                        if not link or link == '#':
+                            link = n.get('content', {}).get('canonicalUrl', {}).get('url', '#')
                         
-                        # 3. Estrazione "Pezzettino di descrizione" (Snippet)
-                        # Molte news di yfinance hanno lo snippet nel campo 'summary' o 'content'
-                        summary = n.get('summary', '')
-                        if not summary and 'content' in n:
-                            summary = n['content'].get('description', '')
+                        # Cerchiamo la descrizione (Snippet)
+                        summary = n.get('summary') or n.get('content', {}).get('description', '')
                         
-                        # 4. Logica Valutazione "Semafori" (Sentiment Analysis)
-                        t_low = title.lower() + " " + summary.lower()
-                        pos_words = ['growth', 'buy', 'up', 'surge', 'profit', 'bull', 'beating', 'positive', 'upgrade']
-                        neg_words = ['drop', 'fall', 'sell', 'risk', 'bear', 'loss', 'debt', 'layoffs', 'miss', 'downgrade']
+                        # Cerchiamo il publisher (Fonte)
+                        publisher = n.get('publisher') or n.get('content', {}).get('provider', {}).get('displayName', 'Fonte Istituzionale')
+
+                        # --- LOGICA VALUTAZIONE SEMAFORI ---
+                        t_low = (str(title) + " " + str(summary)).lower()
+                        pos_words = ['growth', 'buy', 'up', 'surge', 'profit', 'bull', 'beating', 'positive', 'upgrade', 'strong']
+                        neg_words = ['drop', 'fall', 'sell', 'risk', 'bear', 'loss', 'debt', 'layoffs', 'miss', 'downgrade', 'weak']
                         
                         if any(w in t_low for w in pos_words):
-                            sentiment_label = "🟢 POSITIVA (BULLISH)"
-                            border_color = "#2ecc71"
+                            sentiment_label, border_color = "🟢 POSITIVA (BULLISH)", "#2ecc71"
                         elif any(w in t_low for w in neg_words):
-                            sentiment_label = "🔴 NEGATIVA (BEARISH)"
-                            border_color = "#e74c3c"
+                            sentiment_label, border_color = "🔴 NEGATIVA (BEARISH)", "#e74c3c"
                         else:
-                            sentiment_label = "⚪ NEUTRALE"
-                            border_color = "#95a5a6"
+                            sentiment_label, border_color = "⚪ NEUTRALE", "#95a5a6"
 
-                        # 5. Visualizzazione Grafica Istituzionale
-                        with st.container():
+                        # --- RENDERIZZAZIONE GRAFICA ---
+                        if title != 'Titolo non disponibile':
                             st.markdown(f"""
-                            <div style="border-left: 5px solid {border_color}; padding-left: 15px; margin-bottom: 20px;">
-                                <h4 style="margin-bottom: 5px;"><a href="{link}" target="_blank" style="text-decoration: none; color: inherit;">{title}</a></h4>
-                                <p style="font-size: 0.9em; color: #bdc3c7; margin-bottom: 5px;">{summary[:200]}...</p>
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <span style="font-weight: bold; color: {border_color};">{sentiment_label}</span>
+                            <div style="border-left: 5px solid {border_color}; padding: 15px; margin-bottom: 20px; background-color: rgba(255,255,255,0.05); border-radius: 0 10px 10px 0;">
+                                <h4 style="margin: 0 0 10px 0;"><a href="{link}" target="_blank" style="text-decoration: none; color: #ecf0f1;">{title}</a></h4>
+                                <p style="font-size: 0.95em; color: #bdc3c7; line-height: 1.4;">{summary[:250] if summary else 'Nessuna descrizione disponibile per questa news.'}...</p>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+                                    <span style="font-weight: bold; color: {border_color}; font-size: 0.9em;">{sentiment_label}</span>
                                     <span style="font-size: 0.8em; color: #7f8c8d;">Fonte: {publisher}</span>
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
                 else:
-                    st.warning("Nessun feed attivo trovato per questo Ticker. Verifica la connessione API.")
+                    st.info("In attesa di nuovi aggiornamenti dal mercato...")
 
 elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.title("🏛️ Global Alpha Engine (Massive Database)")
