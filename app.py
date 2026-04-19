@@ -12,6 +12,8 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
+import re
+from bs4 import BeautifulSoup
 import histdatacom
 from histdatacom.options import Options
 import os, zipfile, shutil, glob
@@ -774,6 +776,80 @@ st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
 menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)"])
+
+with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False):
+    st.write("Estrai automaticamente i ticker da Testo o da Link Web.")
+    
+    metodo = st.radio("Scegli la fonte:", ["🌐 Inserisci Link (URL)", "📝 Copia-Incolla Testo", "📚 Download S&P 500"])
+    
+    # Dizionario di parole comuni da ignorare per evitare falsi positivi
+    blacklist = {"THE", "AND", "FOR", "INC", "CORP", "LTD", "NYSE", "NASDAQ", "USD", "EUR", "NEW", "ETF", "LLC", "PLC", "SPA", "HOLDING", "GROUP", "INDEX", "MARKET", "STOCK", "SHARE", "BUY", "SELL"}
+
+    if metodo == "🌐 Inserisci Link (URL)":
+        url_input = st.text_input("Incolla l'URL dell'articolo o sito web:")
+        if st.button("Cerca Ticker nel Link 🕵️‍♂️"):
+            if url_input:
+                try:
+                    # Camuffiamo la richiesta per sembrare un normale browser Chrome su Windows
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5",
+                    }
+                    
+                    response = requests.get(url_input, headers=headers, timeout=10)
+                    
+                    # Controlliamo se il sito ci ha bloccato (es. Errore 403 Forbidden)
+                    if response.status_code == 403:
+                        st.error("Accesso Negato: Questo sito usa scudi anti-bot severi (es. Cloudflare). Usa il metodo 'Copia-Incolla' per aggirarlo.")
+                    elif response.status_code == 200:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        
+                        # Estraiamo tutto il testo visibile
+                        testo_estratto = soup.get_text(separator=' ')
+                        
+                        # Cerchiamo parole maiuscole da 1 a 5 lettere
+                        estratti = re.findall(r'\b[A-Z]{1,5}\b', testo_estratto)
+                        tickers_puliti = list(set([t for t in estratti if t not in blacklist and len(t) > 1]))
+                        
+                        if tickers_puliti:
+                            st.success(f"Trovati {len(tickers_puliti)} potenziali Ticker!")
+                            st.code(", ".join(tickers_puliti))
+                            st.info("👆 Copia questa lista e incollala in 'Custom List'")
+                        else:
+                            st.warning("Nessun ticker rilevato nel testo del sito.")
+                    else:
+                        st.warning(f"Il server ha risposto con codice errore: {response.status_code}")
+                        
+                except Exception as e:
+                    st.error(f"Impossibile leggere il link. Errore: {e}")
+
+    elif metodo == "📝 Copia-Incolla Testo":
+        testo_sporco = st.text_area("Incolla il testo (es. da Finviz o PDF):")
+        if st.button("Estrai dal Testo ✂️"):
+            if testo_sporco:
+                estratti = re.findall(r'\b[A-Z]{1,5}\b', testo_sporco)
+                tickers_puliti = list(set([t for t in estratti if t not in blacklist and len(t) > 1]))
+                
+                if tickers_puliti:
+                    st.success(f"Trovati {len(tickers_puliti)} ticker!")
+                    st.code(", ".join(tickers_puliti))
+                else:
+                    st.warning("Nessun ticker trovato.")
+
+    elif metodo == "📚 Download S&P 500":
+        st.write("Scarica la lista Ufficiale Live da Wikipedia.")
+        if st.button("Estrai S&P 500 📥"):
+            try:
+                url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+                tables = pd.read_html(url)
+                sp500_df = tables[0]
+                tickers_sp = [t.replace(".", "-") for t in sp500_df['Symbol'].tolist()]
+                st.success(f"Scaricati {len(tickers_sp)} ticker!")
+                st.code(", ".join(tickers_sp))
+            except Exception as e:
+                st.error(f"Errore di connessione: {e}")
 
 # --- REFRESH CONFIG ---
 # Dashboard: refresh ogni 1 minuto (60000 ms)
