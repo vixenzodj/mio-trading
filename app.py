@@ -5675,6 +5675,39 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                     st.caption("💡 Suggerimento: I valori sono abbreviati (B = Miliardi, M = Milioni). Scorri la tabella per vedere gli anni precedenti.")
                 else:
                     st.warning("Dati di bilancio non disponibili per questo specifico Ticker.")
+                    
+            # --- PIOTROSKI F-SCORE (Spostato e Potenziato) ---
+                st.markdown("---")
+                st.subheader("Piotroski F-Score (Qualità Istituzionale)")
+                is_stock = not (t_code.startswith('^') or '=X' in t_code or '-USD' in t_code)
+                if not is_stock:
+                    st.info("L'analisi F-Score è disponibile solo per titoli azionari.")
+                else:
+                    try:
+                        ticker_obj = yf.Ticker(t_code)
+                        bs = ticker_obj.balance_sheet
+                        cf = ticker_obj.cashflow
+                        if not bs.empty and bs.shape[1] > 0:
+                            f_score = 0
+                            # Calcolo semplificato ma robusto
+                            net_inc = ticker_obj.info.get('netIncomeToCommon', 0)
+                            f_score += 1 if net_inc > 0 else 0
+                            f_score += 1 if ticker_obj.info.get('returnOnAssets', 0) > 0 else 0
+                            f_score += 1 if ticker_obj.info.get('operatingCashflow', 0) > 0 else 0
+                            # Delta Debt (Leva)
+                            if 'Long Term Debt' in bs.index and bs.shape[1] >= 2:
+                                f_score += 1 if bs.loc['Long Term Debt'].iloc[0] <= bs.loc['Long Term Debt'].iloc[1] else 0
+                            
+                            col_f1, col_f2 = st.columns([1, 2])
+                            with col_f1: st.metric("F-Score", f"{f_score}/9")
+                            with col_f2:
+                                if f_score >= 7: st.success("💎 Alta Qualità")
+                                elif f_score >= 4: st.warning("⚖️ Qualità Media")
+                                else: st.error("⚠️ Qualità Scarsa")
+                        else:
+                            st.write("Dati fondamentali (Balance Sheet) non disponibili al momento.")
+                    except:
+                        st.write("Analisi Piotroski non disponibile per questo ticker.")
 
             with t2:
                 fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
@@ -5731,84 +5764,19 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         st.info("Nessuna transazione recente dei direttori commerciali o CEO rilevata.")
 
             with t4:
-                st.subheader("Bloomberg Live Feed & Quality Metrics")
-                
-                # --- FIX NEWS: SISTEMA DI ESTRAZIONE LINK MULTI-LIVELLO ---
+                st.subheader("Bloomberg Live Feed")
                 if data["news"]:
                     for n in data["news"]:
-                        # Recupero Titolo
-                        title = n.get('title', n.get('content', {}).get('title', 'Notizia'))
+                        title = n.get('title', 'Notizia')
+                        # Estrazione Link Ultra-Robusta
+                        link = n.get('link', n.get('url', '#'))
+                        if link == '#' and 'content' in n:
+                            link = n['content'].get('canonicalUrl', {}).get('url', '#')
                         
-                        # Recupero Link con Fallback (Bypass per i cambi di schema di yfinance)
-                        link = n.get('link')
-                        if not link:
-                            link = n.get('url')
-                        if not link:
-                            # Prova nei metadati annidati di Yahoo
-                            link = n.get('content', {}).get('canonicalUrl', {}).get('url', '#')
-                        
-                        if title and title != 'N/A' and title != 'Notizia':
-                            # Pulizia titolo da caratteri che rompono il markdown
-                            clean_title = title.replace("[", "(").replace("]", ")")
-                            st.markdown(f"🔹 **[{clean_title}]({link})**")
-                            
-                            # Sentiment Analysis istantanea
-                            t_low = clean_title.lower()
-                            if any(w in t_low for w in ['buy', 'growth', 'up', 'surge', 'profit', 'bull']):
-                                sent, color = "🟢 Bullish", "green"
-                            elif any(w in t_low for w in ['drop', 'fall', 'sell', 'risk', 'bear', 'loss']):
-                                sent, color = "🔴 Bearish", "red"
-                            else:
-                                sent, color = "⚪ Neutral", "gray"
-                            
-                            st.markdown(f"<small>Sentiment: {sent} | <a href='{link}' target='_blank'>Apri Notizia Originale ↗️</a></small>", unsafe_allow_html=True)
+                        st.markdown(f"🔹 **[{title}]({link})**")
+                        st.caption(f"[Leggi su Bloomberg/Yahoo]({link})")
                 else:
-                    st.info("Nessuna notizia recente rilevata per questo asset.")
-
-                st.markdown("---")
-                
-                # --- NUOVA METRICA ISTITUZIONALE: PIOTROSKI F-SCORE ---
-                st.subheader("Piotroski F-Score (Analisi Qualità)")
-                try:
-                    # Recupero dati fondamentali
-                    bs = ticker_obj.balance_sheet
-                    cf = ticker_obj.cashflow
-                    info = ticker_obj.info
-                    
-                    if not bs.empty and not cf.empty:
-                        f_score = 0
-                        # 1. Redditività: Net Income e ROA positivi
-                        net_income = info.get('netIncomeToCommon', 0)
-                        f_score += 1 if net_income > 0 else 0
-                        f_score += 1 if info.get('returnOnAssets', 0) > 0 else 0
-                        f_score += 1 if info.get('operatingCashflow', 0) > 0 else 0
-                        f_score += 1 if info.get('operatingCashflow', 0) > net_income else 0
-                        
-                        # 2. Efficienza Operativa: Margine Lordo
-                        f_score += 1 if info.get('grossMargins', 0) > 0.35 else 0 # Soglia istituzionale
-                        
-                        # 3. Leva Finanziaria (Delta Debt)
-                        if bs.shape[1] >= 2:
-                            current_debt = bs.loc['Long Term Debt'].iloc[0] if 'Long Term Debt' in bs.index else 0
-                            prev_debt = bs.loc['Long Term Debt'].iloc[1] if 'Long Term Debt' in bs.index else 0
-                            f_score += 1 if current_debt <= prev_debt else 0
-                        
-                        col_f1, col_f2 = st.columns([1, 2])
-                        with col_f1:
-                            st.metric("F-Score", f"{f_score}/9")
-                        with col_f2:
-                            if f_score >= 7:
-                                st.success("💎 Blue Chip (Alta Qualità)")
-                            elif f_score >= 4:
-                                st.warning("⚖️ Fair Quality (Stabile)")
-                            else:
-                                st.error("⚠️ Junk Bond Risk (Qualità Scarsa)")
-                        
-                        st.caption("Il Piotroski F-Score misura la salute finanziaria reale su una scala da 0 a 9. Sotto il 4 l'azienda è considerata debole dai tecnici di Wall Street.")
-                    else:
-                        st.write("Dati di bilancio insufficienti per il calcolo del Piotroski Score.")
-                except Exception as e:
-                    st.write("Analisi istituzionale non disponibile per questo ticker.")
+                    st.info("Nessuna notizia trovata.")
 
 elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.title("🏛️ Global Alpha Engine (Massive Database)")
