@@ -5777,11 +5777,19 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         if not link or link == '#':
                             link = n.get('content', {}).get('canonicalUrl', {}).get('url', '#')
                         
-                        # Cerchiamo la descrizione (Snippet)
-                        summary = n.get('summary') or n.get('content', {}).get('description', '')
-                        
                         # Cerchiamo il publisher (Fonte)
                         publisher = n.get('publisher') or n.get('content', {}).get('provider', {}).get('displayName', 'Fonte Istituzionale')
+
+                        # Estrazione "Pezzettino di descrizione" (Deep Fallback)
+                        summary = n.get('summary')
+                        if not summary:
+                            summary = n.get('content', {}).get('summary')
+                        if not summary:
+                            summary = n.get('content', {}).get('description')
+                        
+                        # Se ancora vuoto, usiamo il publisher come descrizione minima
+                        if not summary:
+                            summary = f"Approfondimento disponibile su {publisher}."
 
                         # --- LOGICA VALUTAZIONE SEMAFORI ---
                         t_low = (str(title) + " " + str(summary)).lower()
