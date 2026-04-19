@@ -5764,19 +5764,54 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         st.info("Nessuna transazione recente dei direttori commerciali o CEO rilevata.")
 
             with t4:
-                st.subheader("Bloomberg Live Feed")
+                st.subheader("Bloomberg Live Feed & Sentiment Analysis")
+                
                 if data["news"]:
                     for n in data["news"]:
-                        title = n.get('title', 'Notizia')
-                        # Estrazione Link Ultra-Robusta
+                        # 1. Estrazione Dati Base
+                        title = n.get('title', 'Notizia non disponibile')
+                        publisher = n.get('publisher', 'Fonte Istituzionale')
+                        
+                        # 2. Estrazione Link Ultra-Robusta (Fix per i nuovi formati Yahoo/Bloomberg)
                         link = n.get('link', n.get('url', '#'))
                         if link == '#' and 'content' in n:
                             link = n['content'].get('canonicalUrl', {}).get('url', '#')
                         
-                        st.markdown(f"🔹 **[{title}]({link})**")
-                        st.caption(f"[Leggi su Bloomberg/Yahoo]({link})")
+                        # 3. Estrazione "Pezzettino di descrizione" (Snippet)
+                        # Molte news di yfinance hanno lo snippet nel campo 'summary' o 'content'
+                        summary = n.get('summary', '')
+                        if not summary and 'content' in n:
+                            summary = n['content'].get('description', '')
+                        
+                        # 4. Logica Valutazione "Semafori" (Sentiment Analysis)
+                        t_low = title.lower() + " " + summary.lower()
+                        pos_words = ['growth', 'buy', 'up', 'surge', 'profit', 'bull', 'beating', 'positive', 'upgrade']
+                        neg_words = ['drop', 'fall', 'sell', 'risk', 'bear', 'loss', 'debt', 'layoffs', 'miss', 'downgrade']
+                        
+                        if any(w in t_low for w in pos_words):
+                            sentiment_label = "🟢 POSITIVA (BULLISH)"
+                            border_color = "#2ecc71"
+                        elif any(w in t_low for w in neg_words):
+                            sentiment_label = "🔴 NEGATIVA (BEARISH)"
+                            border_color = "#e74c3c"
+                        else:
+                            sentiment_label = "⚪ NEUTRALE"
+                            border_color = "#95a5a6"
+
+                        # 5. Visualizzazione Grafica Istituzionale
+                        with st.container():
+                            st.markdown(f"""
+                            <div style="border-left: 5px solid {border_color}; padding-left: 15px; margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 5px;"><a href="{link}" target="_blank" style="text-decoration: none; color: inherit;">{title}</a></h4>
+                                <p style="font-size: 0.9em; color: #bdc3c7; margin-bottom: 5px;">{summary[:200]}...</p>
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-weight: bold; color: {border_color};">{sentiment_label}</span>
+                                    <span style="font-size: 0.8em; color: #7f8c8d;">Fonte: {publisher}</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
                 else:
-                    st.info("Nessuna notizia trovata.")
+                    st.warning("Nessun feed attivo trovato per questo Ticker. Verifica la connessione API.")
 
 elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.title("🏛️ Global Alpha Engine (Massive Database)")
