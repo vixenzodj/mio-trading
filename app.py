@@ -839,17 +839,44 @@ with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False
                     st.warning("Nessun ticker trovato.")
 
     elif metodo == "📚 Download S&P 500":
-        st.write("Scarica la lista Ufficiale Live da Wikipedia.")
+        st.write("Scarica la lista Ufficiale Live da Wikipedia (Metodo Nativo Anti-Crash).")
         if st.button("Estrai S&P 500 📥"):
             try:
                 url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-                tables = pd.read_html(url)
-                sp500_df = tables[0]
-                tickers_sp = [t.replace(".", "-") for t in sp500_df['Symbol'].tolist()]
-                st.success(f"Scaricati {len(tickers_sp)} ticker!")
-                st.code(", ".join(tickers_sp))
+                
+                # Camuffamento per bypassare i blocchi
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+                risposta = requests.get(url, headers=headers, timeout=10)
+                
+                if risposta.status_code == 200:
+                    # BYPASS LXML: Usiamo BeautifulSoup con il parser nativo di Python
+                    soup = BeautifulSoup(risposta.text, 'html.parser')
+                    
+                    # Cerchiamo la tabella specifica con l'ID di Wikipedia
+                    table = soup.find('table', {'id': 'constituents'})
+                    
+                    tickers_sp = []
+                    # Iteriamo sulle righe saltando l'intestazione [1:]
+                    for row in table.find_all('tr')[1:]:
+                        cols = row.find_all('td')
+                        if cols:
+                            # Il ticker è nella prima colonna, togliamo spazi e sistemiamo il punto per Yahoo
+                            ticker = cols[0].text.strip().replace(".", "-")
+                            tickers_sp.append(ticker)
+                    
+                    if tickers_sp:
+                        st.success(f"Scaricati con successo {len(tickers_sp)} ticker dell'S&P 500!")
+                        st.code(", ".join(tickers_sp))
+                        st.info("👆 Copia questa lista e incollala in 'Custom List'")
+                    else:
+                        st.error("Errore: Impossibile trovare i dati nella tabella. La struttura del sito potrebbe essere cambiata.")
+                else:
+                    st.error(f"Wikipedia ha rifiutato la connessione. Codice Errore: {risposta.status_code}")
+                    
             except Exception as e:
-                st.error(f"Errore di connessione: {e}")
+                st.error(f"Errore critico durante l'estrazione: {e}")
 
 # --- REFRESH CONFIG ---
 # Dashboard: refresh ogni 1 minuto (60000 ms)
