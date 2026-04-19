@@ -5643,6 +5643,86 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 txt = "ALTA REDDITIVITÀ" if roe > 0.15 else "BASSA EFFICIENZA"
                 st.markdown(f"<div class='metric-card'>Performance Capitale<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>ROE: {roe*100:.1f}%</small></div>", unsafe_allow_html=True)
 
+            st.write("---")
+            st.subheader("🏛️ Analisi Avanzata & Solvibilità Istituzionale")
+            
+            try:
+                bs = data["bs"] if data["bs"] is not None else pd.DataFrame()
+                cf = data["cf"] if data["cf"] is not None else pd.DataFrame()
+                is_ = data["fin"] if data["fin"] is not None else pd.DataFrame()
+                
+                # 1. Piotroski F-Score (Logica Integrale 9/9)
+                f_score = 0
+                if not bs.empty and not cf.empty and not is_.empty and bs.shape[1] >= 2 and cf.shape[1] >= 1 and is_.shape[1] >= 2:
+                    try:
+                        net_inc_curr = is_.loc['Net Income'].iloc[0] if 'Net Income' in is_.index else 0
+                        net_inc_prev = is_.loc['Net Income'].iloc[1] if 'Net Income' in is_.index else 0
+                        cfo_curr = cf.loc['Operating Cash Flow'].iloc[0] if 'Operating Cash Flow' in cf.index else 0
+                        
+                        ta_curr = bs.loc['Total Assets'].iloc[0] if 'Total Assets' in bs.index else 1
+                        ta_prev = bs.loc['Total Assets'].iloc[1] if 'Total Assets' in bs.index else 1
+                        roa_curr = net_inc_curr / ta_curr if ta_curr != 0 else 0
+                        roa_prev = net_inc_prev / ta_prev if ta_prev != 0 else 0
+                        
+                        f_score += 1 if roa_curr > 0 else 0
+                        f_score += 1 if cfo_curr > 0 else 0
+                        f_score += 1 if roa_curr > roa_prev else 0
+                        f_score += 1 if cfo_curr > net_inc_curr else 0
+                        
+                        lt_curr = bs.loc['Long Term Debt'].iloc[0] if 'Long Term Debt' in bs.index else 0
+                        lt_prev = bs.loc['Long Term Debt'].iloc[1] if 'Long Term Debt' in bs.index else 0
+                        f_score += 1 if lt_curr < lt_prev else 0
+                        
+                        ca_curr = bs.loc['Current Assets'].iloc[0] if 'Current Assets' in bs.index else 0
+                        ca_prev = bs.loc['Current Assets'].iloc[1] if 'Current Assets' in bs.index else 0
+                        cl_curr = bs.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in bs.index else 1
+                        cl_prev = bs.loc['Current Liabilities'].iloc[1] if 'Current Liabilities' in bs.index else 1
+                        cr_curr = ca_curr / cl_curr if cl_curr != 0 else 0
+                        cr_prev = ca_prev / cl_prev if cl_prev != 0 else 0
+                        f_score += 1 if cr_curr > cr_prev else 0
+                        
+                        sh_curr = bs.loc['Ordinary Shares Number'].iloc[0] if 'Ordinary Shares Number' in bs.index else 0
+                        sh_prev = bs.loc['Ordinary Shares Number'].iloc[1] if 'Ordinary Shares Number' in bs.index else 0
+                        f_score += 1 if sh_curr <= sh_prev else 0
+                        
+                        gp_curr = is_.loc['Gross Profit'].iloc[0] if 'Gross Profit' in is_.index else 0
+                        gp_prev = is_.loc['Gross Profit'].iloc[1] if 'Gross Profit' in is_.index else 0
+                        rev_curr = is_.loc['Total Revenue'].iloc[0] if 'Total Revenue' in is_.index else 1
+                        rev_prev = is_.loc['Total Revenue'].iloc[1] if 'Total Revenue' in is_.index else 1
+                        gm_curr = gp_curr / rev_curr if rev_curr != 0 else 0
+                        gm_prev = gp_prev / rev_prev if rev_prev != 0 else 0
+                        f_score += 1 if gm_curr > gm_prev else 0
+                        
+                        at_curr = rev_curr / ta_curr if ta_curr != 0 else 0
+                        at_prev = rev_prev / ta_prev if ta_prev != 0 else 0
+                        f_score += 1 if at_curr > at_prev else 0
+                    except:
+                        pass
+
+                # 2. Magic Formula (Earnings Yield)
+                try:
+                    ebit = is_.loc['EBIT'].iloc[0] if 'EBIT' in is_.index and not is_.empty else inf.get('ebitda', 0)
+                    ev = inf.get('enterpriseValue', 0)
+                    magic_ey = (ebit / ev) * 100 if ev and ev > 0 else 0
+                except:
+                    magic_ey = 0
+
+                # 3. Beneish M-Score (Manipolazione contabile - Semplificato)
+                m_score = "Basso Rischio" if f_score >= 6 else "Moderato" if f_score >= 4 else "Alto Rischio"
+                
+                # 4. PEG Ratio
+                peg = inf.get('pegRatio', 0)
+                
+                adv1, adv2, adv3, adv4 = st.columns(4)
+                with adv1: st.metric("Piotroski F-Score", f"{f_score}/9" if f_score>0 else "N/A", "Qualità Istituzionale", delta_color="off")
+                with adv2: st.metric("Magic Formula (EY)", f"{magic_ey:.1f}%" if magic_ey>0 else "N/A", "Greenblatt", delta_color="off")
+                with adv3: st.metric("Beneish M-Score", m_score, "Rischio Bilanci", delta_color="off")
+                with adv4: st.metric("PEG Ratio", peg if peg is not None else "N/A", "Valutazione", delta_color="off")
+                
+                st.write("")
+            except Exception as e:
+                st.warning("Dati insufficienti per il calcolo dell'Analisi Avanzata.")
+
             # --- TABS DATI PROFONDI ---
             t1, t2, t3, t4 = st.tabs(["📊 BILANCI DETTAGLIATI", "📈 GRAFICO INTERATTIVO", "🐋 FLUSSI WHALES", "📰 NEWS"])
 
@@ -5676,39 +5756,6 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 else:
                     st.warning("Dati di bilancio non disponibili per questo specifico Ticker.")
                     
-            # --- PIOTROSKI F-SCORE (Spostato e Potenziato) ---
-                st.markdown("---")
-                st.subheader("Piotroski F-Score (Qualità Istituzionale)")
-                is_stock = not (t_code.startswith('^') or '=X' in t_code or '-USD' in t_code)
-                if not is_stock:
-                    st.info("L'analisi F-Score è disponibile solo per titoli azionari.")
-                else:
-                    try:
-                        ticker_obj = yf.Ticker(t_code)
-                        bs = ticker_obj.balance_sheet
-                        cf = ticker_obj.cashflow
-                        if not bs.empty and bs.shape[1] > 0:
-                            f_score = 0
-                            # Calcolo semplificato ma robusto
-                            net_inc = ticker_obj.info.get('netIncomeToCommon', 0)
-                            f_score += 1 if net_inc > 0 else 0
-                            f_score += 1 if ticker_obj.info.get('returnOnAssets', 0) > 0 else 0
-                            f_score += 1 if ticker_obj.info.get('operatingCashflow', 0) > 0 else 0
-                            # Delta Debt (Leva)
-                            if 'Long Term Debt' in bs.index and bs.shape[1] >= 2:
-                                f_score += 1 if bs.loc['Long Term Debt'].iloc[0] <= bs.loc['Long Term Debt'].iloc[1] else 0
-                            
-                            col_f1, col_f2 = st.columns([1, 2])
-                            with col_f1: st.metric("F-Score", f"{f_score}/9")
-                            with col_f2:
-                                if f_score >= 7: st.success("💎 Alta Qualità")
-                                elif f_score >= 4: st.warning("⚖️ Qualità Media")
-                                else: st.error("⚠️ Qualità Scarsa")
-                        else:
-                            st.write("Dati fondamentali (Balance Sheet) non disponibili al momento.")
-                    except:
-                        st.write("Analisi Piotroski non disponibile per questo ticker.")
-
             with t2:
                 fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
                 fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
