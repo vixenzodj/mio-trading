@@ -5713,11 +5713,33 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 # 4. PEG Ratio
                 peg = inf.get('pegRatio', 0)
                 
-                adv1, adv2, adv3, adv4 = st.columns(4)
-                with adv1: st.metric("Piotroski F-Score", f"{f_score}/9" if f_score>0 else "N/A", "Qualità Istituzionale", delta_color="off")
-                with adv2: st.metric("Magic Formula (EY)", f"{magic_ey:.1f}%" if magic_ey>0 else "N/A", "Greenblatt", delta_color="off")
-                with adv3: st.metric("Beneish M-Score", m_score, "Rischio Bilanci", delta_color="off")
-                with adv4: st.metric("PEG Ratio", peg if peg is not None else "N/A", "Valutazione", delta_color="off")
+                # --- RENDER SEMAFORICO ---
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    p_color = "normal" if f_score >= 7 else "off" if f_score >= 5 else "inverse"
+                    p_label = "🟢 STRONG" if f_score >= 7 else "🟡 NEUTRAL" if f_score >= 5 else "🔴 WEAK"
+                    st.metric("Piotroski Score", f"{f_score}/9", delta=p_label, delta_color=p_color)
+                
+                with c2:
+                    ey = magic_ey / 100
+                    ey_color = "normal" if ey > 0.10 else "off" if ey > 0.05 else "inverse"
+                    ey_label = "🟢 UNDERVALUED" if ey > 0.10 else "🟡 FAIR" if ey > 0.05 else "🔴 OVERVALUED"
+                    st.metric("Magic Yield (EY)", f"{ey:.2%}", delta=ey_label, delta_color=ey_color)
+                
+                with c3:
+                    m_color = "normal" if f_score > 5 else "inverse"
+                    m_label = "🟢 SAFE" if f_score > 5 else "🔴 RISK"
+                    st.metric("Beneish M-Score", m_label, delta="Bilanci OK" if f_score > 5 else "Controllare", delta_color=m_color)
+                
+                with c4:
+                    try:
+                        peg_raw = inf.get('pegRatio')
+                        peg_val = float(peg_raw) if peg_raw is not None else 2.0
+                        peg_color = "normal" if peg_val < 1.0 else "off" if peg_val < 2.0 else "inverse"
+                        peg_label = "🟢 CHEAP" if peg_val < 1.0 else "🟡 FAIR" if peg_val < 2.0 else "🔴 EXPENSIVE"
+                    except:
+                        peg_val, peg_label, peg_color = "N/D", "⚪ N/D", "off"
+                    st.metric("PEG Ratio", f"{peg_val}", delta=peg_label, delta_color=peg_color)
                 
                 st.write("")
             except Exception as e:
