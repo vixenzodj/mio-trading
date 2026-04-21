@@ -5691,8 +5691,8 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                     upside_dcf = ((val_dcf - c_price) / c_price) * 100
                     color_dcf = "#2ecc71" if val_dcf > c_price else "#e74c3c"
                     st.markdown(f"""
-                        <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top: 10px;">
-                            <p style="color: #888; margin: 0; font-size: 0.9em;">Valutazione Intrinseca DCF (Flussi di Cassa)</p>
+                        <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top:10px;">
+                            <p style="color: #888; margin: 0; font-size: 0.8em;">VALUTAZIONE INTRINSECA DCF</p>
                             <h3 style="margin: 0; color: white;">${val_dcf:.2f}</h3>
                             <p style="color: {color_dcf}; margin: 0; font-weight: bold;">{upside_dcf:+.2f}% vs Mercato</p>
                         </div>
@@ -6045,7 +6045,16 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
                 st.dataframe(styled_df, use_container_width=True, hide_index=True)
             except:
                 st.dataframe(df_res, use_container_width=True, hide_index=True)
+                
+            # --- AGGIUNTA CHIRURGICA: MATRICE DI CORRELAZIONE ---
+            if not df_res.empty and len(df_res) > 1:
+                st.markdown("---")
+                # Estraiamo i ticker dalla colonna 'Ticker' del risultato
+                list_of_tickers = df_res['Ticker'].tolist()
+                # Chiamata alla funzione di visualizzazione
+                display_correlation_matrix(list_of_tickers)
             
+            # --- FOCUS MIGLIORE OPPORTUNITÀ (Logica esistente) ---
             st.markdown("---")
             st.subheader("💡 Focus Migliore Opportunità")
             top_t = df_res.iloc[0]['Ticker']
