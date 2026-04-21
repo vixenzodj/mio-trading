@@ -66,6 +66,56 @@ STRATEGY_PARAM_GRID = {
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
+def calculate_dcf_value(ticker_obj):
+    """Calcola il Valore Intrinseco basato sui flussi di cassa scontati (DCF)."""
+    try:
+        info = ticker_obj.info
+        cash_flow = ticker_obj.cashflow
+        
+        # Recupero Free Cash Flow (FCF)
+        if 'Free Cash Flow' in cash_flow.index:
+            fcf = cash_flow.loc['Free Cash Flow'].iloc[0]
+        elif 'Total Cash From Operating Activities' in cash_flow.index and 'Capital Expenditures' in cash_flow.index:
+            fcf = cash_flow.loc['Total Cash From Operating Activities'].iloc[0] + cash_flow.loc['Capital Expenditures'].iloc[0]
+        else:
+            return None
+
+        # Parametri Istituzionali Conservativi
+        growth_rate = 0.05  # 5% crescita 5 anni
+        terminal_growth = 0.02  # 2% perpetua
+        wacc = 0.09  # 9% sconto
+        shares_outstanding = info.get('sharesOutstanding')
+        net_debt = info.get('totalDebt', 0) - info.get('totalCash', 0)
+
+        if not shares_outstanding or fcf <= 0:
+            return None
+
+        # Proiezione 5 anni
+        pv_fcf = sum([(fcf * ((1 + growth_rate) ** i)) / ((1 + wacc) ** i) for i in range(1, 6)])
+        
+        # Valore Terminale
+        tv = ((fcf * (1 + growth_rate)**5) * (1 + terminal_growth)) / (wacc - terminal_growth)
+        pv_tv = tv / ((1 + wacc) ** 5)
+        
+        dcf_price = (pv_fcf + pv_tv - net_debt) / shares_outstanding
+        return dcf_price if dcf_price > 0 else None
+    except:
+        return None
+
+def display_correlation_matrix(tickers):
+    """Genera una Heatmap di correlazione per i titoli dello scanner."""
+    if len(tickers) < 2: return
+    try:
+        st.markdown("### 📊 Analisi di Correlazione e Rischio")
+        st.write("Verifica se i titoli selezionati si muovono insieme. Correlazione > 0.70 indica un alto rischio di concentrazione.")
+        data = yf.download(tickers, period="1y")['Close']
+        if isinstance(data, pd.Series) or data.empty: return
+        corr_matrix = data.corr()
+        fig = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1, aspect="auto")
+        st.plotly_chart(fig, use_container_width=True)
+    except:
+        pass
+
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
     K = df['strike'].values
@@ -1891,6 +1941,12 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             return styles
 
         st.dataframe(final_df.style.apply(color_logic_pro, axis=1), use_container_width=True, height=800)
+        
+        # Visualizzazione Matrice di Correlazione per i risultati dello scanner
+        if not final_df.empty and len(final_df) > 1:
+            st.markdown("---")
+            tickers_per_corr = final_df['Ticker'].tolist()
+            display_correlation_matrix(tickers_per_corr)
 
 elif menu == "🔙 BACKTESTING STRATEGIA":
     st.title("🛠️ Professional Backtesting Suite")
@@ -5626,10 +5682,23 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             graham = np.sqrt(22.5 * eps * bvps) if eps is not None and bvps is not None and eps > 0 and bvps > 0 else 0
             m_safety = ((graham - c_price)/graham*100) if graham > 0 else -100
             
+            val_dcf = calculate_dcf_value(t)
+            
             with col_a:
                 color = "#2ecc71" if m_safety > 20 else ("#f1c40f" if m_safety > 0 else "#e74c3c")
                 txt = "SOTTOVALUTATA" if m_safety > 20 else ("EQUA" if m_safety > 0 else "SOPRAVVALUTATA")
                 st.markdown(f"<div class='metric-card'>Valutazione Graham<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Safety: {m_safety:.1f}%</small></div>", unsafe_allow_html=True)
+                
+                if val_dcf:
+                    upside_dcf = ((val_dcf - c_price) / c_price) * 100
+                    color_dcf = "#2ecc71" if val_dcf > c_price else "#e74c3c"
+                    st.markdown(f"""
+                        <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top: 10px;">
+                            <p style="color: #888; margin: 0; font-size: 0.9em;">Valutazione Intrinseca DCF (Flussi di Cassa)</p>
+                            <h3 style="margin: 0; color: white;">${val_dcf:.2f}</h3>
+                            <p style="color: {color_dcf}; margin: 0; font-weight: bold;">{upside_dcf:+.2f}% vs Mercato</p>
+                        </div>
+                    """, unsafe_allow_html=True)
 
             with col_b:
                 z = (inf.get('currentRatio', 0) * 1.2) + (inf.get('profitMargins', 0) * 3.3)
