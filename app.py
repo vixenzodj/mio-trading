@@ -67,12 +67,12 @@ STRATEGY_PARAM_GRID = {
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
 def calculate_dcf_value(ticker_obj):
-    """Calcola il Valore Intrinseco basato sui flussi di cassa scontati (DCF)."""
+    """Calcola il Valore Intrinseco DCF usando l'oggetto ticker passato."""
     try:
+        # Recupero info e cashflow dall'oggetto già esistente
         info = ticker_obj.info
         cash_flow = ticker_obj.cashflow
         
-        # Recupero Free Cash Flow (FCF)
         if 'Free Cash Flow' in cash_flow.index:
             fcf = cash_flow.loc['Free Cash Flow'].iloc[0]
         elif 'Total Cash From Operating Activities' in cash_flow.index and 'Capital Expenditures' in cash_flow.index:
@@ -80,20 +80,17 @@ def calculate_dcf_value(ticker_obj):
         else:
             return None
 
-        # Parametri Istituzionali Conservativi
-        growth_rate = 0.05  # 5% crescita 5 anni
-        terminal_growth = 0.02  # 2% perpetua
-        wacc = 0.09  # 9% sconto
+        # Parametri
+        growth_rate = 0.05
+        terminal_growth = 0.02
+        wacc = 0.09
         shares_outstanding = info.get('sharesOutstanding')
         net_debt = info.get('totalDebt', 0) - info.get('totalCash', 0)
 
         if not shares_outstanding or fcf <= 0:
             return None
 
-        # Proiezione 5 anni
         pv_fcf = sum([(fcf * ((1 + growth_rate) ** i)) / ((1 + wacc) ** i) for i in range(1, 6)])
-        
-        # Valore Terminale
         tv = ((fcf * (1 + growth_rate)**5) * (1 + terminal_growth)) / (wacc - terminal_growth)
         pv_tv = tv / ((1 + wacc) ** 5)
         
@@ -5682,7 +5679,8 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             graham = np.sqrt(22.5 * eps * bvps) if eps is not None and bvps is not None and eps > 0 and bvps > 0 else 0
             m_safety = ((graham - c_price)/graham*100) if graham > 0 else -100
             
-            val_dcf = calculate_dcf_value(t)
+            ticker_data = yf.Ticker(t_code)
+            val_dcf = calculate_dcf_value(ticker_data)
             
             with col_a:
                 color = "#2ecc71" if m_safety > 20 else ("#f1c40f" if m_safety > 0 else "#e74c3c")
