@@ -5805,6 +5805,56 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 tr_eps = inf.get('trailingEps', 0)
                 eps_growth = ((fw_eps - tr_eps) / tr_eps) * 100 if tr_eps and tr_eps > 0 else 0
 
+                # --- ALGORITMO DI RATING GLOBALE (1-10) ---
+                score = 0
+                
+                # 1. Safety Score (Max 3.0)
+                if z_val > 2.99: score += 1.5
+                elif z_val > 1.81: score += 0.75
+                if f_score >= 7: score += 1.0
+                elif f_score >= 5: score += 0.5
+                if m_score < -1.78: score += 0.5
+                
+                # 2. Quality Score (Max 3.0)
+                if roic > wacc: score += 1.5
+                if roic > 0.15: score += 1.0
+                if magic_ey > 0.10: score += 0.5
+                
+                # 3. Value Score (Max 3.0)
+                if val_dcf and val_dcf > current_price: score += 1.0
+                if margin_graham > 20: score += 1.0
+                ev_val = float(ev_ebitda) if ev_ebitda is not None else 0.0
+                if 0 < ev_val < 12: score += 1.0
+                elif 12 <= ev_val < 16: score += 0.5
+                
+                # 4. Growth Score (Max 1.0)
+                if eps_growth > 10: score += 1.0
+                elif eps_growth > 0: score += 0.5
+
+                # Normalizzazione finale (1-10)
+                final_rating = max(1.0, min(10.0, score))
+                
+                # --- VISUALIZZAZIONE RATING ---
+                st.markdown("---")
+                st.subheader("🎯 Global Institutional Rating")
+                
+                # Colore dinamico basato sul rating
+                if final_rating >= 7.5: 
+                    r_color, r_text = "#2ecc71", "STRONG BUY / ECCELLENTE"
+                elif final_rating >= 5.5: 
+                    r_color, r_text = "#f1c40f", "HOLD / NEUTRALE"
+                else: 
+                    r_color, r_text = "#e74c3c", "AVOID / RISCHIOSO"
+
+                st.markdown(f"""
+                    <div style="background-color: #1e1e1e; padding: 25px; border-radius: 15px; border: 2px solid {r_color}; text-align: center;">
+                        <h1 style="color: {r_color}; margin: 0; font-size: 50px;">{final_rating:.1f} / 10</h1>
+                        <h3 style="color: white; margin: 10px 0;">{r_text}</h3>
+                        <p style="color: #888; font-size: 0.9em;">Rating calcolato su 12 parametri di Solvibilità, Qualità e Valutazione Intrinseca.</p>
+                    </div>
+                """, unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+
                 # --- RENDER SEMAFORICO ---
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
