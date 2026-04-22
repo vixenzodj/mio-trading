@@ -5666,66 +5666,28 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             inf = data["info"]
             s = data["sym"]
             
-            # --- HEADER ---
+            # --- HEADER / PRE-CALCOLI ---
             c_price = inf.get('currentPrice', 0)
-            st.title(f"{inf.get('shortName', t_code)} | {t_code}")
-            
-            # --- SEMAFORI ISTITUZIONALI (VISUAL IMPACT) ---
-            st.subheader("🚀 Analisi Rapida Wall Street")
-            col_a, col_b, col_c = st.columns(3)
-            
-            # Calcolo Score di Impatto
-            eps, bvps = inf.get('trailingEps', 0), inf.get('bookValue', 0)
-            graham = np.sqrt(22.5 * eps * bvps) if eps is not None and bvps is not None and eps > 0 and bvps > 0 else 0
-            m_safety = ((graham - c_price)/graham*100) if graham > 0 else -100
-            
             ticker_data = yf.Ticker(t_code)
-            val_dcf = calculate_dcf_value(ticker_data)
             
-            with col_a:
-                color = "#2ecc71" if m_safety > 20 else ("#f1c40f" if m_safety > 0 else "#e74c3c")
-                txt = "SOTTOVALUTATA" if m_safety > 20 else ("EQUA" if m_safety > 0 else "SOPRAVVALUTATA")
-                st.markdown(f"<div class='metric-card'>Valutazione Graham<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Safety: {m_safety:.1f}%</small></div>", unsafe_allow_html=True)
-                
-                if val_dcf:
-                    upside_dcf = ((val_dcf - c_price) / c_price) * 100
-                    color_dcf = "#2ecc71" if val_dcf > c_price else "#e74c3c"
-                    st.markdown(f"""
-                        <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top:10px;">
-                            <p style="color: #888; margin: 0; font-size: 0.8em;">VALUTAZIONE INTRINSECA DCF</p>
-                            <h3 style="margin: 0; color: white;">${val_dcf:.2f}</h3>
-                            <p style="color: {color_dcf}; margin: 0; font-weight: bold;">{upside_dcf:+.2f}% vs Mercato</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-            with col_b:
-                z = (inf.get('currentRatio', 0) * 1.2) + (inf.get('profitMargins', 0) * 3.3)
-                color = "#2ecc71" if z > 2.6 else ("#f1c40f" if z > 1.1 else "#e74c3c")
-                txt = "SOLIDA" if z > 2.6 else "ALLERTA"
-                st.markdown(f"<div class='metric-card'>Rischio Fallimento<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Z-Score: {z:.2f}</small></div>", unsafe_allow_html=True)
-
-            with col_c:
-                roe = inf.get('returnOnEquity', 0)
-                color = "#2ecc71" if roe > 0.15 else "#e74c3c"
-                txt = "ALTA REDDITIVITÀ" if roe > 0.15 else "BASSA EFFICIENZA"
-                st.markdown(f"<div class='metric-card'>Performance Capitale<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>ROE: {roe*100:.1f}%</small></div>", unsafe_allow_html=True)
-
-            st.write("---")
-            st.subheader("🏛️ Analisi Avanzata & Solvibilità Istituzionale")
+            # 1. INIZIALIZZAZIONE DI SICUREZZA
+            z_val, f_score, m_score, val_dcf, margin_graham, ev_val, roic, wacc, roic_wacc_spread, eps_growth, final_rating, magic_ey, ev_ebitda, tr_eps = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.0, 0, 0, 1
             
+            # --- NUOVO BLOCCO CALCOLO ISTITUZIONALE ---
             try:
                 bs = data["bs"] if data["bs"] is not None else pd.DataFrame()
                 cf = data["cf"] if data["cf"] is not None else pd.DataFrame()
                 is_ = data["fin"] if data["fin"] is not None else pd.DataFrame()
                 
-                # 1. Piotroski F-Score (Logica Integrale 9/9)
-                f_score = 0
+                # Z-Score (Proxy)
+                z_val = (inf.get('currentRatio', 0) * 1.2) + (inf.get('profitMargins', 0) * 3.3)
+                
+                # F-Score (9/9)
                 if not bs.empty and not cf.empty and not is_.empty and bs.shape[1] >= 2 and cf.shape[1] >= 1 and is_.shape[1] >= 2:
                     try:
                         net_inc_curr = is_.loc['Net Income'].iloc[0] if 'Net Income' in is_.index else 0
                         net_inc_prev = is_.loc['Net Income'].iloc[1] if 'Net Income' in is_.index else 0
                         cfo_curr = cf.loc['Operating Cash Flow'].iloc[0] if 'Operating Cash Flow' in cf.index else 0
-                        
                         ta_curr = bs.loc['Total Assets'].iloc[0] if 'Total Assets' in bs.index else 1
                         ta_prev = bs.loc['Total Assets'].iloc[1] if 'Total Assets' in bs.index else 1
                         roa_curr = net_inc_curr / ta_curr if ta_curr != 0 else 0
@@ -5765,96 +5727,101 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         f_score += 1 if at_curr > at_prev else 0
                     except:
                         pass
-
-                # 2. Magic Formula (Earnings Yield)
+                
+                # M-Score
+                m_score = f_score # Placeholder for Beneish
+                
+                # Magic EY
                 try:
                     ebit = is_.loc['EBIT'].iloc[0] if 'EBIT' in is_.index and not is_.empty else inf.get('ebitda', 0)
                     ev = inf.get('enterpriseValue', 0)
-                    magic_ey = (ebit / ev) * 100 if ev and ev > 0 else 0
+                    magic_ey = (ebit / ev) if ev and ev > 0 else 0
                 except:
                     magic_ey = 0
-
-                # 3. Beneish M-Score (Manipolazione contabile - Semplificato)
-                m_score = "Basso Rischio" if f_score >= 6 else "Moderato" if f_score >= 4 else "Alto Rischio"
                 
-                # 4. PEG Ratio
-                peg = inf.get('pegRatio', 0)
-
-                # 5. EV/EBITDA Istituzionale
-                ev_ebitda = inf.get('enterpriseToEbitda')
-
-                # 6. ROIC e WACC (Approssimazione Quantitativa)
-                try:
-                    # ROIC: EBIT / Invested Capital (Total Assets - Current Liabilities)
-                    ebit_val = is_.loc['EBIT'].iloc[0] if 'EBIT' in is_.index and not is_.empty else inf.get('ebitda', 0)
-                    ta = bs.loc['Total Assets'].iloc[0] if 'Total Assets' in bs.index else 0
-                    cl = bs.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in bs.index else 0
-                    invested_capital = ta - cl
-                    roic = (ebit_val / invested_capital) if invested_capital > 0 else inf.get('returnOnAssets', 0)
-
-                    # WACC: Modello Proxy Base (Risk Free 4% + ERP 5.5% * Beta)
-                    beta = inf.get('beta', 1.0)
-                    if beta is None: beta = 1.0
-                    wacc = 0.04 + (beta * 0.055)
-                    roic_wacc_spread = roic - wacc
-                except:
-                    roic, wacc, roic_wacc_spread = 0, 0, 0
-
-                # 7. Forward EPS Growth (Prospettiva Utili)
-                fw_eps = inf.get('forwardEps', 0)
-                tr_eps = inf.get('trailingEps', 0)
-                eps_growth = ((fw_eps - tr_eps) / tr_eps) * 100 if tr_eps and tr_eps > 0 else 0
-
-                # --- ALGORITMO DI RATING GLOBALE (1-10) ---
-                score = 0
+                # DCF e Graham
+                val_dcf = calculate_dcf_value(ticker_data)
+                eps_g, bvps = inf.get('trailingEps', 0), inf.get('bookValue', 0)
+                graham = np.sqrt(22.5 * eps_g * bvps) if eps_g is not None and bvps is not None and eps_g > 0 and bvps > 0 else 0
+                margin_graham = ((graham - c_price)/graham*100) if graham > 0 else -100
                 
-                # 1. Safety Score (Max 3.0)
-                if z_val > 2.99: score += 1.5
-                elif z_val > 1.81: score += 0.75
-                if f_score >= 7: score += 1.0
-                elif f_score >= 5: score += 0.5
-                if m_score < -1.78: score += 0.5
+                # Nuove Metriche per Rating
+                ev_ebitda = inf.get('enterpriseToEbitda', 0) or 0
+                ev_val = float(ev_ebitda)
                 
-                # 2. Quality Score (Max 3.0)
-                if roic > wacc: score += 1.5
-                if roic > 0.15: score += 1.0
-                if magic_ey > 0.10: score += 0.5
+                # ROIC/WACC Proxy
+                ebit_val = is_.loc['EBIT'].iloc[0] if 'EBIT' in is_.index and not is_.empty else inf.get('ebitda', 0)
+                ta = bs.loc['Total Assets'].iloc[0] if 'Total Assets' in bs.index and not bs.empty else 1
+                cl = bs.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in bs.index and not bs.empty else 0
+                invested_capital = ta - cl
+                roic = (ebit_val / invested_capital) if invested_capital > 0 else inf.get('returnOnAssets', 0)
+                wacc = 0.04 + (inf.get('beta', 1.0) * 0.055)
+                roic_wacc_spread = roic - wacc
                 
-                # 3. Value Score (Max 3.0)
-                if val_dcf and val_dcf > current_price: score += 1.0
-                if margin_graham > 20: score += 1.0
-                ev_val = float(ev_ebitda) if ev_ebitda is not None else 0.0
-                if 0 < ev_val < 12: score += 1.0
-                elif 12 <= ev_val < 16: score += 0.5
-                
-                # 4. Growth Score (Max 1.0)
-                if eps_growth > 10: score += 1.0
-                elif eps_growth > 0: score += 0.5
+                # EPS Growth
+                tr_eps = inf.get('trailingEps', 1)
+                eps_growth = ((inf.get('forwardEps', 0) - tr_eps) / tr_eps) * 100 if tr_eps > 0 else 0
 
-                # Normalizzazione finale (1-10)
-                final_rating = max(1.0, min(10.0, score))
+                # Calcolo Score Finale
+                s_fin = 0
+                if z_val > 2.99: s_fin += 1.5
+                elif z_val > 1.81: s_fin += 0.75
+                if f_score >= 7: s_fin += 1.0
+                elif f_score >= 5: s_fin += 0.5
+                # if m_score < -1.78: s_fin += 0.5 # Disabilitato perché il calcolo di m_score vero non è pronto
+                if roic > wacc: s_fin += 1.5
+                if roic > 0.15: s_fin += 1.0
+                if magic_ey > 0.10: s_fin += 0.5
+                if val_dcf and val_dcf > c_price: s_fin += 1.0
+                if margin_graham > 20: s_fin += 1.0
+                if 0 < ev_val < 12: s_fin += 1.0
+                elif 12 <= ev_val < 16: s_fin += 0.5
+                if eps_growth > 10: s_fin += 1.0
+                elif eps_growth > 0: s_fin += 0.5
                 
-                # --- VISUALIZZAZIONE RATING ---
-                st.markdown("---")
-                st.subheader("🎯 Global Institutional Rating")
+                final_rating = max(1.0, min(10.0, s_fin))
+            except Exception as e:
+                final_rating = 1.0
+
+            r_emoji = "🟢" if final_rating >= 7.5 else "🟡" if final_rating >= 5.5 else "🔴"
+            st.title(f"🏢 {inf.get('shortName', t_code)} | {r_emoji} Score: {final_rating:.1f}/10")
+            st.markdown(f"**Analisi Quantitativa Istituzionale - Financial Deep Analysis**")
+            
+            # --- SEMAFORI ISTITUZIONALI (VISUAL IMPACT) ---
+            st.subheader("🚀 Analisi Rapida Wall Street")
+            col_a, col_b, col_c = st.columns(3)
+            
+            with col_a:
+                color = "#2ecc71" if margin_graham > 20 else ("#f1c40f" if margin_graham > 0 else "#e74c3c")
+                txt = "SOTTOVALUTATA" if margin_graham > 20 else ("EQUA" if margin_graham > 0 else "SOPRAVVALUTATA")
+                st.markdown(f"<div class='metric-card'>Valutazione Graham<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Safety: {margin_graham:.1f}%</small></div>", unsafe_allow_html=True)
                 
-                # Colore dinamico basato sul rating
-                if final_rating >= 7.5: 
-                    r_color, r_text = "#2ecc71", "STRONG BUY / ECCELLENTE"
-                elif final_rating >= 5.5: 
-                    r_color, r_text = "#f1c40f", "HOLD / NEUTRALE"
-                else: 
-                    r_color, r_text = "#e74c3c", "AVOID / RISCHIOSO"
+                if val_dcf:
+                    upside_dcf = ((val_dcf - c_price) / c_price) * 100
+                    color_dcf = "#2ecc71" if val_dcf > c_price else "#e74c3c"
+                    st.markdown(f"""
+                        <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top:10px;">
+                            <p style="color: #888; margin: 0; font-size: 0.8em;">VALUTAZIONE INTRINSECA DCF</p>
+                            <h3 style="margin: 0; color: white;">${val_dcf:.2f}</h3>
+                            <p style="color: {color_dcf}; margin: 0; font-weight: bold;">{upside_dcf:+.2f}% vs Mercato</p>
+                        </div>
+                    """, unsafe_allow_html=True)
 
-                st.markdown(f"""
-                    <div style="background-color: #1e1e1e; padding: 25px; border-radius: 15px; border: 2px solid {r_color}; text-align: center;">
-                        <h1 style="color: {r_color}; margin: 0; font-size: 50px;">{final_rating:.1f} / 10</h1>
-                        <h3 style="color: white; margin: 10px 0;">{r_text}</h3>
-                        <p style="color: #888; font-size: 0.9em;">Rating calcolato su 12 parametri di Solvibilità, Qualità e Valutazione Intrinseca.</p>
-                    </div>
-                """, unsafe_allow_html=True)
-                st.markdown("<br>", unsafe_allow_html=True)
+            with col_b:
+                color = "#2ecc71" if z_val > 2.6 else ("#f1c40f" if z_val > 1.1 else "#e74c3c")
+                txt = "SOLIDA" if z_val > 2.6 else "ALLERTA"
+                st.markdown(f"<div class='metric-card'>Rischio Fallimento<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Z-Score: {z_val:.2f}</small></div>", unsafe_allow_html=True)
 
+            with col_c:
+                roe = inf.get('returnOnEquity', 0)
+                color = "#2ecc71" if roe > 0.15 else "#e74c3c"
+                txt = "ALTA REDDITIVITÀ" if roe > 0.15 else "BASSA EFFICIENZA"
+                st.markdown(f"<div class='metric-card'>Performance Capitale<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>ROE: {roe*100:.1f}%</small></div>", unsafe_allow_html=True)
+
+            st.write("---")
+            st.subheader("🏛️ Analisi Avanzata & Solvibilità Istituzionale")
+            
+            try:
                 # --- RENDER SEMAFORICO ---
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
