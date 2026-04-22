@@ -5779,7 +5779,32 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 
                 # 4. PEG Ratio
                 peg = inf.get('pegRatio', 0)
-                
+
+                # 5. EV/EBITDA Istituzionale
+                ev_ebitda = inf.get('enterpriseToEbitda')
+
+                # 6. ROIC e WACC (Approssimazione Quantitativa)
+                try:
+                    # ROIC: EBIT / Invested Capital (Total Assets - Current Liabilities)
+                    ebit_val = is_.loc['EBIT'].iloc[0] if 'EBIT' in is_.index and not is_.empty else inf.get('ebitda', 0)
+                    ta = bs.loc['Total Assets'].iloc[0] if 'Total Assets' in bs.index else 0
+                    cl = bs.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in bs.index else 0
+                    invested_capital = ta - cl
+                    roic = (ebit_val / invested_capital) if invested_capital > 0 else inf.get('returnOnAssets', 0)
+
+                    # WACC: Modello Proxy Base (Risk Free 4% + ERP 5.5% * Beta)
+                    beta = inf.get('beta', 1.0)
+                    if beta is None: beta = 1.0
+                    wacc = 0.04 + (beta * 0.055)
+                    roic_wacc_spread = roic - wacc
+                except:
+                    roic, wacc, roic_wacc_spread = 0, 0, 0
+
+                # 7. Forward EPS Growth (Prospettiva Utili)
+                fw_eps = inf.get('forwardEps', 0)
+                tr_eps = inf.get('trailingEps', 0)
+                eps_growth = ((fw_eps - tr_eps) / tr_eps) * 100 if tr_eps and tr_eps > 0 else 0
+
                 # --- RENDER SEMAFORICO ---
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
@@ -5807,6 +5832,30 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                     except:
                         peg_val, peg_label, peg_color = "N/D", "⚪ N/D", "off"
                     st.metric("PEG Ratio", f"{peg_val}", delta=peg_label, delta_color=peg_color)
+                
+                # SECONDA RIGA METRICHE ISTITUZIONALI
+                st.markdown("<br>", unsafe_allow_html=True)
+                c5, c6, c7, c8 = st.columns(4)
+                
+                with c5:
+                    ev_val = float(ev_ebitda) if ev_ebitda is not None else 0.0
+                    ev_color = "normal" if 0 < ev_val < 12 else "off" if ev_val < 16 else "inverse"
+                    ev_label = "🟢 DISCOUNT" if 0 < ev_val < 12 else "🟡 FAIR" if ev_val < 16 else "🔴 PREMIUM"
+                    st.metric("EV / EBITDA", f"{ev_val:.1f}x" if ev_val > 0 else "N/D", delta=ev_label, delta_color=ev_color)
+                
+                with c6:
+                    roic_color = "normal" if roic > 0.10 else "inverse"
+                    st.metric("ROIC (Ret. on Capital)", f"{roic:.2%}", delta="🟢 Eccellente" if roic > 0.15 else "🔴 Da migliorare", delta_color=roic_color)
+                
+                with c7:
+                    spread_color = "normal" if roic_wacc_spread > 0 else "inverse"
+                    spread_label = "🟢 VALUE CREATOR" if roic_wacc_spread > 0 else "🔴 VALUE DESTROYER"
+                    st.metric("ROIC - WACC Spread", f"{roic_wacc_spread*100:+.1f}%", delta=spread_label, delta_color=spread_color)
+                
+                with c8:
+                    eps_color = "normal" if eps_growth > 0 else "inverse"
+                    eps_label = "🟢 ESPANSIONE" if eps_growth > 0 else "🔴 CONTRAZIONE"
+                    st.metric("Stima Crescita EPS", f"{eps_growth:+.1f}%" if tr_eps > 0 else "N/D", delta=eps_label, delta_color=eps_color)
                 
                 st.write("")
             except Exception as e:
