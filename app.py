@@ -66,6 +66,59 @@ STRATEGY_PARAM_GRID = {
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
+def calc_fund_metrics(ticker_obj):
+    try:
+        hist = ticker_obj.history(period="5y")
+        if hist.empty:
+            return None
+            
+        spy_obj = yf.Ticker("SPY")
+        spy_hist = spy_obj.history(period="5y")
+        
+        df = pd.DataFrame({'fund': hist['Close'], 'spy': spy_hist['Close']}).dropna()
+        if len(df) < 100:
+            return None
+            
+        df['fund_ret'] = df['fund'].pct_change()
+        df['spy_ret'] = df['spy'].pct_change()
+        df = df.dropna()
+        
+        days = (df.index[-1] - df.index[0]).days
+        years = days / 365.25
+        if years > 0:
+            cagr = ((df['fund'].iloc[-1] / df['fund'].iloc[0]) ** (1 / years)) - 1
+            spy_cagr = ((df['spy'].iloc[-1] / df['spy'].iloc[0]) ** (1 / years)) - 1
+        else:
+            cagr = 0
+            spy_cagr = 0
+            
+        vol = df['fund_ret'].std() * np.sqrt(252)
+        rf = 0.04
+        sharpe = (cagr - rf) / vol if vol > 0 else 0
+        
+        cov = np.cov(df['fund_ret'], df['spy_ret'])[0][1]
+        var = np.var(df['spy_ret'])
+        beta = cov / var if var > 0 else 1
+        alpha = cagr - (rf + beta * (spy_cagr - rf))
+        
+        roll_max = df['fund'].cummax()
+        drawdown = (df['fund'] / roll_max) - 1
+        max_dd = drawdown.min()
+        
+        tracking_error = (df['fund_ret'] - df['spy_ret']).std() * np.sqrt(252)
+        
+        return {
+            'cagr': cagr,
+            'sharpe': sharpe,
+            'alpha': alpha,
+            'beta': beta,
+            'max_dd': max_dd,
+            'volatility': vol,
+            'tracking_error': tracking_error
+        }
+    except:
+        return None
+
 def calculate_dcf_value(ticker_obj):
     """Calcola il Valore Intrinseco DCF usando l'oggetto ticker passato."""
     try:
@@ -929,7 +982,7 @@ with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
-    st_autorefresh(interval=20000, key="sentinel_dash_refresh")
+    st_autorefresh(interval=60000, key="sentinel_dash_refresh")
 elif menu == "🔥 SCANNER HOT TICKERS":
     st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
@@ -5764,119 +5817,172 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
 
                 # Calcolo Score Finale
                 s_fin = 0
-                if z_val > 2.99: s_fin += 1.5
-                elif z_val > 1.81: s_fin += 0.75
-                if f_score >= 7: s_fin += 1.0
-                elif f_score >= 5: s_fin += 0.5
-                # if m_score < -1.78: s_fin += 0.5 # Disabilitato perché il calcolo di m_score vero non è pronto
-                if roic > wacc: s_fin += 1.5
-                if roic > 0.15: s_fin += 1.0
-                if magic_ey > 0.10: s_fin += 0.5
-                if val_dcf and val_dcf > c_price: s_fin += 1.0
-                if margin_graham > 20: s_fin += 1.0
-                if 0 < ev_val < 12: s_fin += 1.0
-                elif 12 <= ev_val < 16: s_fin += 0.5
-                if eps_growth > 10: s_fin += 1.0
-                elif eps_growth > 0: s_fin += 0.5
+                quote_type = inf.get('quoteType', 'EQUITY').upper()
+                
+                if quote_type in ['ETF', 'MUTUALFUND', 'INDEX']:
+                    fund_metrics = calc_fund_metrics(ticker_data)
+                    if fund_metrics:
+                        s_fin = 5.0
+                        if fund_metrics['sharpe'] > 1.0: s_fin += 2.0
+                        elif fund_metrics['sharpe'] > 0.5: s_fin += 1.0
+                        if fund_metrics['alpha'] > 0: s_fin += 2.0
+                        if fund_metrics['max_dd'] > -0.15: s_fin += 1.0
+                        
+                        st.session_state.fund_metrics = fund_metrics
+                    else:
+                        s_fin = 5.0
+                        st.session_state.fund_metrics = None
+                else:
+                    st.session_state.fund_metrics = None
+                    if z_val > 2.99: s_fin += 1.5
+                    elif z_val > 1.81: s_fin += 0.75
+                    if f_score >= 7: s_fin += 1.0
+                    elif f_score >= 5: s_fin += 0.5
+                    if roic > wacc: s_fin += 1.5
+                    if roic > 0.15: s_fin += 1.0
+                    if magic_ey > 0.10: s_fin += 0.5
+                    if val_dcf and val_dcf > c_price: s_fin += 1.0
+                    if margin_graham > 20: s_fin += 1.0
+                    if 0 < ev_val < 12: s_fin += 1.0
+                    elif 12 <= ev_val < 16: s_fin += 0.5
+                    if eps_growth > 10: s_fin += 1.0
+                    elif eps_growth > 0: s_fin += 0.5
                 
                 final_rating = max(1.0, min(10.0, s_fin))
+                st.session_state.score = final_rating
             except Exception as e:
                 final_rating = 1.0
+                st.session_state.score = 1.0
+                st.session_state.fund_metrics = None
 
             r_emoji = "🟢" if final_rating >= 7.5 else "🟡" if final_rating >= 5.5 else "🔴"
             st.title(f"🏢 {inf.get('shortName', t_code)} | {r_emoji} Score: {final_rating:.1f}/10")
             st.markdown(f"**Analisi Quantitativa Istituzionale - Financial Deep Analysis**")
             
-            # --- SEMAFORI ISTITUZIONALI (VISUAL IMPACT) ---
-            st.subheader("🚀 Analisi Rapida Wall Street")
-            col_a, col_b, col_c = st.columns(3)
-            
-            with col_a:
-                color = "#2ecc71" if margin_graham > 20 else ("#f1c40f" if margin_graham > 0 else "#e74c3c")
-                txt = "SOTTOVALUTATA" if margin_graham > 20 else ("EQUA" if margin_graham > 0 else "SOPRAVVALUTATA")
-                st.markdown(f"<div class='metric-card'>Valutazione Graham<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Safety: {margin_graham:.1f}%</small></div>", unsafe_allow_html=True)
+            if quote_type not in ['ETF', 'MUTUALFUND', 'INDEX']:
+                # --- SEMAFORI ISTITUZIONALI (VISUAL IMPACT) ---
+                st.subheader("🚀 Analisi Rapida Wall Street")
+                col_a, col_b, col_c = st.columns(3)
                 
-                if val_dcf:
-                    upside_dcf = ((val_dcf - c_price) / c_price) * 100
-                    color_dcf = "#2ecc71" if val_dcf > c_price else "#e74c3c"
-                    st.markdown(f"""
-                        <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top:10px;">
-                            <p style="color: #888; margin: 0; font-size: 0.8em;">VALUTAZIONE INTRINSECA DCF</p>
-                            <h3 style="margin: 0; color: white;">${val_dcf:.2f}</h3>
-                            <p style="color: {color_dcf}; margin: 0; font-weight: bold;">{upside_dcf:+.2f}% vs Mercato</p>
-                        </div>
-                    """, unsafe_allow_html=True)
+                with col_a:
+                    color = "#2ecc71" if margin_graham > 20 else ("#f1c40f" if margin_graham > 0 else "#e74c3c")
+                    txt = "SOTTOVALUTATA" if margin_graham > 20 else ("EQUA" if margin_graham > 0 else "SOPRAVVALUTATA")
+                    st.markdown(f"<div class='metric-card'>Valutazione Graham<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Safety: {margin_graham:.1f}%</small></div>", unsafe_allow_html=True)
+                    
+                    if val_dcf:
+                        upside_dcf = ((val_dcf - c_price) / c_price) * 100
+                        color_dcf = "#2ecc71" if val_dcf > c_price else "#e74c3c"
+                        st.markdown(f"""
+                            <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid {color_dcf}; margin-top:10px;">
+                                <p style="color: #888; margin: 0; font-size: 0.8em;">VALUTAZIONE INTRINSECA DCF</p>
+                                <h3 style="margin: 0; color: white;">${val_dcf:.2f}</h3>
+                                <p style="color: {color_dcf}; margin: 0; font-weight: bold;">{upside_dcf:+.2f}% vs Mercato</p>
+                            </div>
+                        """, unsafe_allow_html=True)
 
-            with col_b:
-                color = "#2ecc71" if z_val > 2.6 else ("#f1c40f" if z_val > 1.1 else "#e74c3c")
-                txt = "SOLIDA" if z_val > 2.6 else "ALLERTA"
-                st.markdown(f"<div class='metric-card'>Rischio Fallimento<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Z-Score: {z_val:.2f}</small></div>", unsafe_allow_html=True)
+                with col_b:
+                    color = "#2ecc71" if z_val > 2.6 else ("#f1c40f" if z_val > 1.1 else "#e74c3c")
+                    txt = "SOLIDA" if z_val > 2.6 else "ALLERTA"
+                    st.markdown(f"<div class='metric-card'>Rischio Fallimento<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>Z-Score: {z_val:.2f}</small></div>", unsafe_allow_html=True)
 
-            with col_c:
-                roe = inf.get('returnOnEquity', 0)
-                color = "#2ecc71" if roe > 0.15 else "#e74c3c"
-                txt = "ALTA REDDITIVITÀ" if roe > 0.15 else "BASSA EFFICIENZA"
-                st.markdown(f"<div class='metric-card'>Performance Capitale<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>ROE: {roe*100:.1f}%</small></div>", unsafe_allow_html=True)
+                with col_c:
+                    roe = inf.get('returnOnEquity', 0)
+                    color = "#2ecc71" if roe > 0.15 else "#e74c3c"
+                    txt = "ALTA REDDITIVITÀ" if roe > 0.15 else "BASSA EFFICIENZA"
+                    st.markdown(f"<div class='metric-card'>Performance Capitale<br><span class='status-pill' style='background:{color}; color:black;'>{txt}</span><br><small>ROE: {roe*100:.1f}%</small></div>", unsafe_allow_html=True)
 
-            st.write("---")
-            st.subheader("🏛️ Analisi Avanzata & Solvibilità Istituzionale")
-            
-            try:
-                # --- RENDER SEMAFORICO ---
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    p_color = "normal" if f_score >= 7 else "off" if f_score >= 5 else "inverse"
-                    p_label = "🟢 STRONG" if f_score >= 7 else "🟡 NEUTRAL" if f_score >= 5 else "🔴 WEAK"
-                    st.metric("Piotroski Score", f"{f_score}/9", delta=p_label, delta_color=p_color)
+                st.write("---")
+                st.subheader("🏛️ Analisi Avanzata & Solvibilità Istituzionale")
                 
-                with c2:
-                    ey = magic_ey / 100
-                    ey_color = "normal" if ey > 0.10 else "off" if ey > 0.05 else "inverse"
-                    ey_label = "🟢 UNDERVALUED" if ey > 0.10 else "🟡 FAIR" if ey > 0.05 else "🔴 OVERVALUED"
-                    st.metric("Magic Yield (EY)", f"{ey:.2%}", delta=ey_label, delta_color=ey_color)
-                
-                with c3:
-                    m_color = "normal" if f_score > 5 else "inverse"
-                    m_label = "🟢 SAFE" if f_score > 5 else "🔴 RISK"
-                    st.metric("Beneish M-Score", m_label, delta="Bilanci OK" if f_score > 5 else "Controllare", delta_color=m_color)
-                
-                with c4:
-                    try:
-                        peg_raw = inf.get('pegRatio')
-                        peg_val = float(peg_raw) if peg_raw is not None else 2.0
-                        peg_color = "normal" if peg_val < 1.0 else "off" if peg_val < 2.0 else "inverse"
-                        peg_label = "🟢 CHEAP" if peg_val < 1.0 else "🟡 FAIR" if peg_val < 2.0 else "🔴 EXPENSIVE"
-                    except:
-                        peg_val, peg_label, peg_color = "N/D", "⚪ N/D", "off"
-                    st.metric("PEG Ratio", f"{peg_val}", delta=peg_label, delta_color=peg_color)
-                
-                # SECONDA RIGA METRICHE ISTITUZIONALI
-                st.markdown("<br>", unsafe_allow_html=True)
-                c5, c6, c7, c8 = st.columns(4)
-                
-                with c5:
-                    ev_val = float(ev_ebitda) if ev_ebitda is not None else 0.0
-                    ev_color = "normal" if 0 < ev_val < 12 else "off" if ev_val < 16 else "inverse"
-                    ev_label = "🟢 DISCOUNT" if 0 < ev_val < 12 else "🟡 FAIR" if ev_val < 16 else "🔴 PREMIUM"
-                    st.metric("EV / EBITDA", f"{ev_val:.1f}x" if ev_val > 0 else "N/D", delta=ev_label, delta_color=ev_color)
-                
-                with c6:
-                    roic_color = "normal" if roic > 0.10 else "inverse"
-                    st.metric("ROIC (Ret. on Capital)", f"{roic:.2%}", delta="🟢 Eccellente" if roic > 0.15 else "🔴 Da migliorare", delta_color=roic_color)
-                
-                with c7:
-                    spread_color = "normal" if roic_wacc_spread > 0 else "inverse"
-                    spread_label = "🟢 VALUE CREATOR" if roic_wacc_spread > 0 else "🔴 VALUE DESTROYER"
-                    st.metric("ROIC - WACC Spread", f"{roic_wacc_spread*100:+.1f}%", delta=spread_label, delta_color=spread_color)
-                
-                with c8:
-                    eps_color = "normal" if eps_growth > 0 else "inverse"
-                    eps_label = "🟢 ESPANSIONE" if eps_growth > 0 else "🔴 CONTRAZIONE"
-                    st.metric("Stima Crescita EPS", f"{eps_growth:+.1f}%" if tr_eps > 0 else "N/D", delta=eps_label, delta_color=eps_color)
-                
-                st.write("")
-            except Exception as e:
-                st.warning("Dati insufficienti per il calcolo dell'Analisi Avanzata.")
+                try:
+                    # --- RENDER SEMAFORICO ---
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1:
+                        p_color = "normal" if f_score >= 7 else "off" if f_score >= 5 else "inverse"
+                        p_label = "🟢 STRONG" if f_score >= 7 else "🟡 NEUTRAL" if f_score >= 5 else "🔴 WEAK"
+                        st.metric("Piotroski Score", f"{f_score}/9", delta=p_label, delta_color=p_color)
+                    
+                    with c2:
+                        ey = magic_ey / 100
+                        ey_color = "normal" if ey > 0.10 else "off" if ey > 0.05 else "inverse"
+                        ey_label = "🟢 UNDERVALUED" if ey > 0.10 else "🟡 FAIR" if ey > 0.05 else "🔴 OVERVALUED"
+                        st.metric("Magic Yield (EY)", f"{ey:.2%}", delta=ey_label, delta_color=ey_color)
+                    
+                    with c3:
+                        m_color = "normal" if f_score > 5 else "inverse"
+                        m_label = "🟢 SAFE" if f_score > 5 else "🔴 RISK"
+                        st.metric("Beneish M-Score", m_label, delta="Bilanci OK" if f_score > 5 else "Controllare", delta_color=m_color)
+                    
+                    with c4:
+                        try:
+                            peg_raw = inf.get('pegRatio')
+                            peg_val = float(peg_raw) if peg_raw is not None else 2.0
+                            peg_color = "normal" if peg_val < 1.0 else "off" if peg_val < 2.0 else "inverse"
+                            peg_label = "🟢 CHEAP" if peg_val < 1.0 else "🟡 FAIR" if peg_val < 2.0 else "🔴 EXPENSIVE"
+                        except:
+                            peg_val, peg_label, peg_color = "N/D", "⚪ N/D", "off"
+                        st.metric("PEG Ratio", f"{peg_val}", delta=peg_label, delta_color=peg_color)
+                    
+                    # SECONDA RIGA METRICHE ISTITUZIONALI
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    c5, c6, c7, c8 = st.columns(4)
+                    
+                    with c5:
+                        ev_val = float(ev_ebitda) if ev_ebitda is not None else 0.0
+                        ev_color = "normal" if 0 < ev_val < 12 else "off" if ev_val < 16 else "inverse"
+                        ev_label = "🟢 DISCOUNT" if 0 < ev_val < 12 else "🟡 FAIR" if ev_val < 16 else "🔴 PREMIUM"
+                        st.metric("EV / EBITDA", f"{ev_val:.1f}x" if ev_val > 0 else "N/D", delta=ev_label, delta_color=ev_color)
+                    
+                    with c6:
+                        roic_color = "normal" if roic > 0.10 else "inverse"
+                        st.metric("ROIC (Ret. on Capital)", f"{roic:.2%}", delta="🟢 Eccellente" if roic > 0.15 else "🔴 Da migliorare", delta_color=roic_color)
+                    
+                    with c7:
+                        spread_color = "normal" if roic_wacc_spread > 0 else "inverse"
+                        spread_label = "🟢 VALUE CREATOR" if roic_wacc_spread > 0 else "🔴 VALUE DESTROYER"
+                        st.metric("ROIC - WACC Spread", f"{roic_wacc_spread*100:+.1f}%", delta=spread_label, delta_color=spread_color)
+                    
+                    with c8:
+                        eps_color = "normal" if eps_growth > 0 else "inverse"
+                        eps_label = "🟢 ESPANSIONE" if eps_growth > 0 else "🔴 CONTRAZIONE"
+                        st.metric("Stima Crescita EPS", f"{eps_growth:+.1f}%" if tr_eps > 0 else "N/D", delta=eps_label, delta_color=eps_color)
+                    
+                    st.write("")
+                except Exception as e:
+                    st.warning("Dati insufficienti per il calcolo dell'Analisi Avanzata.")
+            else:
+                # Se è un fondo, mostriamo il Semaforo Quantitativo
+                st.write("---")
+                st.subheader("🏛️ Analisi Quantitativa Fondi & ETF")
+                fm = st.session_state.get('fund_metrics')
+                if fm:
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1:
+                        cagr_color = "normal" if fm['cagr'] > 0.05 else "inverse"
+                        st.metric("CAGR 5Y", f"{fm['cagr']*100:.2f}%", delta="Rendimento", delta_color=cagr_color)
+                    with c2:
+                        sharpe_color = "normal" if fm['sharpe'] > 1.0 else "off" if fm['sharpe'] > 0.5 else "inverse"
+                        sl = "🟢 ECCELLENTE" if fm['sharpe'] > 1.0 else "🟡 DISCRETO" if fm['sharpe'] > 0.5 else "🔴 RISCHIOSO"
+                        st.metric("Sharpe Ratio", f"{fm['sharpe']:.2f}", delta=sl, delta_color=sharpe_color)
+                    with c3:
+                        alpha_color = "normal" if fm['alpha'] > 0 else "inverse"
+                        al = "🟢 POSITIVO" if fm['alpha'] > 0 else "🔴 NEGATIVO"
+                        st.metric("Alpha (vs SPY)", f"{fm['alpha']*100:.2f}%", delta=al, delta_color=alpha_color)
+                    with c4:
+                        dd_color = "normal" if fm['max_dd'] > -0.15 else "inverse"
+                        dl = "🟢 CONTENUTO" if fm['max_dd'] > -0.15 else "🔴 ELEVATO"
+                        st.metric("Max Drawdown", f"{fm['max_dd']*100:.2f}%", delta=dl, delta_color=dd_color)
+                        
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    c5, c6, c7 = st.columns(3)
+                    with c5:
+                        st.metric("Beta (vs SPY)", f"{fm['beta']:.2f}")
+                    with c6:
+                        st.metric("Volatilità Annua", f"{fm['volatility']*100:.2f}%")
+                    with c7:
+                        st.metric("Tracking Error", f"{fm['tracking_error']*100:.2f}%")
+                else:
+                    st.warning("Dati storici insufficienti per calcolare le metriche del fondo.")
 
             # --- TABS DATI PROFONDI ---
             t1, t2, t3, t4 = st.tabs(["📊 BILANCI DETTAGLIATI", "📈 GRAFICO INTERATTIVO", "🐋 FLUSSI WHALES", "📰 NEWS"])
@@ -5922,42 +6028,45 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
 
                 with col_ins:
                     st.markdown("### 👔 Insider Intelligence (Management)")
-                    try:
-                        ins_df = ticker_data.insider_transactions
-                        if ins_df is not None and not ins_df.empty:
-                            df_i = ins_df.copy()
-                            
-                            # Parser Semantico colonna Text
-                            def parser_op(row):
-                                t = str(row['Text']).lower() if 'Text' in row else ""
-                                if 'purchase' in t: return "🟢 ACQUISTO NETTO"
-                                if 'sale' in t: return "🔴 VENDITA"
-                                if 'grant' in t or 'award' in t: return "🎁 BONUS / GRANT"
-                                return "⚪ MOVIMENTO TECNICO"
-                            
-                            df_i['Operazione'] = df_i.apply(parser_op, axis=1)
-                            
-                            # Formattazione Professionale
-                            if 'Start Date' in df_i.columns:
-                                df_i['Start Date'] = pd.to_datetime(df_i['Start Date']).dt.strftime('%d/%m/%Y')
-                            if 'Shares' in df_i.columns:
-                                df_i['Shares'] = df_i['Shares'].apply(lambda x: f"{int(x):,}".replace(",", ".") if pd.notnull(x) else "0")
-                            if 'Value' in df_i.columns:
-                                df_i['Value'] = df_i['Value'].apply(lambda x: f"$ {int(x):,}".replace(",", ".") if pd.notnull(x) else "N/D")
-                            
-                            # Selezione e Rinomina per l'utente
-                            cols_in = {
-                                'Start Date': 'Data', 'Insider': 'Soggetto', 
-                                'Position': 'Ruolo', 'Operazione': 'Tipo', 
-                                'Shares': 'Azioni', 'Value': 'Controvalore ($)'
-                            }
-                            df_final_ins = df_i.rename(columns=cols_in)
-                            st.dataframe(df_final_ins[[v for v in cols_in.values() if v in df_final_ins.columns]].head(20), use_container_width=True, hide_index=True)
-                            st.caption("Dati ufficiali SEC Form 4 filtrati per rilevanza economica.")
-                        else:
-                            st.info("Nessun movimento Insider rilevante per questo titolo.")
-                    except:
-                        st.error("Errore nel caricamento dati Insider.")
+                    if inf.get('quoteType', 'EQUITY').upper() in ['ETF', 'MUTUALFUND', 'INDEX']:
+                        st.info("L'analisi Insider non è applicabile a Fondi, ETF o Indici.")
+                    else:
+                        try:
+                            ins_df = ticker_data.insider_transactions
+                            if ins_df is not None and not ins_df.empty:
+                                df_i = ins_df.copy()
+                                
+                                # Parser Semantico colonna Text
+                                def parser_op(row):
+                                    t = str(row['Text']).lower() if 'Text' in row else ""
+                                    if 'purchase' in t: return "🟢 ACQUISTO NETTO"
+                                    if 'sale' in t: return "🔴 VENDITA"
+                                    if 'grant' in t or 'award' in t: return "🎁 BONUS / GRANT"
+                                    return "⚪ MOVIMENTO TECNICO"
+                                
+                                df_i['Operazione'] = df_i.apply(parser_op, axis=1)
+                                
+                                # Formattazione Professionale
+                                if 'Start Date' in df_i.columns:
+                                    df_i['Start Date'] = pd.to_datetime(df_i['Start Date']).dt.strftime('%d/%m/%Y')
+                                if 'Shares' in df_i.columns:
+                                    df_i['Shares'] = df_i['Shares'].apply(lambda x: f"{int(x):,}".replace(",", ".") if pd.notnull(x) else "0")
+                                if 'Value' in df_i.columns:
+                                    df_i['Value'] = df_i['Value'].apply(lambda x: f"$ {int(x):,}".replace(",", ".") if pd.notnull(x) else "N/D")
+                                
+                                # Selezione e Rinomina per l'utente
+                                cols_in = {
+                                    'Start Date': 'Data', 'Insider': 'Soggetto', 
+                                    'Position': 'Ruolo', 'Operazione': 'Tipo', 
+                                    'Shares': 'Azioni', 'Value': 'Controvalore ($)'
+                                }
+                                df_final_ins = df_i.rename(columns=cols_in)
+                                st.dataframe(df_final_ins[[v for v in cols_in.values() if v in df_final_ins.columns]].head(20), use_container_width=True, hide_index=True)
+                                st.caption("Dati ufficiali SEC Form 4 filtrati per rilevanza economica.")
+                            else:
+                                st.info("Nessun movimento Insider rilevante per questo titolo.")
+                        except:
+                            st.error("Errore nel caricamento dati Insider.")
 
                 with col_fund:
                     st.markdown("### 🏛️ Top 10 Institutional Whales (Fondi)")
