@@ -5917,47 +5917,75 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 st.plotly_chart(fig, use_container_width=True)
 
             with t3:
-                st.subheader("🐋 Whale Activity: Intelligence & Flussi Smart Money")
-                
-                # Indicatori di Sintesi
-                col_inst, col_ins = st.columns(2)
-                
-                with col_inst:
-                    st.markdown("### 🏛️ Fondi di Investimento (13F)")
-                    if data["inst"] is not None and not data["inst"].empty:
-                        inst_df = data["inst"].copy()
-                        # Pulizia e Formattazione
-                        if 'Value' in inst_df.columns:
-                            inst_df['Valore Totale'] = inst_df['Value'].apply(lambda x: format_big_num(x, s))
-                        if 'Shares' in inst_df.columns:
-                            inst_df['Azioni'] = inst_df['Shares'].apply(lambda x: format_big_num(x, ""))
-                            
-                        # Mostriamo solo le colonne che contano per capire il peso dei Fondi
-                        view_cols = [c for c in ['Holder', 'Azioni', 'Valore Totale', '% Out'] if c in inst_df.columns]
-                        st.dataframe(inst_df[view_cols].head(10), hide_index=True, use_container_width=True)
-                        st.caption("I fondi indicano la stabilità del titolo nel lungo periodo.")
-                    else:
-                        st.info("Dati istituzionali non disponibili per questo asset.")
+                st.header("🐋 Whales & Insider Intelligence")
+                col_ins, col_fund = st.columns(2)
 
                 with col_ins:
                     st.markdown("### 👔 Insider Intelligence (Management)")
                     try:
                         ins_df = ticker_data.insider_transactions
                         if ins_df is not None and not ins_df.empty:
-                            def parser_sec(row):
-                                t_text = str(row['Text']).lower() if 'Text' in row else ""
-                                if 'purchase' in t_text: return "🟢 ACQUISTO NETTO"
-                                if 'sale' in t_text: return "🔴 VENDITA"
-                                if 'grant' in t_text or 'award' in t_text: return "🎁 BONUS / GRANT"
-                                if 'exercise' in t_text: return "🟡 ESERCIZIO OPZIONI"
+                            df_i = ins_df.copy()
+                            
+                            # Parser Semantico colonna Text
+                            def parser_op(row):
+                                t = str(row['Text']).lower() if 'Text' in row else ""
+                                if 'purchase' in t: return "🟢 ACQUISTO NETTO"
+                                if 'sale' in t: return "🔴 VENDITA"
+                                if 'grant' in t or 'award' in t: return "🎁 BONUS / GRANT"
                                 return "⚪ MOVIMENTO TECNICO"
-                            ins_df['Operazione'] = ins_df.apply(parser_sec, axis=1)
-                            display_cols = [c for c in ['Start Date', 'Insider', 'Position', 'Operazione', 'Shares', 'Value'] if c in ins_df.columns]
-                            st.dataframe(ins_df[display_cols].head(20), use_container_width=True, hide_index=True)
+                            
+                            df_i['Operazione'] = df_i.apply(parser_op, axis=1)
+                            
+                            # Formattazione Professionale
+                            if 'Start Date' in df_i.columns:
+                                df_i['Start Date'] = pd.to_datetime(df_i['Start Date']).dt.strftime('%d/%m/%Y')
+                            if 'Shares' in df_i.columns:
+                                df_i['Shares'] = df_i['Shares'].apply(lambda x: f"{int(x):,}".replace(",", ".") if pd.notnull(x) else "0")
+                            if 'Value' in df_i.columns:
+                                df_i['Value'] = df_i['Value'].apply(lambda x: f"$ {int(x):,}".replace(",", ".") if pd.notnull(x) else "N/D")
+                            
+                            # Selezione e Rinomina per l'utente
+                            cols_in = {
+                                'Start Date': 'Data', 'Insider': 'Soggetto', 
+                                'Position': 'Ruolo', 'Operazione': 'Tipo', 
+                                'Shares': 'Azioni', 'Value': 'Controvalore ($)'
+                            }
+                            df_final_ins = df_i.rename(columns=cols_in)
+                            st.dataframe(df_final_ins[[v for v in cols_in.values() if v in df_final_ins.columns]].head(20), use_container_width=True, hide_index=True)
+                            st.caption("Dati ufficiali SEC Form 4 filtrati per rilevanza economica.")
                         else:
-                            st.info("Nessun dato insider recente per questo ticker.")
-                    except Exception:
-                        st.write("Dati Insider momentaneamente non disponibili.")
+                            st.info("Nessun movimento Insider rilevante per questo titolo.")
+                    except:
+                        st.error("Errore nel caricamento dati Insider.")
+
+                with col_fund:
+                    st.markdown("### 🏛️ Top 10 Institutional Whales (Fondi)")
+                    try:
+                        holders = ticker_data.institutional_holders
+                        if holders is not None and not holders.empty:
+                            df_h = holders.copy()
+                            # Formattazione Fondi
+                            if 'Date Reported' in df_h.columns:
+                                df_h['Date Reported'] = pd.to_datetime(df_h['Date Reported']).dt.strftime('%d/%m/%Y')
+                            if 'Shares' in df_h.columns:
+                                df_h['Shares'] = df_h['Shares'].apply(lambda x: f"{int(x):,}".replace(",", ".") if pd.notnull(x) else "0")
+                            if 'Value' in df_h.columns:
+                                df_h['Value'] = df_h['Value'].apply(lambda x: f"$ {int(x):,}".replace(",", ".") if pd.notnull(x) else "N/D")
+                            if '% Out' in df_h.columns:
+                                df_h['% Out'] = df_h['% Out'].apply(lambda x: f"{x*100:.2f}%" if pd.notnull(x) else "0%")
+
+                            rename_f = {
+                                'Holder': 'Fondo', 'Shares': 'Azioni', 
+                                'Date Reported': 'Report', '% Out': '% Port.', 
+                                'Value': 'Valore Totale'
+                            }
+                            st.dataframe(df_h.rename(columns=rename_f).head(10), use_container_width=True, hide_index=True)
+                            st.caption("I fondi indicano la stabilità del titolo nel lungo periodo.")
+                        else:
+                            st.write("Dati istituzionali non disponibili.")
+                    except:
+                        st.write("Errore nel caricamento dei Fondi.")
 
             with t4:
                 st.subheader("Bloomberg Live Feed & Sentiment Analysis")
