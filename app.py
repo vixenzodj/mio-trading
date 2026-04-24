@@ -5941,59 +5941,23 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
 
                 with col_ins:
                     st.markdown("### 👔 Insider Intelligence (Management)")
-                    if data["insider"] is not None and not data["insider"].empty:
-                        ins_df = data["insider"].copy()
-                        
-                        # 1. Ricerca dinamica della colonna contenente la descrizione (YFinance cambia spesso struttura)
-                        desc_col = None
-                        for col in ['Transaction', 'Text', 'Transaction Text', 'Desc', 'TransactionType']:
-                            if col in ins_df.columns:
-                                desc_col = col
-                                break
-                                
-                        # 2. Parser Semantico Istituzionale (Decodifica moduli SEC Form 4)
-                        def advanced_insider_parser(val):
-                            if pd.isna(val): return "⚪ SCONOSCIUTO"
-                            v = str(val).lower()
-                            
-                            # Veri acquisti a mercato (High Conviction)
-                            if any(w in v for w in ['purchase', 'buy', 'acquisition']):
-                                if 'option' not in v and 'award' not in v and 'grant' not in v: 
-                                    return "🟢 ACQUISTO NETTO"
-                            
-                            # Vendite a mercato (Profit taking o fuga)
-                            if any(w in v for w in ['sale', 'sell', 'disposition']):
-                                if 'tax' in v: return "🟠 VENDITA (Tasse)"
-                                return "🔴 VENDITA"
-                                
-                            # Esercizio Opzioni (Spesso precede una vendita)
-                            if any(w in v for w in ['option', 'exercise', 'convert', 'derivative']):
-                                return "🟡 ESERCIZIO OPZIONI"
-                                
-                            # Assegnazione gratuita dal CdA
-                            if any(w in v for w in ['grant', 'award', 'stock']):
-                                return "🎁 BONUS AZIENDALE"
-                                
-                            return "⚪ ALTRO / AUTOMATICO"
-
-                        # Applica il parser solo se la colonna esiste
-                        if desc_col:
-                            ins_df['Operazione'] = ins_df[desc_col].apply(advanced_insider_parser)
+                    try:
+                        ins_df = ticker_data.insider_transactions
+                        if ins_df is not None and not ins_df.empty:
+                            def parser_sec(row):
+                                t_text = str(row['Text']).lower() if 'Text' in row else ""
+                                if 'purchase' in t_text: return "🟢 ACQUISTO NETTO"
+                                if 'sale' in t_text: return "🔴 VENDITA"
+                                if 'grant' in t_text or 'award' in t_text: return "🎁 BONUS / GRANT"
+                                if 'exercise' in t_text: return "🟡 ESERCIZIO OPZIONI"
+                                return "⚪ MOVIMENTO TECNICO"
+                            ins_df['Operazione'] = ins_df.apply(parser_sec, axis=1)
+                            display_cols = [c for c in ['Start Date', 'Insider', 'Position', 'Operazione', 'Shares', 'Value'] if c in ins_df.columns]
+                            st.dataframe(ins_df[display_cols].head(20), use_container_width=True, hide_index=True)
                         else:
-                            ins_df['Operazione'] = "⚪ DATI NON PARSABILI"
-                        
-                        # Formattazione volumi insider
-                        if 'Shares' in ins_df.columns:
-                            ins_df['Volume'] = ins_df['Shares'].apply(lambda x: format_big_num(x, ""))
-                        elif 'Value' in ins_df.columns: # Fallback se manca Shares
-                            ins_df['Volume'] = ins_df['Value'].apply(lambda x: format_big_num(x, s))
-
-                        # Riordino Colonne per impatto visivo immediato
-                        ins_view = [c for c in ['Date', 'Insider', 'Position', 'Operazione', 'Volume'] if c in ins_df.columns]
-                        st.dataframe(ins_df[ins_view].head(15), hide_index=True, use_container_width=True)
-                        st.caption("🟢 Acquisti Netti: Il manager spende i propri soldi. 🎁 Bonus/Opzioni: Retribuzione standard.")
-                    else:
-                        st.info("Nessuna transazione recente dei direttori commerciali o CEO rilevata.")
+                            st.info("Nessun dato insider recente per questo ticker.")
+                    except Exception:
+                        st.write("Dati Insider momentaneamente non disponibili.")
 
             with t4:
                 st.subheader("Bloomberg Live Feed & Sentiment Analysis")
