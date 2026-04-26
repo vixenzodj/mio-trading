@@ -66,58 +66,55 @@ STRATEGY_PARAM_GRID = {
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
-def calc_fund_metrics(ticker_obj):
+def calc_fund_metrics_v3(ticker_symbol, t_data):
     try:
-        hist = ticker_obj.history(period="5y")
-        if hist.empty:
-            return None
-            
-        spy_obj = yf.Ticker("SPY")
-        spy_hist = spy_obj.history(period="5y")
-        
-        df = pd.DataFrame({'fund': hist['Close'], 'spy': spy_hist['Close']}).dropna()
-        if len(df) < 100:
-            return None
-            
-        df['fund_ret'] = df['fund'].pct_change()
-        df['spy_ret'] = df['spy'].pct_change()
-        df = df.dropna()
-        
-        days = (df.index[-1] - df.index[0]).days
-        years = days / 365.25
-        if years > 0:
-            cagr = ((df['fund'].iloc[-1] / df['fund'].iloc[0]) ** (1 / years)) - 1
-            spy_cagr = ((df['spy'].iloc[-1] / df['spy'].iloc[0]) ** (1 / years)) - 1
-        else:
-            cagr = 0
-            spy_cagr = 0
-            
-        vol = df['fund_ret'].std() * np.sqrt(252)
-        rf = 0.04
-        sharpe = (cagr - rf) / vol if vol > 0 else 0
-        
-        cov = np.cov(df['fund_ret'], df['spy_ret'])[0][1]
-        var = np.var(df['spy_ret'])
-        beta = cov / var if var > 0 else 1
-        alpha = cagr - (rf + beta * (spy_cagr - rf))
-        
-        roll_max = df['fund'].cummax()
-        drawdown = (df['fund'] / roll_max) - 1
-        max_dd = drawdown.min()
-        
-        tracking_error = (df['fund_ret'] - df['spy_ret']).std() * np.sqrt(252)
-        
-        return {
-            'CAGR': cagr,
-            'Sharpe': sharpe,
-            'Alpha': alpha,
-            'Beta': beta,
-            'Max_DD': max_dd,
-            'Vol': vol,
-            'Tracking_Error': tracking_error
-        }
-    except:
+        # Download dati 5 anni per Fondo e Benchmark (SPY)
+        df_f = yf.download(ticker_symbol, period="5y", interval="1d")['Close']
+        df_b = yf.download("SPY", period="5y", interval="1d")['Close']
+        data = pd.concat([df_f, df_b], axis=1).dropna()
+        data.columns = ['Fund', 'Bench']
+        rets = data.pct_change().dropna()
+
+        # 1. CAGR 5Y
+        cagr = (data['Fund'].iloc[-1] / data['Fund'].iloc[0]) ** (1/5) - 1
+        # 2. Volatilità Annua
+        vol = rets['Fund'].std() * np.sqrt(252)
+        # 3. Sharpe Ratio
+        sharpe = (cagr - 0.02) / vol if vol != 0 else 0
+        # 4. Max Drawdown
+        dd = (data['Fund'] / data['Fund'].cummax() - 1).min()
+        # 5. Beta & 6. Alpha
+        cov = np.cov(rets['Fund'], rets['Bench'])[0][1]
+        beta = cov / np.var(rets['Bench'])
+        alpha = cagr - (0.02 + beta * (rets['Bench'].mean()*252 - 0.02))
+        # 7. Tracking Error
+        te = (rets['Fund'] - rets['Bench']).std() * np.sqrt(252)
+
+        return {"CAGR": cagr, "Vol": vol, "Sharpe": sharpe, "Max_DD": dd, "Alpha": alpha, "Beta": beta, "TE": te}
+    except Exception as e:
         return None
+
+def compute_fund_score(m):
+    s = 0
+    s += 20 if m['Sharpe'] > 1 else (10 if m['Sharpe'] > 0.5 else 0)      # Sharpe (20%)
+    s += 20 if m['Alpha'] > 0.02 else (10 if m['Alpha'] > 0 else 0)      # Alpha (20%)
+    s += 15 if m['CAGR'] > 0.10 else (7 if m['CAGR'] > 0.05 else 0)      # CAGR (15%)
+    s += 15 if m['Max_DD'] > -0.15 else (7 if m['Max_DD'] > -0.25 else 0)# MaxDD (15%)
+    s += 10 if m['Vol'] < 0.15 else (5 if m['Vol'] < 0.25 else 0)        # Vol (10%)
+    s += 10 if m['Beta'] < 1.2 else (5 if m['Beta'] < 1.5 else 0)        # Beta (10%)
+    s += 10 if m['TE'] < 0.03 else (5 if m['TE'] < 0.06 else 0)          # TrackErr (10%)
+    return s
+
+def draw_metric_badge(label, value_str, color, status_text):
+    st.markdown(f"""
+        <div style="text-align: center; border: 2px solid {color}; border-radius: 20px; padding: 15px; background-color: rgba(0,0,0,0.05); margin-bottom: 10px;">
+            <p style="color: gray; font-size: 0.8rem; margin: 0;">{label}</p>
+            <h2 style="color: {color}; margin: 5px 0;">{value_str}</h2>
+            <div style="background-color: {color}; color: white; border-radius: 10px; font-size: 0.7rem; padding: 2px 8px; display: inline-block;">
+                {status_text}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 def calculate_dcf_value(ticker_obj):
     """Calcola il Valore Intrinseco DCF usando l'oggetto ticker passato."""
@@ -5713,12 +5710,22 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
 
     t_code = st.sidebar.text_input("Ticker Bloomberg:", value="AAPL").upper().strip()
     
-    # Se l'utente inserisce SPX, NDX, DJI senza prefisso, il sistema lo aggiunge automaticamente
-    indices_map = {"SPX": "^GSPC", "NDX": "^IXIC", "DJI": "^DJI", "VIX": "^VIX", "RUT": "^RUT"}
-    if t_code in indices_map:
-        t_code = indices_map[t_code]
-    elif not t_code.startswith("^") and any(ind in t_code for ind in ["GSPC", "IXIC", "DJI", "VIX", "RUT"]):
-        t_code = "^" + t_code
+    # --- NORMALIZZAZIONE TICKER GLOBALE ---
+    if t_code:
+        # Mappa rapida indici comuni
+        idx_map = {"SPX": "^GSPC", "NDX": "^IXIC", "DJI": "^DJI", "DAX": "^GDAXI", "FTSEMIB": "FTSEMIB.MI"}
+        if t_code in idx_map:
+            t_code = idx_map[t_code]
+        
+        # Fallback: se non è un'azione (EQUITY) e non ha il prefisso, prova ad aggiungerlo
+        try:
+            check = yf.Ticker(t_code).info
+            if not check or 'quoteType' not in check:
+                if not t_code.startswith("^"):
+                    t_code = "^" + t_code
+        except:
+            if not t_code.startswith("^"):
+                t_code = "^" + t_code
     
     if t_code:
         data = get_terminal_data(t_code)
@@ -5827,29 +5834,15 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 quote_type = inf.get('quoteType', 'EQUITY').upper()
                 
                 if quote_type in ['ETF', 'MUTUALFUND', 'INDEX']:
-                    fund_metrics = calc_fund_metrics(ticker_data)
+                    fund_metrics = calc_fund_metrics_v3(t_code, ticker_data)
                     if fund_metrics:
-                        score_100 = 0
-                        # Sharpe (Max 30)
-                        if fund_metrics['Sharpe'] > 1.2: score_100 += 30
-                        elif fund_metrics['Sharpe'] > 0.8: score_100 += 20
-                        elif fund_metrics['Sharpe'] > 0.5: score_100 += 10
-                        
-                        # Alpha (Max 30)
-                        if fund_metrics['Alpha'] > 0.02: score_100 += 30
-                        elif fund_metrics['Alpha'] > 0: score_100 += 20
-                        elif fund_metrics['Alpha'] > -0.01: score_100 += 10
-                        
-                        # Max Drawdown (Max 20)
-                        if fund_metrics['Max_DD'] > -0.15: score_100 += 20
-                        elif fund_metrics['Max_DD'] > -0.25: score_100 += 10
-                        
-                        # CAGR/Vol (Max 20)
-                        if fund_metrics['CAGR'] > fund_metrics['Vol']: score_100 += 20
-                        elif fund_metrics['CAGR'] > (fund_metrics['Vol'] * 0.5): score_100 += 10
-                        
-                        s_fin = score_100 / 10.0
-                        st.session_state.fund_metrics = fund_metrics
+                        try:
+                            score = compute_fund_score(fund_metrics)
+                            s_fin = score / 10.0
+                            st.session_state.fund_metrics = fund_metrics
+                        except:
+                            s_fin = 1.0
+                            st.session_state.fund_metrics = None
                     else:
                         s_fin = 1.0  # Dati insufficienti
                         st.session_state.fund_metrics = None
@@ -5978,39 +5971,23 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 # Se è un fondo, mostriamo il Semaforo Quantitativo
                 st.write("---")
                 st.subheader("🏛️ Analisi Quantitativa Fondi & ETF")
-                fm = st.session_state.get('fund_metrics')
-                if fm:
-                    # Visualizzazione Semaforica Completa
-                    col1, col2, col3, col4 = st.columns(4)
+                m = st.session_state.get('fund_metrics')
+                if m:
+                    score = compute_fund_score(m)
+                    # st.session_state.score = score # Already handled earlier but applying as requested
+                    st.session_state.score = score 
                     
-                    # Alpha Semaforo
-                    a_color = "🟢" if fm['Alpha'] > 0 else "🔴"
-                    col1.metric("Alpha (Edge)", f"{fm['Alpha']*100:.2f}%", help="Semaforo Verde se batte il mercato")
-                    col1.markdown(f"Status Alpha: {a_color}")
-                    
-                    # Beta Semaforo
-                    b_color = "🟢" if fm['Beta'] < 1.1 else "🟡" if fm['Beta'] < 1.4 else "🔴"
-                    col2.metric("Beta (Rischio)", f"{fm['Beta']:.2f}", help="Semaforo Rosso se troppo volatile")
-                    col2.markdown(f"Status Beta: {b_color}")
-                    
-                    # Sharpe Semaforo
-                    s_color = "🟢" if fm['Sharpe'] > 1 else "🟡" if fm['Sharpe'] > 0.5 else "🔴"
-                    col3.metric("Sharpe (Qualità)", f"{fm['Sharpe']:.2f}")
-                    col3.markdown(f"Status Sharpe: {s_color}")
-                    
-                    # Drawdown Semaforo
-                    d_color = "🟢" if fm['Max_DD'] > -0.20 else "🔴"
-                    col4.metric("Max Drawdown", f"{fm['Max_DD']*100:.1f}%")
-                    col4.markdown(f"Status Protezione: {d_color}")
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    c5, c6, c7 = st.columns(3)
-                    with c5:
-                        st.metric("CAGR 5Y", f"{fm['CAGR']*100:.2f}%")
-                    with c6:
-                        st.metric("Volatilità Annua", f"{fm['Vol']*100:.2f}%")
-                    with c7:
-                        st.metric("Tracking Error", f"{fm['Tracking_Error']*100:.2f}%")
+                    st.markdown(f"### 🎯 Global Quant Score: {score}/100")
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1: draw_metric_badge("CAGR 5Y", f"{m['CAGR']*100:.1f}%", "#2ecc71" if m['CAGR']>0.1 else "#f1c40f", "GROWTH")
+                    with c2: draw_metric_badge("SHARPE", f"{m['Sharpe']:.2f}", "#2ecc71" if m['Sharpe']>1 else "#e74c3c", "EFFICIENCY")
+                    with c3: draw_metric_badge("ALPHA", f"{m['Alpha']*100:.1f}%", "#2ecc71" if m['Alpha']>0 else "#e74c3c", "EDGE")
+                    with c4: draw_metric_badge("MAX DD", f"{m['Max_DD']*100:.1f}%", "#2ecc71" if m['Max_DD']>-0.15 else "#e74c3c", "PROTECTION")
+
+                    c5, c6, c7, c8 = st.columns(4)
+                    with c5: draw_metric_badge("BETA", f"{m['Beta']:.2f}", "#3498db", "VOLATILITY")
+                    with c6: draw_metric_badge("ANNUAL VOL", f"{m['Vol']*100:.1f}%", "#9b59b6", "STABILITY")
+                    with c7: draw_metric_badge("TRACK ERR", f"{m['TE']*100:.2f}%", "#f39c12", "ACCURACY")
                 else:
                     st.warning("Dati storici insufficienti per calcolare le metriche del fondo.")
 
