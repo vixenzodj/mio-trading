@@ -96,14 +96,42 @@ def calc_fund_metrics_v3(ticker_symbol, t_data):
 
 def compute_fund_score(m):
     s = 0
-    s += 20 if m['Sharpe'] > 1 else (10 if m['Sharpe'] > 0.5 else 0)      # Sharpe (20%)
-    s += 20 if m['Alpha'] > 0.02 else (10 if m['Alpha'] > 0 else 0)      # Alpha (20%)
-    s += 15 if m['CAGR'] > 0.10 else (7 if m['CAGR'] > 0.05 else 0)      # CAGR (15%)
-    s += 15 if m['Max_DD'] > -0.15 else (7 if m['Max_DD'] > -0.25 else 0)# MaxDD (15%)
-    s += 10 if m['Vol'] < 0.15 else (5 if m['Vol'] < 0.25 else 0)        # Vol (10%)
-    s += 10 if m['Beta'] < 1.2 else (5 if m['Beta'] < 1.5 else 0)        # Beta (10%)
-    s += 10 if m['TE'] < 0.03 else (5 if m['TE'] < 0.06 else 0)          # TrackErr (10%)
-    return s
+    # 1. SHARPE RATIO (Max 20)
+    if m['Sharpe'] > 1.2: s += 20
+    elif m['Sharpe'] > 0.6: s += 10
+    # 2. MAX DRAWDOWN (Max 20)
+    if m['Max_DD'] > -0.15: s += 20
+    elif m['Max_DD'] > -0.30: s += 10
+    # 3. ALPHA (Max 15)
+    if m['Alpha'] > 0.02: s += 15
+    elif m['Alpha'] > 0: s += 7
+    # 4. CAGR 5Y (Max 15)
+    if m['CAGR'] > 0.12: s += 15
+    elif m['CAGR'] > 0.06: s += 7
+    # 5. VOLATILITÀ (Max 10)
+    if m['Vol'] < 0.15: s += 10
+    elif m['Vol'] < 0.25: s += 5
+    # 6. BETA (Max 10)
+    if 0.8 <= m['Beta'] <= 1.2: s += 10
+    elif m['Beta'] < 1.5: s += 5
+    # 7. TRACKING ERROR (Max 10)
+    if m['TE'] < 0.03: s += 10
+    elif m['TE'] < 0.06: s += 5
+    return int(s)
+
+def get_metric_color(val, category):
+    # Logica Semaforica Professionale
+    if category == 'sharpe':
+        return "#2ecc71" if val > 1 else "#f1c40f" if val > 0.5 else "#e74c3c"
+    if category == 'drawdown':
+        return "#2ecc71" if val > -0.15 else "#f1c40f" if val > -0.30 else "#e74c3c"
+    if category in ['alpha', 'cagr']:
+        return "#2ecc71" if val > 0.05 else "#f1c40f" if val > 0 else "#e74c3c"
+    if category in ['vol', 'te']:
+        return "#2ecc71" if val < 0.15 else "#f1c40f" if val < 0.25 else "#e74c3c"
+    if category == 'beta':
+        return "#2ecc71" if 0.5 < val < 1.3 else "#f1c40f" if val < 1.6 else "#e74c3c"
+    return "#3498db"
 
 def draw_metric_badge(label, value_str, color, status_text):
     st.markdown(f"""
@@ -5872,8 +5900,12 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             if quote_type in ['ETF', 'MUTUALFUND', 'INDEX'] and st.session_state.fund_metrics is None:
                 st.title(f"🏢 {inf.get('shortName', t_code)} | ⚪ Dati Insufficienti")
             else:
-                r_emoji = "🟢" if final_rating >= 7.5 else "🟡" if final_rating >= 5.5 else "🔴"
-                st.title(f"🏢 {inf.get('shortName', t_code)} | {r_emoji} Score: {final_rating:.1f}/10")
+                if quote_type in ['ETF', 'MUTUALFUND', 'INDEX']:
+                    r_emj = "🟢" if s_fin >= 7.5 else "🟡" if s_fin >= 5.5 else "🔴"
+                    st.title(f"🏢 {inf.get('shortName', t_code)} | {r_emj} Quant Score: {int(s_fin*10)}/100")
+                else:
+                    r_emj = "🟢" if final_rating >= 7.5 else "🟡" if final_rating >= 5.5 else "🔴"
+                    st.title(f"🏢 {inf.get('shortName', t_code)} | {r_emj} Score: {final_rating:.1f}/10")
             st.markdown(f"**Analisi Quantitativa Istituzionale - Financial Deep Analysis**")
             
             if quote_type not in ['ETF', 'MUTUALFUND', 'INDEX']:
@@ -5974,20 +6006,43 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 m = st.session_state.get('fund_metrics')
                 if m:
                     score = compute_fund_score(m)
-                    # st.session_state.score = score # Already handled earlier but applying as requested
-                    st.session_state.score = score 
                     
-                    st.markdown(f"### 🎯 Global Quant Score: {score}/100")
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1: draw_metric_badge("CAGR 5Y", f"{m['CAGR']*100:.1f}%", "#2ecc71" if m['CAGR']>0.1 else "#f1c40f", "GROWTH")
-                    with c2: draw_metric_badge("SHARPE", f"{m['Sharpe']:.2f}", "#2ecc71" if m['Sharpe']>1 else "#e74c3c", "EFFICIENCY")
-                    with c3: draw_metric_badge("ALPHA", f"{m['Alpha']*100:.1f}%", "#2ecc71" if m['Alpha']>0 else "#e74c3c", "EDGE")
-                    with c4: draw_metric_badge("MAX DD", f"{m['Max_DD']*100:.1f}%", "#2ecc71" if m['Max_DD']>-0.15 else "#e74c3c", "PROTECTION")
+                    st.markdown(f"### 🛡️ Valutazione Quantitativa Professionale: {score}/100")
+                    
+                    import plotly.graph_objects as go
+                    
+                    fig = go.Figure(go.Indicator(
+                        mode = "gauge+number",
+                        value = score,
+                        domain = {'x': [0, 1], 'y': [0, 1]},
+                        gauge = {
+                            'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+                            'bar': {'color': "#2ecc71" if score >= 70 else "#f1c40f" if score >= 40 else "#e74c3c"},
+                            'bgcolor': "rgba(0,0,0,0)",
+                            'borderwidth': 2,
+                            'bordercolor': "gray",
+                            'steps': [
+                                {'range': [0, 40], 'color': "rgba(231,76,60,0.3)"},
+                                {'range': [40, 70], 'color': "rgba(241,196,15,0.3)"},
+                                {'range': [70, 100], 'color': "rgba(46,204,113,0.3)"}],
+                            }
+                    ))
+                    fig.update_layout(height=250, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white", 'family': "Arial"})
+                    
+                    col_gauge, col_spacer = st.columns([1, 2])
+                    with col_gauge:
+                        st.plotly_chart(fig, use_container_width=True)
 
-                    c5, c6, c7, c8 = st.columns(4)
-                    with c5: draw_metric_badge("BETA", f"{m['Beta']:.2f}", "#3498db", "VOLATILITY")
-                    with c6: draw_metric_badge("ANNUAL VOL", f"{m['Vol']*100:.1f}%", "#9b59b6", "STABILITY")
-                    with c7: draw_metric_badge("TRACK ERR", f"{m['TE']*100:.2f}%", "#f39c12", "ACCURACY")
+                    r1 = st.columns(4)
+                    with r1[0]: draw_metric_badge("SHARPE", f"{m['Sharpe']:.2f}" if pd.notna(m['Sharpe']) else "N/D", get_metric_color(m.get('Sharpe', 0), 'sharpe'), "EFFICIENZA")
+                    with r1[1]: draw_metric_badge("MAX DRAWDOWN", f"{m['Max_DD']*100:.1f}%" if pd.notna(m['Max_DD']) else "N/D", get_metric_color(m.get('Max_DD', 0), 'drawdown'), "PROTEZIONE")
+                    with r1[2]: draw_metric_badge("ALPHA", f"{m['Alpha']*100:.1f}%" if pd.notna(m['Alpha']) else "N/D", get_metric_color(m.get('Alpha', 0), 'alpha'), "EXTRA REND")
+                    with r1[3]: draw_metric_badge("CAGR 5Y", f"{m['CAGR']*100:.1f}%" if pd.notna(m['CAGR']) else "N/D", get_metric_color(m.get('CAGR', 0), 'cagr'), "CRESCITA")
+
+                    r2 = st.columns(3)
+                    with r2[0]: draw_metric_badge("VOLATILITÀ", f"{m['Vol']*100:.1f}%" if pd.notna(m['Vol']) else "N/D", get_metric_color(m.get('Vol', 0), 'vol'), "STABILITÀ")
+                    with r2[1]: draw_metric_badge("BETA", f"{m['Beta']:.2f}" if pd.notna(m['Beta']) else "N/D", get_metric_color(m.get('Beta', 0), 'beta'), "REATTIVITÀ")
+                    with r2[2]: draw_metric_badge("TRACK ERROR", f"{m['TE']*100:.2f}%" if pd.notna(m['TE']) else "N/D", get_metric_color(m.get('TE', 0), 'te'), "QUALITÀ")
                 else:
                     st.warning("Dati storici insufficienti per calcolare le metriche del fondo.")
 
@@ -6262,6 +6317,10 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
             st.markdown("---")
             st.subheader("💡 Focus Migliore Opportunità")
             top_t = df_res.iloc[0]['Ticker']
+            top_t = top_t.upper().strip()
+            indices_fix = {"SPX": "^GSPC", "SP500": "^GSPC", "NASDAQ": "^IXIC", "NDX": "^IXIC", "DAX": "^GDAXI", "CAC": "^FCHI", "FTSEMIB": "FTSEMIB.MI"}
+            if top_t in indices_fix:
+                top_t = indices_fix[top_t]
             t_data = yf.Ticker(top_t)
             col_t1, col_t2 = st.columns([2, 1])
             with col_t1:
