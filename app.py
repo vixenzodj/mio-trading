@@ -96,27 +96,36 @@ def calc_fund_metrics_v3(ticker_symbol, t_data):
 
 def compute_fund_score(m):
     s = 0
-    # 1. SHARPE RATIO (Max 20)
-    if m['Sharpe'] > 1.2: s += 20
-    elif m['Sharpe'] > 0.6: s += 10
-    # 2. MAX DRAWDOWN (Max 20)
-    if m['Max_DD'] > -0.15: s += 20
-    elif m['Max_DD'] > -0.30: s += 10
-    # 3. ALPHA (Max 15)
-    if m['Alpha'] > 0.02: s += 15
-    elif m['Alpha'] > 0: s += 7
+    # 1. SHARPE RATIO (Max 20) - Più tollerante
+    if m['Sharpe'] > 1.0: s += 20
+    elif m['Sharpe'] > 0.4: s += 12  # SCHD prenderebbe 12 invece di 0
+    elif m['Sharpe'] > 0.2: s += 5
+    
+    # 2. MAX DRAWDOWN (Max 20) - Fondamentale per il Retail
+    if m['Max_DD'] > -0.12: s += 20
+    elif m['Max_DD'] > -0.20: s += 15 # SCHD qui prende 15
+    elif m['Max_DD'] > -0.35: s += 8
+    
+    # 3. ALPHA (Max 15) - Non punire troppo se vicino a zero
+    if m['Alpha'] > 0.01: s += 15
+    elif m['Alpha'] > -0.02: s += 10 # SCHD qui prende 10 invece di 0
+    
     # 4. CAGR 5Y (Max 15)
-    if m['CAGR'] > 0.12: s += 15
-    elif m['CAGR'] > 0.06: s += 7
+    if m['CAGR'] > 0.10: s += 15
+    elif m['CAGR'] > 0.05: s += 10 # SCHD qui prende 10
+    
     # 5. VOLATILITÀ (Max 10)
-    if m['Vol'] < 0.15: s += 10
+    if m['Vol'] < 0.15: s += 10    # SCHD qui prende 10
     elif m['Vol'] < 0.25: s += 5
-    # 6. BETA (Max 10)
-    if 0.8 <= m['Beta'] <= 1.2: s += 10
-    elif m['Beta'] < 1.5: s += 5
-    # 7. TRACKING ERROR (Max 10)
-    if m['TE'] < 0.03: s += 10
-    elif m['TE'] < 0.06: s += 5
+    
+    # 6. BETA (Max 10) - Premiare la bassa correlazione (Beta basso = meno rischio)
+    if 0.4 <= m['Beta'] <= 1.1: s += 10 # SCHD qui prende 10
+    elif m['Beta'] < 1.4: s += 5
+    
+    # 7. TRACKING ERROR (Max 10) - Ridurre importanza per ETF di strategia
+    if m['TE'] < 0.05: s += 10
+    elif m['TE'] < 0.12: s += 7    # SCHD qui prende 7 invece di 0
+    
     return int(s)
 
 def get_metric_color(val, category):
