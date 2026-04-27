@@ -45,7 +45,10 @@ TICKER_NAMES = {
     # Bond & Tassi
     "TLT": "Treasury 20Y+", "IEF": "Treasury 7-10Y", "SHY": "Treasury 1-3Y", "BND": "Total Bond Market", "AGG": "Aggregate Bond",
     "LQD": "Corp Bond Inv Grade", "HYG": "High Yield Bond", "^TNX": "Rendimento 10Y USA", "^TYX": "Rendimento 30Y USA", "^FVX": "Rendimento 5Y USA",
-    "BTP=F": "BTP Future", "FGBL=F": "Bund Future"
+    "BTP=F": "BTP Future", "FGBL=F": "Bund Future",
+    "VNQ": "Real Estate Globale (REITs)",
+    "REMX": "Terre Rare & Materiali Strategici (AI/Tech Proxy)",
+    "MCHI": "Azionario Cina"
 }
 
 MACRO_PANELS = {
@@ -345,6 +348,129 @@ def display_macro_correlation_page():
         fig_line.add_hline(y=0, line_dash="dash", line_color="gray")
         fig_line.update_yaxes(range=[-1.1, 1.1])
         st.plotly_chart(fig_line, use_container_width=True)
+
+def display_macro_war_room():
+    st.title("🌍 WAR ROOM (Dashboard Globale & Segnali)")
+    st.markdown("Pannello di controllo istituzionale: Regimi Economici, Liquidità e Flussi Geopolitici.")
+
+    # 1. Definizione Asset Sentinella
+    sentinels = ["^GSPC", "^VIX", "GC=F", "HG=F", "CL=F", "^TNX", "LQD", "HYG", "UUP", "VNQ", "REMX", "MCHI", "^GDAXI", "^IRX"]
+    
+    with st.spinner("Scansione Radar Globale in corso..."):
+        data = safe_get_adj_close(sentinels, period="1y")
+
+    if data.empty:
+        st.error("Errore scaricamento dati sentinella.")
+        return
+        
+    # Calcolo metriche correnti (ultimo giorno disponibile) e variazione
+    latest = data.iloc[-1]
+    prev = data.iloc[-20] if len(data) > 20 else data.iloc[0] # Variazione su 1 mese circa (20 gg)
+
+    # Metriche Istituzionali
+    # 1. Copper/Gold Ratio (Crescita vs Sicurezza)
+    if 'HG=F' in data and 'GC=F' in data:
+        copper_gold_ratio = latest['HG=F'] / latest['GC=F']
+        cg_prev = prev['HG=F'] / prev['GC=F']
+        cg_trend = "🟢 Espansione" if copper_gold_ratio > cg_prev else "🔴 Contrazione"
+    else:
+        copper_gold_ratio, cg_trend = 0, "N/A"
+
+    # 2. Yield Curve (10Y - 3M)
+    if '^TNX' in data and '^IRX' in data:
+        yield_spread = latest['^TNX'] - (latest['^IRX'] * 10) # ^IRX is slightly different scale sometimes
+        yield_status = "🔴 Inversa (Rischio Recessione)" if yield_spread < 0 else "🟢 Normale"
+    else:
+        yield_spread, yield_status = 0, "N/A"
+
+    # 3. Credit Spread (HYG vs LQD come proxy)
+    if 'HYG' in data and 'LQD' in data:
+        credit_ratio = latest['HYG'] / latest['LQD']
+        credit_prev = prev['HYG'] / prev['LQD']
+        credit_trend = "🟢 Risk-ON (Spreads in restringimento)" if credit_ratio > credit_prev else "🔴 Risk-OFF (Spreads in allargamento)"
+    else:
+        credit_trend = "N/A"
+
+    # 4. Dollaro (Liquidità Globale)
+    if 'UUP' in data:
+        usd_perf = (latest['UUP'] / prev['UUP']) - 1
+        usd_status = "🔴 Drenaggio Liquidità (USD Forte)" if usd_perf > 0 else "🟢 Immissione Liquidità (USD Debole)"
+    else:
+        usd_status = "N/A"
+
+    st.header("1️⃣ Diagnosi Regime Economico")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Copper/Gold Ratio", f"{copper_gold_ratio*100:.2f}", cg_trend)
+    with col2:
+        st.metric("Yield Curve (10Y-3M)", f"{yield_spread:.2f} bps", yield_status)
+    with col3:
+        st.metric("Corporate Credit", "HYG/LQD Proxy", credit_trend)
+    with col4:
+        vix_val = latest.get('^VIX', 0)
+        st.metric("VIX (Volatilità)", f"{vix_val:.2f}", "🔴 Alta" if vix_val > 20 else "🟢 Bassa")
+
+    # Regime Determination
+    regime = "Sconosciuto"
+    if cg_trend.startswith("🟢") and yield_spread > 0:
+        regime = "🌞 **Goldilocks / Espansione** (Crescita forte, tassi normali)"
+    elif cg_trend.startswith("🟢") and yield_spread < 0:
+        regime = "🔥 **Reflation / Late Cycle** (Crescita tiene, curva inversa)"
+    elif cg_trend.startswith("🔴") and latest.get('CL=F', 0) > prev.get('CL=F', 0):
+        regime = "🌪️ **Stagflation** (Crescita debole, inflazione persistente)"
+    elif cg_trend.startswith("🔴") and yield_spread < 0:
+        regime = "❄️ **Deflation / Recession** (Rallentamento evidente)"
+    else:
+        regime = "⚖️ **Transizione / Misto**"
+
+    st.info(f"**Regime Macro Attuale:** {regime}")
+
+    st.markdown("---")
+    st.header("2️⃣ Triangle: Liquidità & Systemic Risk")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("Stato della Liquidità Globale (USD Proxy):")
+        if usd_status.startswith("🔴"):
+            st.error(usd_status)
+        else:
+            st.success(usd_status)
+            
+        st.write("Stato del Mercato Obbligazionario (Tassi USA 10Y):")
+        tnx_perf = latest.get('^TNX', 0) - prev.get('^TNX', 0)
+        if tnx_perf > 0:
+            st.warning(f"Rendimenti in salita (+{tnx_perf:.2f} bps)")
+        else:
+            st.success(f"Rendimenti in discesa ({tnx_perf:.2f} bps)")
+
+    with c2:
+        if 'UUP' in data:
+            fig_usd = px.line(data['UUP'], title="Forza del Dollaro (UUP) - 1 Anno")
+            fig_usd.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig_usd, use_container_width=True)
+
+    st.markdown("---")
+    st.header("3️⃣ Geopolitical & Thematic Map (Ultimo Mese)")
+    
+    # Calcolo performance a 1 mese degli asset chiave
+    themes = {
+        '🇺🇸 USA (S&P 500)': '^GSPC', 
+        '🇪🇺 Europa (DAX)': '^GDAXI', 
+        '🇨🇳 Cina (MCHI)': 'MCHI', 
+        '🏠 Real Estate Globale': 'VNQ', 
+        '🤖 Terre Rare / AI': 'REMX'
+    }
+    
+    perf = {}
+    for name, ticker in themes.items():
+        if ticker in data:
+            perf[name] = ((latest[ticker] / prev[ticker]) - 1) * 100
+            
+    if perf:
+        df_perf = pd.DataFrame(list(perf.items()), columns=['Tema', 'Perf %']).sort_values('Perf %', ascending=True)
+        fig_bar = px.bar(df_perf, x='Perf %', y='Tema', orientation='h', 
+                         color='Perf %', color_continuous_scale='RdYlGn',
+                         title="Performance Relativa (Ultimi 20 gg)")
+        st.plotly_chart(fig_bar, use_container_width=True)
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
@@ -1055,7 +1181,7 @@ if uploaded_file is not None:
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
-menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)", "🕸️ Macro & Correlazione"])
+menu = st.sidebar.radio("Seleziona Vista:", ["🌍 WAR ROOM (Dashboard Globale)", "🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)", "🕸️ Macro & Correlazione"])
 
 with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False):
     st.write("Estrai automaticamente i ticker da Testo o da Link Web.")
@@ -6492,3 +6618,6 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
 
 elif menu == "🕸️ Macro & Correlazione":
     display_macro_correlation_page()
+
+elif menu == "🌍 WAR ROOM (Dashboard Globale)":
+    display_macro_war_room()
