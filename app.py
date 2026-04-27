@@ -21,12 +21,16 @@ import os, zipfile, shutil, glob
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
-INSTITUTIONAL_BASKETS = {
-    "ENERGY & METALS": ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "PA=F"],
-    "AGRICULTURAL": ["ZW=F", "ZC=F", "ZS=F", "KC=F", "CT=F"],
-    "GLOBAL EQUITY": ["^GSPC", "^IXIC", "^RUT", "^GDAXI", "^N225", "FTSEMIB.MI", "EEM"],
-    "FIXED INCOME & YIELDS": ["TLT", "IEF", "^TNX", "^TYX", "BTP=F", "FGBL=F"],
-    "CURRENCIES (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X"]
+MACRO_PANELS = {
+    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "PL=F", "PA=F"],
+    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "HO=F"],
+    "🏗️ METALLI INDUSTRIALI": ["HG=F", "ALI=F", "NI=F"],
+    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "ZS=F", "KC=F"],
+    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^DJI"],
+    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^IBEX"],
+    "🌍 EMERGENTI": ["EEM", "AAXJ", "ILF"],
+    "💵 VALUTE (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X"],
+    "📉 TASSI & BOND": ["TLT", "IEF", "^TNX", "^TYX"]
 }
 
 # --- STRATEGY PARAMETER GRID ---
@@ -208,47 +212,107 @@ def display_correlation_matrix(tickers):
     except:
         pass
 
+def safe_get_adj_close(tickers, period="5y"):
+    """Scarica i dati e gestisce in modo sicuro il MultiIndex per evitare KeyError."""
+    try:
+        data = yf.download(tickers, period=period, progress=False)
+        if data.empty:
+            return pd.DataFrame()
+        
+        # Se c'è un solo ticker, yfinance non restituisce un MultiIndex per colonna
+        if len(tickers) == 1:
+            if 'Adj Close' in data.columns: return data[['Adj Close']]
+            if 'Close' in data.columns: return data[['Close']]
+            return pd.DataFrame()
+
+        # Se MultiIndex, estraiamo il livello 'Adj Close'
+        if 'Adj Close' in data.columns.levels[0]:
+            return data['Adj Close']
+        elif 'Close' in data.columns.levels[0]:
+            return data['Close']
+        
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Errore nel download: {e}")
+        return pd.DataFrame()
+
 def display_macro_correlation_page():
-    st.title("🕸️ Global Macro Correlation Matrix")
-    st.markdown("Analisi dei regimi di mercato e correlazioni inter-asset (Dati 5Y)")
+    st.title("🕸️ Global Multi-Asset Aggregator")
+    st.markdown("Crea la tua matrice di regime incrociando qualsiasi classe di asset.")
 
-    tab1, tab2 = st.tabs(["Radar Istituzionale", "Laboratorio Custom"])
+    # --- SIDEBAR DI AGGREGAZIONE ---
+    st.sidebar.header("⚙️ Configurazione Aggregatore")
+    
+    # 1. Selezione Panieri Predefiniti
+    selected_panels = st.sidebar.multiselect(
+        "Aggiungi Panieri Istituzionali:",
+        options=list(MACRO_PANELS.keys()),
+        default=["🟡 METALLI PREZIOSI", "🛢️ ENERGIA"]
+    )
+    
+    # 2. Aggiunta Ticker Manuali
+    custom_tickers_raw = st.sidebar.text_input("Aggiungi Ticker Manuali (separati da virgola):", "AAPL, BTC-USD, NVDA")
+    
+    # --- COSTRUZIONE LISTA UNIFICATA ---
+    final_tickers = []
+    for panel in selected_panels:
+        final_tickers.extend(MACRO_PANELS[panel])
+    
+    if custom_tickers_raw:
+        custom_list = [x.strip().upper() for x in custom_tickers_raw.split(",") if x.strip()]
+        final_tickers.extend(custom_list)
+    
+    final_tickers = list(dict.fromkeys(final_tickers)) # Rimuove duplicati
 
-    with tab1:
-        basket_choice = st.selectbox("Seleziona Paniere Macro:", list(INSTITUTIONAL_BASKETS.keys()))
-        tickers = INSTITUTIONAL_BASKETS[basket_choice]
-        if st.button("Genera Analisi Regime"):
-            with st.spinner("Calcolo correlazioni in corso..."):
-                data = yf.download(tickers, period="5y")['Adj Close'].dropna()
-                returns = np.log(data / data.shift(1)).dropna()
-                corr_matrix = returns.corr()
-                
-                fig = px.imshow(corr_matrix, text_auto=".2f", aspect="auto",
-                               color_continuous_scale='RdBu_r', range_color=[-1, 1],
-                               title=f"Matrice di Correlazione: {basket_choice}")
-                st.plotly_chart(fig, use_container_width=True)
+    if not final_tickers:
+        st.warning("Seleziona almeno un paniere o inserisci un ticker.")
+        return
 
-    with tab2:
-        custom_input = st.text_input("Inserisci Ticker separati da virgola (es: AAPL, GC=F, TLT, ^TNX):", "")
-        if custom_input:
-            custom_tickers = [x.strip().upper() for x in custom_input.split(",")]
-            data_c = yf.download(custom_tickers, period="5y")['Adj Close'].dropna()
-            if not data_c.empty:
-                returns_c = data_c.pct_change().dropna()
-                
-                col_left, col_right = st.columns(2)
-                with col_left:
-                    st.subheader("Current Correlation")
-                    st.plotly_chart(px.imshow(returns_c.corr(), text_auto=".2f", color_continuous_scale='RdBu_r'), use_container_width=True)
-                
-                with col_right:
-                    st.subheader("Rolling Correlation (60D)")
-                    if len(custom_tickers) >= 2:
-                        t1 = custom_tickers[0]
-                        t2 = custom_tickers[1]
-                        rolling_corr = returns_c[t1].rolling(60).corr(returns_c[t2])
-                        st.line_chart(rolling_corr)
-                        st.caption(f"Correlazione mobile tra {t1} e {t2}")
+    # --- ELABORAZIONE DATI ---
+    with st.spinner(f"Analisi di {len(final_tickers)} asset in corso..."):
+        df_prices = safe_get_adj_close(final_tickers, period="5y")
+        
+        if df_prices.empty:
+            st.error("Impossibile recuperare i dati. Verifica i ticker inseriti.")
+            return
+
+        # Pulizia: rimuove ticker che non hanno dati
+        df_prices = df_prices.dropna(axis=1, how='all')
+        returns = np.log(df_prices / df_prices.shift(1)).dropna()
+
+        # --- VISUALIZZAZIONE ---
+        st.subheader(f"📊 Matrice di Correlazione Universale ({len(df_prices.columns)} Asset)")
+        
+        corr_matrix = returns.corr()
+        
+        fig = px.imshow(
+            corr_matrix,
+            text_auto=".2f",
+            aspect="auto",
+            color_continuous_scale='RdBu_r',
+            range_color=[-1, 1],
+            labels=dict(color="Correlazione")
+        )
+        fig.update_layout(height=800)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- ANALISI ROLLING (Focus tra due asset) ---
+        st.markdown("---")
+        st.subheader("🔄 Analisi Dinamica: Come cambia la correlazione nel tempo?")
+        col1, col2 = st.columns(2)
+        with col1:
+            asset_a = st.selectbox("Asset A", options=df_prices.columns, index=0)
+        with col2:
+            asset_b = st.selectbox("Asset B", options=df_prices.columns, index=min(1, len(df_prices.columns)-1))
+
+        if asset_a and asset_b:
+            window = st.slider("Finestra Mobile (Giorni)", 20, 252, 60)
+            rolling_corr = returns[asset_a].rolling(window).corr(returns[asset_b])
+            
+            fig_line = px.line(rolling_corr, title=f"Correlazione Rolling {window}gg: {asset_a} vs {asset_b}")
+            fig_line.add_hline(y=0, line_dash="dash", line_color="gray")
+            fig_line.update_yaxes(range=[-1, 1])
+            st.plotly_chart(fig_line, use_container_width=True)
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
