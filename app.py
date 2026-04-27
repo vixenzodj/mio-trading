@@ -48,7 +48,12 @@ TICKER_NAMES = {
     "BTP=F": "BTP Future", "FGBL=F": "Bund Future",
     "VNQ": "Real Estate Globale (REITs)",
     "REMX": "Terre Rare & Materiali Strategici (AI/Tech Proxy)",
-    "MCHI": "Azionario Cina"
+    "MCHI": "Azionario Cina",
+    "BTC-USD": "Bitcoin (Liquidità Speculativa)",
+    "USDJPY=X": "Dollaro/Yen (Carry Trade Gauge)",
+    "^VIX3M": "VIX a 3 Mesi (Coperture Istituzionali)",
+    "XLU": "Utilities (Settore Difensivo)",
+    "XLK": "Tecnologia (Settore Growth)"
 }
 
 MACRO_PANELS = {
@@ -354,7 +359,7 @@ def display_macro_war_room():
     st.markdown("Pannello di controllo istituzionale: Regimi Economici, Liquidità e Flussi Geopolitici.")
 
     # 1. Definizione Asset Sentinella
-    sentinels = ["^GSPC", "^VIX", "GC=F", "HG=F", "CL=F", "^TNX", "LQD", "HYG", "UUP", "VNQ", "REMX", "MCHI", "^GDAXI", "^IRX"]
+    sentinels = ["^GSPC", "^VIX", "GC=F", "HG=F", "CL=F", "^TNX", "LQD", "HYG", "UUP", "VNQ", "REMX", "MCHI", "^GDAXI", "^IRX", "BTC-USD", "USDJPY=X", "^VIX3M", "XLU", "XLK"]
     
     with st.spinner("Scansione Radar Globale in corso..."):
         data = safe_get_adj_close(sentinels, period="1y")
@@ -362,10 +367,32 @@ def display_macro_war_room():
     if data.empty:
         st.error("Errore scaricamento dati sentinella.")
         return
+
+    # Helpers per replicare "get_stat" dalla richiesta utente.
+    # Non calcoleremo MA50 in loco, possiamo approssimare con SMA a 50 giorni (data[ticker].rolling(50).mean().iloc[-1])
+    def get_stat(ticker, stat_type):
+        if ticker not in data: return np.nan
+        ts = data[ticker].dropna()
+        if ts.empty: return np.nan
         
+        if stat_type == "curr":
+            return ts.iloc[-1]
+        elif stat_type == "prev":
+            # circa un mese fa
+            return ts.iloc[-20] if len(ts) > 20 else ts.iloc[0]
+        elif stat_type == "ma50":
+            return ts.rolling(50).mean().iloc[-1] if len(ts) >= 50 else ts.mean()
+        return np.nan
+
     # Calcolo metriche correnti (ultimo giorno disponibile) e variazione
     latest = data.iloc[-1]
     prev = data.iloc[-20] if len(data) > 20 else data.iloc[0] # Variazione su 1 mese circa (20 gg)
+
+    sp500_curr = get_stat("^GSPC", "curr")
+    sp500_ma50 = get_stat("^GSPC", "ma50")
+    sp500_bull = sp500_curr > sp500_ma50 if pd.notna(sp500_curr) and pd.notna(sp500_ma50) else True
+    
+    inflation_up = get_stat("CL=F", "curr") > get_stat("CL=F", "prev")
 
     # Metriche Istituzionali
     # 1. Copper/Gold Ratio (Crescita vs Sicurezza)
@@ -425,6 +452,56 @@ def display_macro_war_room():
 
     st.info(f"**Regime Macro Attuale:** {regime}")
 
+    # --- NUOVE METRICHE QUANTITATIVE ---
+    # A. LIQUIDITÀ SPECULATIVA (BTC Momentum)
+    btc_curr = get_stat("BTC-USD", "curr"); btc_ma50 = get_stat("BTC-USD", "ma50")
+    btc_risk_on = btc_curr > btc_ma50 if pd.notna(btc_curr) else False
+
+    # B. CARRY TRADE GAUGE (Lo Yen come segnale di De-leveraging)
+    usdjpy_curr = get_stat("USDJPY=X", "curr"); usdjpy_prev = get_stat("USDJPY=X", "prev")
+    carry_unwind = (usdjpy_curr < usdjpy_prev) and not sp500_bull if pd.notna(usdjpy_curr) else False
+
+    # C. VIX TERM STRUCTURE (Smart Money Hedging)
+    vix_curr = get_stat("^VIX", "curr"); vix3m_curr = get_stat("^VIX3M", "curr")
+    vix_stress = vix_curr > vix3m_curr if pd.notna(vix_curr) and pd.notna(vix3m_curr) else False
+
+    # D. ROTAZIONE GROWTH VS VALUE (XLK / XLU)
+    xlk_curr = get_stat("XLK", "curr"); xlu_curr = get_stat("XLU", "curr")
+    xlk_ma50 = get_stat("XLK", "ma50"); xlu_ma50 = get_stat("XLU", "ma50")
+    if pd.notna(xlk_curr) and pd.notna(xlu_curr) and xlu_curr > 0 and xlu_ma50 > 0:
+        growth_vs_def = (xlk_curr / xlu_curr) > (xlk_ma50 / xlu_ma50)
+    else:
+        growth_vs_def = False
+
+    # --- SEZIONE VISIVA AGGIUNTIVA NELLA DASHBOARD ---
+    st.markdown("---")
+    st.subheader("🕵️ Analisi dei Flussi Invisibili (Smart Money)")
+    m1, m2, m3 = st.columns(3)
+
+    with m1:
+        status_btc = "🟢 LIQUIDITÀ IN ESPANSIONE" if btc_risk_on else "🔴 LIQUIDITÀ IN CONTRAZIONE"
+        if pd.notna(btc_curr):
+            st.metric("Bitcoin Proxy", f"${btc_curr:,.0f}", delta=status_btc)
+            st.write("Indica se il denaro 'speculativo' sta entrando o uscendo dal sistema.")
+        else:
+            st.metric("Bitcoin Proxy", "N/A")
+
+    with m2:
+        status_yen = "🔴 DE-LEVERAGING IN CORSO" if carry_unwind else "🟢 LEVA STABILE"
+        if pd.notna(usdjpy_curr):
+            st.metric("Yen Carry Trade", f"{usdjpy_curr:.2f} ¥", delta=status_yen, delta_color="inverse")
+            st.write("Se lo Yen si rafforza troppo, i fondi hedge stanno chiudendo le posizioni a leva.")
+        else:
+             st.metric("Yen Carry Trade", "N/A")
+
+    with m3:
+        status_vix = "🔴 PANICO ISTITUZIONALE" if vix_stress else "🟢 COPERTURE NORMALI"
+        if pd.notna(vix_curr) and pd.notna(vix3m_curr) and vix3m_curr > 0:
+            st.metric("VIX Curve (Spot/3M)", f"Ratio: {vix_curr/vix3m_curr:.2f}", delta=status_vix, delta_color="inverse")
+            st.write("Indica se le grandi banche stanno comprando 'assicurazioni' contro un crollo.")
+        else:
+             st.metric("VIX Curve (Spot/3M)", "N/A")
+
     st.markdown("---")
     st.header("2️⃣ Triangle: Liquidità & Systemic Risk")
     c1, c2 = st.columns(2)
@@ -444,7 +521,7 @@ def display_macro_war_room():
 
     with c2:
         if 'UUP' in data:
-            fig_usd = px.line(data['UUP'], title="Forza del Dollaro (UUP) - 1 Anno")
+            fig_usd = px.line(data['UUP'].dropna(), title="Forza del Dollaro (UUP) - 1 Anno")
             fig_usd.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0))
             st.plotly_chart(fig_usd, use_container_width=True)
 
@@ -462,7 +539,7 @@ def display_macro_war_room():
     
     perf = {}
     for name, ticker in themes.items():
-        if ticker in data:
+        if ticker in data and pd.notna(latest.get(ticker)) and pd.notna(prev.get(ticker)) and prev.get(ticker) > 0:
             perf[name] = ((latest[ticker] / prev[ticker]) - 1) * 100
             
     if perf:
@@ -471,6 +548,30 @@ def display_macro_war_room():
                          color='Perf %', color_continuous_scale='RdYlGn',
                          title="Performance Relativa (Ultimi 20 gg)")
         st.plotly_chart(fig_bar, use_container_width=True)
+
+    # --- SEZIONE FINALE: BUSSOLA DELL'INVESTITORE ---
+    st.markdown("---")
+    st.header("🎯 Asset Allocation Strategica Suggerita")
+    col_advice, col_assets = st.columns([1, 1])
+
+    with col_advice:
+        if not sp500_bull and vix_stress:
+            st.error("### POSIZIONE: DIFENSIVA TOTALE (Capital Preservation)")
+            advice = ["Aumentare Cash e Oro", "Comprare Bond a lunga scadenza (TLT)", "Ridurre esposizione Tech e Cina"]
+        elif sp500_bull and growth_vs_def and btc_risk_on:
+            st.success("### POSIZIONE: AGGRESSIVA (Risk-On Alpha)")
+            advice = ["Focus su Tech (XLK) e Terre Rare (REMX)", "Mantenere posizioni su Bitcoin", "Sottopesare i Bond"]
+        elif inflation_up:
+            st.warning("### POSIZIONE: PROTEZIONE INFLATTIVA")
+            advice = ["Focus su Commodity (Petrolio/Rame)", "Titoli Minerari (GDX/XME)", "Evitare obbligazioni a tasso fisso"]
+        else:
+            st.info("### POSIZIONE: BILANCIATA (Wait & See)")
+            advice = ["Mantenere posizioni core", "Aumentare esposizione Real Estate (VNQ) se i tassi scendono", "Monitorare lo Yen"]
+
+    with col_assets:
+        st.write("**Asset su cui puntare ora:**")
+        for item in advice:
+            st.write(f"- {item}")
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
