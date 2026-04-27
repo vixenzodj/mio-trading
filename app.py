@@ -240,20 +240,33 @@ def display_correlation_matrix(tickers):
         pass
 
 def safe_get_adj_close(tickers, period="5y"):
-    """Scarica i dati e gestisce in modo sicuro il MultiIndex per evitare KeyError."""
+    """Scarica i dati risolvendo il problema di Adj Close per Indici e Futures."""
     try:
         data = yf.download(tickers, period=period, progress=False)
         if data.empty: return pd.DataFrame()
         
-        # Estrazione Prezzi (gestione MultiIndex)
+        # Gestione singolo ticker
         if len(tickers) == 1:
-            if 'Adj Close' in data.columns: df = data[['Adj Close']]
-            elif 'Close' in data.columns: df = data[['Close']]
-            else: return pd.DataFrame()
+            if 'Adj Close' in data.columns and not data['Adj Close'].isna().all().all():
+                df = data[['Adj Close']]
+            elif 'Close' in data.columns:
+                df = data[['Close']]
+            else:
+                return pd.DataFrame()
+            df.columns = tickers # Rinomina per coerenza
         else:
-            if 'Adj Close' in data.columns.levels[0]: df = data['Adj Close']
-            elif 'Close' in data.columns.levels[0]: df = data['Close']
-            else: return pd.DataFrame()
+            # Gestione MultiIndex: Indici e Futures NON hanno Adj Close.
+            if 'Close' in data.columns.levels[0]:
+                df_close = data['Close'].copy()
+            else:
+                return pd.DataFrame()
+            
+            if 'Adj Close' in data.columns.levels[0]:
+                df_adj = data['Adj Close'].copy()
+                # FUSIONE CHIRURGICA: Usa Adj Close, se vuoto (come per ^TNX o BTP=F) usa il Close.
+                df = df_adj.combine_first(df_close)
+            else:
+                df = df_close
         
         # LOGICA SALVA-BOND: Riempie i buchi (max 3 giorni) prima di cancellare i NaN
         # Questo permette di allineare bond e azioni anche se hanno festività diverse
@@ -300,6 +313,12 @@ def display_macro_correlation_page():
 
         # Rimuove righe/colonne completamente vuote (se un ticker ha fallito del tutto)
         corr_matrix = corr_matrix.dropna(axis=0, how='all').dropna(axis=1, how='all')
+
+        # --- FIX KEYERROR: PROTEZIONE MATRICE VUOTA ---
+        if corr_matrix.empty or len(corr_matrix.columns) < 2:
+            st.warning("⚠️ Dati storici insufficienti per generare la matrice su questi specifici asset (possibile mancanza di storico condiviso). Prova ad aggiungere altri strumenti o usa asset più comuni.")
+            return
+        # ----------------------------------------------
 
         st.subheader(f"📊 Matrice di Correlazione Universale ({len(corr_matrix.columns)} Asset attivi)")
         
