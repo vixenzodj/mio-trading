@@ -492,7 +492,9 @@ def display_macro_war_room():
         f1, f2 = st.columns(2)
         with f1:
             ratio_geo = get_stat("^GSPC", "curr") / get_stat("MCHI", "curr")
-            st.write(f"**USA vs CINA:** {'L\\'America domina' if usa_vs_china else 'La Cina sta recuperando'}")
+            # Correzione SyntaxError: calcolo il messaggio fuori dalla f-string
+            msg_geo = "L'America domina" if usa_vs_china else "La Cina sta recuperando"
+            st.write(f"**USA vs CINA:** {msg_geo}")
             st.progress(0.8 if usa_vs_china else 0.4)
             st.caption("Se la Cina recupera, i flussi istituzionali stanno uscendo dagli USA perché troppo cari.")
         with f2:
