@@ -359,15 +359,19 @@ def display_macro_correlation_page():
         st.plotly_chart(fig_line, use_container_width=True)
 
 def display_macro_war_room():
-    st.title("🌍 GLOBAL MACRO COMMAND CENTER")
-    st.info("Sistema di Analisi Istituzionale: Flussi Invisibili, Salute Molecolare e Strategia Operativa.")
+    st.title("🌐 QUANTUM MACRO COMMAND CENTER")
+    st.info("Sistema Istituzionale Unificato: Economia Reale, Flussi Ombra e Asset Allocation Dinamica.")
 
-    # --- 1. DOWNLOAD DATI SENTINELLA ---
+    # --- 1. MOTORE DATI (Tutte le sentinelle) ---
     sentinels = [
-        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "VNQ", "TLT", "IEF", "BND", "TIP", "HG=F", "GC=F", "BTC-USD", "USDJPY=X", "^VIX", "^VIX3M", "RSP", "XLK", "XLU"
+        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK",   # Equity & Geopolitica
+        "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND",  # Tassi & Bond
+        "GC=F", "HG=F", "CL=F", "TIP",               # Commodities & Inflazione
+        "REMX", "VNQ", "BTC-USD", "USDJPY=X",        # Real Estate, Tech, Crypto, Forex
+        "^VIX", "^VIX3M", "RSP", "XLK", "XLU"        # Breadth & Sentiment
     ]
 
-    with st.spinner("Analisi dei flussi globali in corso..."):
+    with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
         df = safe_get_adj_close(sentinels, period="1y")
         if df.empty:
             st.error("Errore nel recupero dati.")
@@ -381,124 +385,124 @@ def display_macro_war_room():
             if st_type == "prev": return s.iloc[-21]
             if st_type == "ma50": return s.rolling(50).mean().iloc[-1]
 
-        # --- CALCOLI NUOVE LOGICHE ---
-        # Mappa Globale & Barometro Industriale
-        copper_gold_ratio = get_stat("HG=F") / get_stat("GC=F")
-        copper_gold_ma = get_stat("HG=F", "ma50") / get_stat("GC=F", "ma50")
-        is_industrial_strong = copper_gold_ratio > copper_gold_ma
+        # --- 2. ELABORAZIONE QUANTISTICA (Tutte le metriche) ---
         
-        re_status = get_stat("VNQ") > get_stat("VNQ", "ma50")
-        china_status = get_stat("MCHI") > get_stat("MCHI", "ma50")
-        europe_status = get_stat("^GDAXI") > get_stat("^GDAXI", "ma50")
-        us_status = get_stat("^GSPC") > get_stat("^GSPC", "ma50")
+        # A. Livello Macro Fisico
+        us_bull = get_stat("^GSPC", "curr") > get_stat("^GSPC", "ma50")
+        re_bull = get_stat("VNQ", "curr") > get_stat("VNQ", "ma50")
+        china_bull = get_stat("MCHI", "curr") > get_stat("MCHI", "ma50")
+        eur_bull = get_stat("^GDAXI", "curr") > get_stat("^GDAXI", "ma50")
+        
+        # Barometro Industriale (Rame/Oro) -> Crescita vera o finta?
+        cu_au_ratio = get_stat("HG=F", "curr") / get_stat("GC=F", "curr")
+        cu_au_ma = get_stat("HG=F", "ma50") / get_stat("GC=F", "ma50")
+        ind_growth = cu_au_ratio > cu_au_ma
 
-        # Salute Molecolare
-        breadth_ratio = get_stat("RSP") / get_stat("^GSPC")
+        # B. Livello Molecolare & Salute
+        breadth_ratio = get_stat("RSP", "curr") / get_stat("^GSPC", "curr")
         breadth_ma = get_stat("RSP", "ma50") / get_stat("^GSPC", "ma50")
         is_healthy_breadth = breadth_ratio > breadth_ma
-        bond_stress = get_stat("BND") < get_stat("BND", "ma50")
-        inf_expect_ratio = get_stat("TIP") / get_stat("IEF")
+
+        bond_stress = get_stat("BND", "curr") < get_stat("BND", "ma50")
+        
+        inf_expect_ratio = get_stat("TIP", "curr") / get_stat("IEF", "curr")
         inf_expect_ma = get_stat("TIP", "ma50") / get_stat("IEF", "ma50")
         inflation_fear = inf_expect_ratio > inf_expect_ma
 
-        # --- 2. MOTORE DI CALCOLO (LOGICA ISTITUZIONALE) ---
-        # D. Shadow Flows
-        vix_ratio = get_stat("^VIX", "curr") / get_stat("^VIX3M", "curr") # >1 = Panico
-        carry_unwind = get_stat("USDJPY=X", "curr") < get_stat("USDJPY=X", "prev") # Yen forte = De-leveraging
-        btc_risk_on = get_stat("BTC-USD", "curr") > get_stat("BTC-USD", "ma50") # Liquidità speculativa
+        # C. Shadow Flows (Liquidità & Paura)
+        vix_ratio = get_stat("^VIX", "curr") / get_stat("^VIX3M", "curr") # >1 panico
+        carry_trade_risk = get_stat("USDJPY=X", "curr") < get_stat("USDJPY=X", "prev") # Yen forte
+        btc_liq = get_stat("BTC-USD", "curr") > get_stat("BTC-USD", "ma50")
 
-        # --- 3. DASHBOARD VISIVA: SEMAFORI E SPIEGAZIONI ---
-        # --- LIVELLO 1: MAPPA MACRO GLOBALE ---
-        st.header("🗺️ Mappa Macro Globale")
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1: st.metric("Azionario USA", f"{get_stat('^GSPC'):,.0f}", delta="🟢 BULL" if us_status else "🔴 BEAR")
-        with col2: st.metric("Real Estate", f"{get_stat('VNQ'):.2f}", delta="🟢 FORTE" if re_status else "🔴 DEBOLE")
-        with col3: st.metric("Barom. Ind.", f"{copper_gold_ratio:.4f}", delta="🟢 CRESCITA" if is_industrial_strong else "🔴 RECESSIONE")
-        with col4: st.metric("Cina (MCHI)", f"{get_stat('MCHI'):.2f}", delta="🟢 AFFLUSSO" if china_status else "🔴 FUGA")
-        with col5: st.metric("Europa (DAX)", f"{get_stat('^GDAXI'):,.0f}", delta="🟢 RECOVERY" if europe_status else "🔴 STAGNAZIONE")
+        # --- 3. UI LIVELLO 1: LA MAPPA GLOBALE ---
+        st.header("🗺️ Mappa Macro Globale (Fisica)")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            st.metric("Azionario USA", f"{get_stat('^GSPC'):,.0f}", delta="🟢 BULL" if us_bull else "🔴 BEAR")
+        with c2:
+            st.metric("Real Estate", f"${get_stat('VNQ'):.2f}", delta="🟢 FORTE" if re_bull else "🔴 DEBOLE")
+        with c3:
+            st.metric("Barom. Ind.", f"{cu_au_ratio:.4f}", delta="🟢 CRESCITA" if ind_growth else "🔴 RECESSIONE")
+        with c4:
+            st.metric("Cina (MCHI)", f"${get_stat('MCHI'):.2f}", delta="🟢 AFFLUSSO" if china_bull else "🔴 FUGA")
+        with c5:
+            st.metric("Europa (DAX)", f"{get_stat('^GDAXI'):,.0f}", delta="🟢 RECOVERY" if eur_bull else "🔴 STAGNAZIONE")
 
         st.markdown("---")
-        
-        # --- LIVELLO 2: SHADOW FLOWS & SALUTE (6 SEMAFORI CON SPIEGAZIONE) ---
-        st.subheader("🕵️ Analisi Flussi & Salute Molecolare")
-        r1_c1, r1_c2, r1_c3 = st.columns(3)
-        with r1_c1:
-            st.metric("Bitcoin Proxy", f"${get_stat('BTC-USD'):,.0f}", delta="🟢 RISK-ON" if btc_risk_on else "🔴 RISK-OFF")
-            with st.expander("Info"): st.write("Canarino della liquidità speculativa.")
-        with r1_c2:
-            st.metric("Yen Carry Trade", f"{get_stat('USDJPY=X'):.2f}", delta="🔴 DE-LEVERAGE" if carry_unwind else "🟢 STABILE", delta_color="inverse")
-            with st.expander("Info"): st.write("Se lo Yen sale (delta rosso), i grandi fondi stanno vendendo asset.")
-        with r1_c3:
-            st.metric("VIX Curve", f"Ratio: {vix_ratio:.2f}", delta="🔴 PANICO" if vix_ratio > 1 else "🟢 CALMA", delta_color="inverse")
-            with st.expander("Info"): st.write("Ratio > 1 indica coperture istituzionali massicce.")
 
-        r2_c1, r2_c2, r2_c3 = st.columns(3)
-        with r2_c1:
-            st.metric("Market Breadth", "SANA" if is_healthy_breadth else "FRAGILE", delta="🟢" if is_healthy_breadth else "🔴")
-            with st.expander("Info"): st.write("Rapporto RSP/SPY: indica se salgono tutti o solo i giganti.")
-        with r2_c2:
-            st.metric("Stress Debito", "ALTO" if bond_stress else "BASSO", delta="🔴" if bond_stress else "🟢", delta_color="inverse")
-            with st.expander("Info"): st.write("Analisi della stabilità dei Bond (BND).")
-        with r2_c3:
-            st.metric("Inflazione Attesa", "RIALZO" if inflation_fear else "STABILE", delta="🔴" if inflation_fear else "🟢", delta_color="inverse")
-            with st.expander("Info"): st.write("Rapporto TIP/IEF: cosa prevede il mercato obbligazionario.")
+        # --- 4. UI LIVELLO 2: SALUTE E FLUSSI OMBRA ---
+        st.subheader("🧬 Analisi Molecolare e Flussi Invisibili")
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            st.metric("Market Breadth", "SANA" if is_healthy_breadth else "FRAGILE", delta="🟢 OK" if is_healthy_breadth else "🔴 RISCHIO")
+            with st.expander("Cos'è?"): st.write("Rapporto RSP/SPY. Se rosso, il mercato sale solo grazie a pochi titoli giganti.")
+        with r2:
+            st.metric("Stress Debito", "ALTO" if bond_stress else "BASSO", delta="🔴 STRESS" if bond_stress else "🟢 OK", delta_color="inverse")
+            with st.expander("Cos'è?"): st.write("Se i bond scendono (rosso), i tassi salgono e il debito diventa insostenibile.")
+        with r3:
+            st.metric("Inflazione Attesa", "IN RIALZO" if inflation_fear else "STABILE", delta="🔴 ALLARME" if inflation_fear else "🟢 OK", delta_color="inverse")
+            with st.expander("Cos'è?"): st.write("TIP/IEF. Se rosso, il mercato si aspetta che l'inflazione rimanga alta a lungo.")
 
-        # --- 4. IL CERVELLO STRATEGICO: ASSET ALLOCATION ---
+        r4, r5, r6 = st.columns(3)
+        with r4:
+            st.metric("Bitcoin (Liquidità)", f"${get_stat('BTC-USD'):,.0f}", delta="🟢 AFFLUSSO" if btc_liq else "🔴 DEFLUSSO")
+            with st.expander("Cos'è?"): st.write("BTC è il sensore più veloce della liquidità globale speculativa.")
+        with r5:
+            st.metric("Yen Carry Trade", f"{get_stat('USDJPY=X'):.2f} ¥", delta="🔴 LEVA IN CHIUSURA" if carry_trade_risk else "🟢 STABILE", delta_color="inverse")
+            with st.expander("Cos'è?"): st.write("Se lo Yen si rafforza (rosso), i fondi vendono azioni per ripagare i debiti in Yen.")
+        with r6:
+            st.metric("VIX Curve", f"Ratio: {vix_ratio:.2f}", delta="🔴 PANICO Istituz. " if vix_ratio > 1 else "🟢 CALMA", delta_color="inverse")
+            with st.expander("Cos'è?"): st.write("Se > 1, le banche stanno comprando protezioni contro crolli imminenti.")
+
+        # --- 5. UI LIVELLO 3: IL CERVELLO CIO (STRATEGIA OLISTICA) ---
         st.markdown("---")
         st.header("🎯 Strategia Operativa Suggerita (CIO View)")
-        
-        # Logica di calcolo strategia
-        usa_vs_china = get_stat("^GSPC", "curr")/get_stat("MCHI", "curr") > get_stat("^GSPC", "ma50")/get_stat("MCHI", "ma50")
         
         col_strat, col_list = st.columns([1, 1])
         
         with col_strat:
-            if bond_stress and not is_healthy_breadth:
-                st.error("### 🛡️ MODALITÀ: DIFESA TOTALE")
-                st.write("**Diagnosi:** Il mercato è fragile, sostenuto da pochi titoli, e il mercato del debito sta soffrendo. Rischio di 'Flash Crash'.")
-                buy_list = ["Oro (GC=F)", "Cash (Dollaro UUP)", "Bond a breve termine (SHY)"]
-                sell_list = ["Azioni USA (S&P 500)", "Tecnologia (XLK)", "Real Estate (VNQ)"]
+            # IL SISTEMA QUANTISTICO INCROCIA TUTTO
+            if bond_stress and (not is_healthy_breadth or vix_ratio > 1) and carry_trade_risk:
+                st.error("### 🚨 CRASH RISK: DE-LEVERAGING")
+                st.write("**Diagnosi:** I fondi stanno liquidando in massa (Yen forte, VIX alto). Il mercato del debito è sotto stress grave.")
+                buy_list = ["Cash (Dollaro UUP)", "Bond a breve termine (SHY)"]
+                sell_list = ["Tutto l'azionario", "Real Estate (VNQ)", "Criptovalute"]
             
-            elif not bond_stress and is_healthy_breadth and btc_risk_on:
-                st.success("### 🚀 MODALITÀ: AGGRESSIVA (RISK-ON)")
-                st.write("**Diagnosi:** Crescita sana e distribuita. La liquidità abbonda. È il momento di cavalcare i trend.")
-                buy_list = ["Tecnologia & AI (XLK)", "Terre Rare (REMX)", "Bitcoin"]
-                sell_list = ["Oro", "Utilities (XLU)", "Cash"]
+            elif inflation_fear and not ind_growth and us_bull:
+                st.warning("### 🏗️ STAGFLAZIONE IN ARRIVO")
+                st.write("**Diagnosi:** L'inflazione sale ma la vera crescita industriale (Rame) scende. Il mercato USA sta salendo per inerzia.")
+                buy_list = ["Oro (GC=F)", "Materie prime (DBC)", "Bond Inflazione (TIP)"]
+                sell_list = ["Tech iper-valutato", "Bond a lungo termine (TLT)"]
+
+            elif us_bull and is_healthy_breadth and btc_liq and ind_growth and not bond_stress:
+                st.success("### 🚀 GOLDILOCKS: FULL RISK-ON")
+                st.write("**Diagnosi:** Allineamento perfetto. Economia forte, liquidità in entrata, partecipazione del mercato ampia.")
+                buy_list = ["Tecnologia & AI (XLK)", "Real Estate (VNQ)", "Bitcoin", "Small Caps (IWM)"]
+                sell_list = ["Cash", "Asset Difensivi (Utilities)"]
             
-            elif inflation_fear:
-                st.warning("### 🏗️ MODALITÀ: PROTEZIONE INFLATTIVA")
-                st.write("**Diagnosi:** L'inflazione sta mangiando i rendimenti. Spostarsi su asset reali.")
-                buy_list = ["Petrolio (CL=F)", "Rame (HG=F)", "Bond Inflazione (TIP)", "Cina (MCHI) se sottovalutata"]
-                sell_list = ["Bond Tradizionali (TLT)", "Titoli Growth ad alto debito"]
-            
+            elif not us_bull and (china_bull or eur_bull):
+                st.info("### ⚖️ ROTAZIONE GLOBALE")
+                st.write("**Diagnosi:** Gli USA faticano, ma i capitali si stanno spostando in altri continenti.")
+                buy_list = ["Cina (MCHI) se verde", "Europa (VGK) se verde", "Value Stocks"]
+                sell_list = ["Azioni USA Mega-cap"]
+                
             else:
-                st.info("### ⚖️ MODALITÀ: ROTAZIONE STRUTTURALE")
-                st.write("**Diagnosi:** Il mercato sta cambiando cavallo. Probabile rotazione verso Europa o Cina.")
-                buy_list = ["Europa (VGK/DAX)", "Cina (MCHI)", "Value Stocks"]
-                sell_list = ["Nasdaq (^IXIC)", "Titoli ipercomprati"]
+                st.info("### 🧭 FASE DI TRANSIZIONE (STOCK PICKING)")
+                st.write("**Diagnosi:** Segnali misti. Non ci sono trend macro dominanti. Affidarsi all'analisi fondamentale delle singole aziende.")
+                buy_list = ["Aziende con forti dividendi", "Settori difensivi (XLU)"]
+                sell_list = ["Aziende ad alto debito", "Meme stocks"]
 
         with col_list:
-            st.markdown("#### ✅ COSA COMPRARE / INCREMENTARE")
+            st.markdown("#### ✅ COSA ACCUMULARE")
             for item in buy_list: st.write(f"- {item}")
-            st.markdown("#### ❌ COSA VENDERE / EVITARE")
+            st.markdown("#### ❌ DA COSA FUGGIRE")
             for item in sell_list: st.write(f"- {item}")
 
-        # --- 5. GEOPOLITICA E TEMI CALDI ---
-        st.markdown("---")
-        st.subheader("🌐 Focus Geopolitico & AI Hardware")
-        f1, f2 = st.columns(2)
-        with f1:
-            ratio_geo = get_stat("^GSPC", "curr") / get_stat("MCHI", "curr")
-            # Correzione SyntaxError: calcolo il messaggio fuori dalla f-string
-            msg_geo = "L'America domina" if usa_vs_china else "La Cina sta recuperando"
-            st.write(f"**USA vs CINA:** {msg_geo}")
-            st.progress(0.8 if usa_vs_china else 0.4)
-            st.caption("Se la Cina recupera, i flussi istituzionali stanno uscendo dagli USA perché troppo cari.")
-        with f2:
-            remx_perf = ((get_stat("REMX", "curr") / get_stat("REMX", "prev")) - 1) * 100
-            st.write(f"**Terre Rare (AI/Tech Hardware):** {remx_perf:+.2f}% (Mensile)")
-            if remx_perf > 5: st.success("Boom Hardware: L'AI ha fondamenta fisiche solide.")
-            elif remx_perf < -5: st.error("Allarme Tech: I materiali per l'AI stanno scendendo, possibile bolla software.")
+        # Sezione Geopolitica Veloce
+        usa_vs_china = get_stat("^GSPC", "curr") / get_stat("MCHI", "curr") > get_stat("^GSPC", "ma50") / get_stat("MCHI", "ma50")
+        msg_geo = "L'America domina i flussi" if usa_vs_china else "La Cina sta attraendo capitali"
+        st.write(f"**Indice di Forza Relativa (USA vs CINA):** {msg_geo}")
+        st.progress(0.8 if usa_vs_china else 0.4)
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
