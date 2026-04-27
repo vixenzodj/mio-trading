@@ -21,6 +21,14 @@ import os, zipfile, shutil, glob
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
+INSTITUTIONAL_BASKETS = {
+    "ENERGY & METALS": ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "PA=F"],
+    "AGRICULTURAL": ["ZW=F", "ZC=F", "ZS=F", "KC=F", "CT=F"],
+    "GLOBAL EQUITY": ["^GSPC", "^IXIC", "^RUT", "^GDAXI", "^N225", "FTSEMIB.MI", "EEM"],
+    "FIXED INCOME & YIELDS": ["TLT", "IEF", "^TNX", "^TYX", "BTP=F", "FGBL=F"],
+    "CURRENCIES (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X"]
+}
+
 # --- STRATEGY PARAMETER GRID ---
 STRATEGY_PARAM_GRID = {
     "RSI Mean Reversion": {'period': range(10, 22, 2), 'ob': range(65, 85, 5), 'os': range(20, 40, 5)},
@@ -199,6 +207,48 @@ def display_correlation_matrix(tickers):
         st.plotly_chart(fig, use_container_width=True)
     except:
         pass
+
+def display_macro_correlation_page():
+    st.title("🕸️ Global Macro Correlation Matrix")
+    st.markdown("Analisi dei regimi di mercato e correlazioni inter-asset (Dati 5Y)")
+
+    tab1, tab2 = st.tabs(["Radar Istituzionale", "Laboratorio Custom"])
+
+    with tab1:
+        basket_choice = st.selectbox("Seleziona Paniere Macro:", list(INSTITUTIONAL_BASKETS.keys()))
+        tickers = INSTITUTIONAL_BASKETS[basket_choice]
+        if st.button("Genera Analisi Regime"):
+            with st.spinner("Calcolo correlazioni in corso..."):
+                data = yf.download(tickers, period="5y")['Adj Close'].dropna()
+                returns = np.log(data / data.shift(1)).dropna()
+                corr_matrix = returns.corr()
+                
+                fig = px.imshow(corr_matrix, text_auto=".2f", aspect="auto",
+                               color_continuous_scale='RdBu_r', range_color=[-1, 1],
+                               title=f"Matrice di Correlazione: {basket_choice}")
+                st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        custom_input = st.text_input("Inserisci Ticker separati da virgola (es: AAPL, GC=F, TLT, ^TNX):", "")
+        if custom_input:
+            custom_tickers = [x.strip().upper() for x in custom_input.split(",")]
+            data_c = yf.download(custom_tickers, period="5y")['Adj Close'].dropna()
+            if not data_c.empty:
+                returns_c = data_c.pct_change().dropna()
+                
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.subheader("Current Correlation")
+                    st.plotly_chart(px.imshow(returns_c.corr(), text_auto=".2f", color_continuous_scale='RdBu_r'), use_container_width=True)
+                
+                with col_right:
+                    st.subheader("Rolling Correlation (60D)")
+                    if len(custom_tickers) >= 2:
+                        t1 = custom_tickers[0]
+                        t2 = custom_tickers[1]
+                        rolling_corr = returns_c[t1].rolling(60).corr(returns_c[t2])
+                        st.line_chart(rolling_corr)
+                        st.caption(f"Correlazione mobile tra {t1} e {t2}")
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
@@ -909,7 +959,7 @@ if uploaded_file is not None:
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
-menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)"])
+menu = st.sidebar.radio("Seleziona Vista:", ["🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)", "🕸️ Macro & Correlazione"])
 
 with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False):
     st.write("Estrai automaticamente i ticker da Testo o da Link Web.")
@@ -6343,3 +6393,6 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
                 st.info(f"Copia '{top_t}' e torna nella sezione TERMINALE per l'analisi tecnica completa.")
         else:
             st.warning("Nessuna azienda soddisfa i criteri impostati. Prova ad abbassare il Margine di Sicurezza o il ROE minimo.")
+
+elif menu == "🕸️ Macro & Correlazione":
+    display_macro_correlation_page()
