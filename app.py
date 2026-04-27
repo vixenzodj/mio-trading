@@ -23,24 +23,41 @@ os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
 # Mappatura Ticker -> Nome per una leggibilità professionale
 TICKER_NAMES = {
+    # Metalli & Energia
     "GC=F": "Oro (Future)", "SI=F": "Argento (Future)", "PL=F": "Platino", "PA=F": "Palladio", "GLD": "Oro (ETF)", "SLV": "Argento (ETF)",
-    "CL=F": "Petrolio WTI", "BZ=F": "Petrolio Brent", "NG=F": "Gas Naturale", "XLE": "Energia USA", "HG=F": "Rame", "CPER": "Rame (ETF)",
-    "DBB": "Metalli Industriali", "ZW=F": "Grano", "ZC=F": "Mais", "ZS=F": "Soia", "KC=F": "Caffè", "^GSPC": "S&P 500", "^IXIC": "Nasdaq 100",
-    "FTSEMIB.MI": "FTSE MIB", "^GDAXI": "DAX 40", "UUP": "Dollaro Index (ETF)", "EURUSD=X": "Euro/Dollaro", "JPYUSD=X": "Yen/Dollaro",
-    "TLT": "Bond USA 20Y+", "IEF": "Bond USA 7-10Y", "^TNX": "Rendimento 10Y USA", "BTP=F": "BTP Future (Ita)", "FGBL=F": "Bund Future (Ger)",
-    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "NVDA": "Nvidia", "AAPL": "Apple", "HYG": "Bond High Yield", "LQD": "Bond Investment Grade"
+    "SILJ": "Silver Miners Jr", "GDX": "Gold Miners ETF", "GDXJ": "Gold Miners Jr", "CL=F": "Petrolio WTI", "BZ=F": "Petrolio Brent",
+    "NG=F": "Gas Naturale", "HO=F": "Heating Oil", "RB=F": "Benzina RBOB", "XLE": "Energia USA (ETF)", "XOP": "Oil & Gas Exploration",
+    "UNG": "Gas Naturale (ETF)", "DBO": "Petrolio (ETF)", "HG=F": "Rame (Future)", "CPER": "Rame (ETF)", "DBB": "Base Metals (ETF)",
+    "XME": "Metals & Mining", "JJU": "Alluminio (ETF)", "JJN": "Nickel (ETF)", "PICK": "Global Mining", "LIT": "Litio (ETF)", "REMX": "Terre Rare",
+    # Agricoltura
+    "ZW=F": "Grano", "ZC=F": "Mais", "ZS=F": "Soia", "KC=F": "Caffè", "CT=F": "Cotone", "CC=F": "Cacao", "SB=F": "Zucchero", "DBA": "Agricoltura (ETF)", "MOO": "Agribusiness",
+    # Indici & Equity
+    "^GSPC": "S&P 500", "^IXIC": "Nasdaq Composite", "^RUT": "Russell 2000", "^DJI": "Dow Jones", "^VIX": "Indice Volatilità", "DIA": "Dow Jones (ETF)",
+    "QQQ": "Nasdaq 100 (ETF)", "IWM": "Russell 2000 (ETF)", "VTI": "US Total Market", "^GDAXI": "DAX 40", "FTSEMIB.MI": "FTSE MIB",
+    "^FCHI": "CAC 40", "^IBEX": "IBEX 35", "^FTSE": "FTSE 100", "^STOXX50E": "Euro Stoxx 50", "EWG": "Germania (ETF)", "EWI": "Italia (ETF)", "EWQ": "Francia (ETF)",
+    # Emergenti
+    "EEM": "Emerging Markets", "VWO": "Vanguard Emerging", "MCHI": "Cina (ETF)", "EPI": "India (ETF)", "INDA": "India iShares", "EWZ": "Brasile (ETF)",
+    "EWY": "Corea del Sud", "^N225": "Nikkei 225", "^HSI": "Hang Seng",
+    # Forex
+    "UUP": "Dollaro Index (ETF)", "EURUSD=X": "Euro/Dollaro", "JPYUSD=X": "Yen/Dollaro", "GBPUSD=X": "Sterlina/Dollaro", "AUDUSD=X": "Aussie/Dollaro",
+    "CADUSD=X": "Canadese/Dollaro", "CHFUSD=X": "Franco Svizzero/Dollaro", "NZDUSD=X": "Kiwi/Dollaro", "USDCNY=X": "Dollaro/Yuan", 
+    "USDBRL=X": "Dollaro/Real", "USDMXN=X": "Dollaro/Peso Mex", "USDTRY=X": "Dollaro/Lira Turca", "USDZAR=X": "Dollaro/Rand",
+    # Bond & Tassi
+    "TLT": "Treasury 20Y+", "IEF": "Treasury 7-10Y", "SHY": "Treasury 1-3Y", "BND": "Total Bond Market", "AGG": "Aggregate Bond",
+    "LQD": "Corp Bond Inv Grade", "HYG": "High Yield Bond", "^TNX": "Rendimento 10Y USA", "^TYX": "Rendimento 30Y USA", "^FVX": "Rendimento 5Y USA",
+    "BTP=F": "BTP Future", "FGBL=F": "Bund Future"
 }
 
 MACRO_PANELS = {
-    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "GLD", "SLV", "GDX"],
-    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "XLE", "XOP"],
-    "🏗️ METALLI INDUSTRIALI": ["HG=F", "CPER", "DBB", "XME", "PICK"],
-    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "KC=F", "DBA"],
-    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^VIX", "QQQ"],
-    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^FTSE", "EWI"],
-    "🌍 EMERGENTI": ["EEM", "VWO", "MCHI", "EWZ"],
-    "💵 VALUTE (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X"],
-    "📉 TASSI & BOND": ["TLT", "IEF", "^TNX", "HYG", "BTP=F", "FGBL=F", "AGG"]
+    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "PL=F", "PA=F", "GLD", "SLV", "SILJ", "GDX", "GDXJ"],
+    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "HO=F", "RB=F", "XLE", "XOP", "UNG", "DBO"],
+    "🏗️ METALLI INDUSTRIALI": ["HG=F", "CPER", "DBB", "XME", "JJU", "JJN", "PICK", "LIT", "REMX"],
+    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "ZS=F", "KC=F", "CT=F", "CC=F", "SB=F", "DBA", "MOO"],
+    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^DJI", "^VIX", "DIA", "QQQ", "IWM", "VTI"],
+    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^IBEX", "^FTSE", "^STOXX50E", "EWG", "EWI", "EWQ"],
+    "🌍 EMERGENTI & ASIA": ["EEM", "VWO", "MCHI", "EPI", "INDA", "EWZ", "EWY", "^N225", "^HSI"],
+    "💵 VALUTE (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X", "CADUSD=X", "CHFUSD=X", "NZDUSD=X", "USDCNY=X", "USDBRL=X", "USDMXN=X", "USDTRY=X", "USDZAR=X"],
+    "📉 TASSI & BOND": ["TLT", "IEF", "SHY", "BND", "AGG", "LQD", "HYG", "^TNX", "^TYX", "^FVX", "BTP=F", "FGBL=F"]
 }
 
 # --- STRATEGY PARAMETER GRID ---
@@ -247,88 +264,68 @@ def safe_get_adj_close(tickers, period="5y"):
         return pd.DataFrame()
 
 def display_macro_correlation_page():
-    st.title("🕸️ Global Multi-Asset Aggregator")
-    st.markdown("Monitoraggio in tempo reale dei regimi di mercato e delle rotazioni inter-asset.")
+    st.title("🕸️ Global Multi-Asset Aggregator (Full Engine)")
+    st.markdown("Analisi istituzionale dei regimi e delle correlazioni inter-market.")
 
-    # Sidebar di controllo
-    st.sidebar.header("⚙️ Macro Filter")
-    selected_panels = st.sidebar.multiselect(
-        "Seleziona Layer Macro:",
-        options=list(MACRO_PANELS.keys()),
-        default=["📉 TASSI & BOND", "🇺🇸 INDICI USA"]
-    )
+    # Sidebar
+    st.sidebar.header("⚙️ Macro Setup")
+    selected_panels = st.sidebar.multiselect("Seleziona Layer:", list(MACRO_PANELS.keys()), default=["📉 TASSI & BOND", "🇺🇸 INDICI USA"])
+    custom_raw = st.sidebar.text_input("Aggiungi Ticker (es. BTC-USD):", "")
     
-    custom_tickers_raw = st.sidebar.text_input("Ticker Aggiuntivi (es. BTC-USD, NVDA):", "")
-    
-    # Costruzione Ticker List
     final_tickers = []
-    for panel in selected_panels:
-        final_tickers.extend(MACRO_PANELS[panel])
-    
-    if custom_tickers_raw:
-        custom_list = [x.strip().upper() for x in custom_tickers_raw.split(",") if x.strip()]
-        final_tickers.extend(custom_list)
-    
+    for p in selected_panels: final_tickers.extend(MACRO_PANELS[p])
+    if custom_raw: final_tickers.extend([x.strip().upper() for x in custom_raw.split(",")])
     final_tickers = list(dict.fromkeys(final_tickers))
 
     if not final_tickers:
-        st.warning("Seleziona almeno un paniere per visualizzare i dati.")
+        st.warning("Seleziona almeno un paniere.")
         return
 
-    with st.spinner("Sincronizzazione dati inter-market..."):
-        # Usiamo safe_get_adj_close già presente o implementata
+    with st.spinner("Sincronizzazione database..."):
         df_prices = safe_get_adj_close(final_tickers, period="5y")
         
         if df_prices.empty:
-            st.error("Nessun dato recuperato. Verifica la connessione o i ticker.")
+            st.error("Dati non disponibili.")
             return
 
-        # FILTRO CHIRURGICO: Rimuove colonne con troppi NaN (>20%) o tutte vuote
-        # Questo risolve il problema dei Metalli Industriali che non appaiono
-        df_prices = df_prices.dropna(axis=1, thresh=int(len(df_prices) * 0.8))
+        # LOGICA ROBUSTA: Calcoliamo i rendimenti SENZA dropna globale
+        returns = df_prices.pct_change()
         
-        if df_prices.empty:
-            st.error("I ticker selezionati non hanno abbastanza dati storici per la correlazione.")
-            return
-
-        # TRASFORMAZIONE NOMI PER IL GRAFICO
-        # Creiamo etichette leggibili: "S&P 500 (^GSPC)"
+        # Rinominazione colonne con Nomi Estesi
         display_names = {t: f"{TICKER_NAMES.get(t, t)} ({t})" for t in df_prices.columns}
-        df_renamed = df_prices.rename(columns=display_names)
+        returns_renamed = returns.rename(columns=display_names)
 
-        returns = df_renamed.pct_change().dropna()
-        corr_matrix = returns.corr()
+        # Calcolo correlazione con metodo 'pairwise' (fondamentale per i Bond)
+        corr_matrix = returns_renamed.corr(method='pearson', min_periods=30)
 
-        # Heatmap Professionale
+        # Rimuove righe/colonne completamente vuote (se un ticker ha fallito del tutto)
+        corr_matrix = corr_matrix.dropna(axis=0, how='all').dropna(axis=1, how='all')
+
+        st.subheader(f"📊 Matrice di Correlazione Universale ({len(corr_matrix.columns)} Asset attivi)")
+        
         fig = px.imshow(
-            corr_matrix,
-            text_auto=".2f",
-            aspect="auto",
-            color_continuous_scale='RdBu_r',
-            range_color=[-1, 1],
-            title=f"Matrice di Correlazione Professionale (Nomi Estesi)"
+            corr_matrix, text_auto=".2f", aspect="auto", color_continuous_scale='RdBu_r', range_color=[-1, 1]
         )
-        fig.update_layout(height=850, margin=dict(l=0, r=0, b=0, t=40))
+        fig.update_layout(height=1000) # Matrice più grande per gestire i tanti ticker
         st.plotly_chart(fig, use_container_width=True)
 
-        # Sezione Analisi Dinamica (Rolling)
+        # Rolling Correlation
         st.markdown("---")
-        st.subheader("🔄 Analisi delle Divergenze (Rolling Correlation)")
-        c1, c2 = st.columns(2)
-        with c1:
-            a1 = st.selectbox("Asset Primario", options=df_renamed.columns, index=0)
-        with c2:
-            a2 = st.selectbox("Asset di Confronto", options=df_renamed.columns, index=min(1, len(df_renamed.columns)-1))
+        st.subheader("🔄 Analisi Dinamica (Rolling Correlation)")
+        col1, col2 = st.columns(2)
+        with col1:
+            a1 = st.selectbox("Asset A", options=corr_matrix.columns, index=0)
+        with col2:
+            a2 = st.selectbox("Asset B", options=corr_matrix.columns, index=min(1, len(corr_matrix.columns)-1))
 
-        window = st.select_slider("Finestra di osservazione (Giorni lavorativi):", options=[20, 40, 60, 120, 252], value=60)
+        window = st.slider("Finestra Mobile (Giorni)", 20, 252, 60)
+        # Calcolo rolling specifico tra i due asset selezionati
+        rolling_corr = returns_renamed[a1].rolling(window).corr(returns_renamed[a2])
         
-        rolling_corr = returns[a1].rolling(window).corr(returns[a2])
-        fig_roll = px.line(rolling_corr, title=f"Correlazione Mobile ({window}gg): {a1} vs {a2}")
-        fig_roll.add_hline(y=0, line_dash="dash", line_color="gray")
-        fig_roll.add_hline(y=0.7, line_dash="dot", line_color="red", annotation_text="Alta Correlazione")
-        fig_roll.add_hline(y=-0.7, line_dash="dot", line_color="green", annotation_text="Alta Decorrelazione")
-        fig_roll.update_yaxes(range=[-1.1, 1.1])
-        st.plotly_chart(fig_roll, use_container_width=True)
+        fig_line = px.line(rolling_corr, title=f"Correlazione Rolling {window}gg: {a1} vs {a2}")
+        fig_line.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig_line.update_yaxes(range=[-1.1, 1.1])
+        st.plotly_chart(fig_line, use_container_width=True)
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
