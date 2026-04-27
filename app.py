@@ -21,19 +21,26 @@ import os, zipfile, shutil, glob
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
+# Mappatura Ticker -> Nome per una leggibilità professionale
+TICKER_NAMES = {
+    "GC=F": "Oro (Future)", "SI=F": "Argento (Future)", "PL=F": "Platino", "PA=F": "Palladio", "GLD": "Oro (ETF)", "SLV": "Argento (ETF)",
+    "CL=F": "Petrolio WTI", "BZ=F": "Petrolio Brent", "NG=F": "Gas Naturale", "XLE": "Energia USA", "HG=F": "Rame", "CPER": "Rame (ETF)",
+    "DBB": "Metalli Industriali", "ZW=F": "Grano", "ZC=F": "Mais", "ZS=F": "Soia", "KC=F": "Caffè", "^GSPC": "S&P 500", "^IXIC": "Nasdaq 100",
+    "FTSEMIB.MI": "FTSE MIB", "^GDAXI": "DAX 40", "UUP": "Dollaro Index (ETF)", "EURUSD=X": "Euro/Dollaro", "JPYUSD=X": "Yen/Dollaro",
+    "TLT": "Bond USA 20Y+", "IEF": "Bond USA 7-10Y", "^TNX": "Rendimento 10Y USA", "BTP=F": "BTP Future (Ita)", "FGBL=F": "Bund Future (Ger)",
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "NVDA": "Nvidia", "AAPL": "Apple", "HYG": "Bond High Yield", "LQD": "Bond Investment Grade"
+}
+
 MACRO_PANELS = {
-    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "PL=F", "PA=F", "GLD", "SLV", "SILJ", "GDX", "GDXJ"],
-    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "HO=F", "RB=F", "XLE", "XOP", "UNG", "DBO"],
-    "🏗️ METALLI INDUSTRIALI": ["HG=F", "CPER", "DBB", "XME", "JJU", "JJN", "PICK", "LIT", "REMX"],
-    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "ZS=F", "KC=F", "CT=F", "CC=F", "SB=F", "DBA", "MOO"],
-    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^DJI", "^VIX", "DIA", "QQQ", "IWM", "VTI"],
-    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^IBEX", "^FTSE", "^STOXX50E", "EWG", "EWI", "EWQ"],
-    "🌍 EMERGENTI & ASIA": ["EEM", "VWO", "MCHI", "EPI", "INDA", "EWZ", "EWY", "^N225", "^HSI"],
-    "💵 VALUTE (FX)": [
-        "UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X", "CADUSD=X", 
-        "CHFUSD=X", "NZDUSD=X", "USDCNY=X", "USDBRL=X", "USDMXN=X", "USDTRY=X", "USDZAR=X"
-    ],
-    "📉 TASSI & BOND": ["TLT", "IEF", "SHY", "BND", "AGG", "LQD", "HYG", "^TNX", "^TYX", "^FVX", "BTP=F", "FGBL=F"]
+    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "GLD", "SLV", "GDX"],
+    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "XLE", "XOP"],
+    "🏗️ METALLI INDUSTRIALI": ["HG=F", "CPER", "DBB", "XME", "PICK"],
+    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "KC=F", "DBA"],
+    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^VIX", "QQQ"],
+    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^FTSE", "EWI"],
+    "🌍 EMERGENTI": ["EEM", "VWO", "MCHI", "EWZ"],
+    "💵 VALUTE (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X"],
+    "📉 TASSI & BOND": ["TLT", "IEF", "^TNX", "HYG", "BTP=F", "FGBL=F", "AGG"]
 }
 
 # --- STRATEGY PARAMETER GRID ---
@@ -219,28 +226,28 @@ def safe_get_adj_close(tickers, period="5y"):
     """Scarica i dati e gestisce in modo sicuro il MultiIndex per evitare KeyError."""
     try:
         data = yf.download(tickers, period=period, progress=False)
-        if data.empty:
-            return pd.DataFrame()
+        if data.empty: return pd.DataFrame()
         
-        # Se c'è un solo ticker, yfinance non restituisce un MultiIndex per colonna
+        # Estrazione Prezzi (gestione MultiIndex)
         if len(tickers) == 1:
-            if 'Adj Close' in data.columns: return data[['Adj Close']]
-            if 'Close' in data.columns: return data[['Close']]
-            return pd.DataFrame()
-
-        # Se MultiIndex, estraiamo il livello 'Adj Close'
-        if 'Adj Close' in data.columns.levels[0]:
-            return data['Adj Close']
-        elif 'Close' in data.columns.levels[0]:
-            return data['Close']
+            if 'Adj Close' in data.columns: df = data[['Adj Close']]
+            elif 'Close' in data.columns: df = data[['Close']]
+            else: return pd.DataFrame()
+        else:
+            if 'Adj Close' in data.columns.levels[0]: df = data['Adj Close']
+            elif 'Close' in data.columns.levels[0]: df = data['Close']
+            else: return pd.DataFrame()
         
-        return pd.DataFrame()
+        # LOGICA SALVA-BOND: Riempie i buchi (max 3 giorni) prima di cancellare i NaN
+        # Questo permette di allineare bond e azioni anche se hanno festività diverse
+        df = df.ffill(limit=3) 
+        return df
     except Exception as e:
         st.error(f"Errore nel download: {e}")
         return pd.DataFrame()
 
 def display_macro_correlation_page():
-    st.title("🕸️ Global Multi-Asset Aggregator (Professional)")
+    st.title("🕸️ Global Multi-Asset Aggregator")
     st.markdown("Monitoraggio in tempo reale dei regimi di mercato e delle rotazioni inter-asset.")
 
     # Sidebar di controllo
@@ -248,7 +255,7 @@ def display_macro_correlation_page():
     selected_panels = st.sidebar.multiselect(
         "Seleziona Layer Macro:",
         options=list(MACRO_PANELS.keys()),
-        default=["🟡 METALLI PREZIOSI", "🛢️ ENERGIA", "💵 VALUTE (FX)"]
+        default=["📉 TASSI & BOND", "🇺🇸 INDICI USA"]
     )
     
     custom_tickers_raw = st.sidebar.text_input("Ticker Aggiuntivi (es. BTC-USD, NVDA):", "")
@@ -284,7 +291,12 @@ def display_macro_correlation_page():
             st.error("I ticker selezionati non hanno abbastanza dati storici per la correlazione.")
             return
 
-        returns = df_prices.pct_change().dropna()
+        # TRASFORMAZIONE NOMI PER IL GRAFICO
+        # Creiamo etichette leggibili: "S&P 500 (^GSPC)"
+        display_names = {t: f"{TICKER_NAMES.get(t, t)} ({t})" for t in df_prices.columns}
+        df_renamed = df_prices.rename(columns=display_names)
+
+        returns = df_renamed.pct_change().dropna()
         corr_matrix = returns.corr()
 
         # Heatmap Professionale
@@ -294,9 +306,9 @@ def display_macro_correlation_page():
             aspect="auto",
             color_continuous_scale='RdBu_r',
             range_color=[-1, 1],
-            title=f"Matrice di Correlazione Universale ({len(df_prices.columns)} Asset attivi)"
+            title=f"Matrice di Correlazione Professionale (Nomi Estesi)"
         )
-        fig.update_layout(height=900, margin=dict(l=0, r=0, b=0, t=40))
+        fig.update_layout(height=850, margin=dict(l=0, r=0, b=0, t=40))
         st.plotly_chart(fig, use_container_width=True)
 
         # Sezione Analisi Dinamica (Rolling)
@@ -304,9 +316,9 @@ def display_macro_correlation_page():
         st.subheader("🔄 Analisi delle Divergenze (Rolling Correlation)")
         c1, c2 = st.columns(2)
         with c1:
-            a1 = st.selectbox("Asset Primario", options=df_prices.columns, index=0)
+            a1 = st.selectbox("Asset Primario", options=df_renamed.columns, index=0)
         with c2:
-            a2 = st.selectbox("Asset di Confronto", options=df_prices.columns, index=min(1, len(df_prices.columns)-1))
+            a2 = st.selectbox("Asset di Confronto", options=df_renamed.columns, index=min(1, len(df_renamed.columns)-1))
 
         window = st.select_slider("Finestra di osservazione (Giorni lavorativi):", options=[20, 40, 60, 120, 252], value=60)
         
