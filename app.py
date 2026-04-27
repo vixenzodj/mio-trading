@@ -22,15 +22,18 @@ LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
 MACRO_PANELS = {
-    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "PL=F", "PA=F"],
-    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "HO=F"],
-    "🏗️ METALLI INDUSTRIALI": ["HG=F", "ALI=F", "NI=F"],
-    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "ZS=F", "KC=F"],
-    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^DJI"],
-    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^IBEX"],
-    "🌍 EMERGENTI": ["EEM", "AAXJ", "ILF"],
-    "💵 VALUTE (FX)": ["UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X"],
-    "📉 TASSI & BOND": ["TLT", "IEF", "^TNX", "^TYX"]
+    "🟡 METALLI PREZIOSI": ["GC=F", "SI=F", "PL=F", "PA=F", "GLD", "SLV", "SILJ", "GDX", "GDXJ"],
+    "🛢️ ENERGIA": ["CL=F", "BZ=F", "NG=F", "HO=F", "RB=F", "XLE", "XOP", "UNG", "DBO"],
+    "🏗️ METALLI INDUSTRIALI": ["HG=F", "CPER", "DBB", "XME", "JJU", "JJN", "PICK", "LIT", "REMX"],
+    "🌾 AGRICOLTURA": ["ZW=F", "ZC=F", "ZS=F", "KC=F", "CT=F", "CC=F", "SB=F", "DBA", "MOO"],
+    "🇺🇸 INDICI USA": ["^GSPC", "^IXIC", "^RUT", "^DJI", "^VIX", "DIA", "QQQ", "IWM", "VTI"],
+    "🇪🇺 INDICI EUROPA": ["^GDAXI", "FTSEMIB.MI", "^FCHI", "^IBEX", "^FTSE", "^STOXX50E", "EWG", "EWI", "EWQ"],
+    "🌍 EMERGENTI & ASIA": ["EEM", "VWO", "MCHI", "EPI", "INDA", "EWZ", "EWY", "^N225", "^HSI"],
+    "💵 VALUTE (FX)": [
+        "UUP", "EURUSD=X", "JPYUSD=X", "GBPUSD=X", "AUDUSD=X", "CADUSD=X", 
+        "CHFUSD=X", "NZDUSD=X", "USDCNY=X", "USDBRL=X", "USDMXN=X", "USDTRY=X", "USDZAR=X"
+    ],
+    "📉 TASSI & BOND": ["TLT", "IEF", "SHY", "BND", "AGG", "LQD", "HYG", "^TNX", "^TYX", "^FVX", "BTP=F", "FGBL=F"]
 }
 
 # --- STRATEGY PARAMETER GRID ---
@@ -237,23 +240,20 @@ def safe_get_adj_close(tickers, period="5y"):
         return pd.DataFrame()
 
 def display_macro_correlation_page():
-    st.title("🕸️ Global Multi-Asset Aggregator")
-    st.markdown("Crea la tua matrice di regime incrociando qualsiasi classe di asset.")
+    st.title("🕸️ Global Multi-Asset Aggregator (Professional)")
+    st.markdown("Monitoraggio in tempo reale dei regimi di mercato e delle rotazioni inter-asset.")
 
-    # --- SIDEBAR DI AGGREGAZIONE ---
-    st.sidebar.header("⚙️ Configurazione Aggregatore")
-    
-    # 1. Selezione Panieri Predefiniti
+    # Sidebar di controllo
+    st.sidebar.header("⚙️ Macro Filter")
     selected_panels = st.sidebar.multiselect(
-        "Aggiungi Panieri Istituzionali:",
+        "Seleziona Layer Macro:",
         options=list(MACRO_PANELS.keys()),
-        default=["🟡 METALLI PREZIOSI", "🛢️ ENERGIA"]
+        default=["🟡 METALLI PREZIOSI", "🛢️ ENERGIA", "💵 VALUTE (FX)"]
     )
     
-    # 2. Aggiunta Ticker Manuali
-    custom_tickers_raw = st.sidebar.text_input("Aggiungi Ticker Manuali (separati da virgola):", "AAPL, BTC-USD, NVDA")
+    custom_tickers_raw = st.sidebar.text_input("Ticker Aggiuntivi (es. BTC-USD, NVDA):", "")
     
-    # --- COSTRUZIONE LISTA UNIFICATA ---
+    # Costruzione Ticker List
     final_tickers = []
     for panel in selected_panels:
         final_tickers.extend(MACRO_PANELS[panel])
@@ -262,57 +262,61 @@ def display_macro_correlation_page():
         custom_list = [x.strip().upper() for x in custom_tickers_raw.split(",") if x.strip()]
         final_tickers.extend(custom_list)
     
-    final_tickers = list(dict.fromkeys(final_tickers)) # Rimuove duplicati
+    final_tickers = list(dict.fromkeys(final_tickers))
 
     if not final_tickers:
-        st.warning("Seleziona almeno un paniere o inserisci un ticker.")
+        st.warning("Seleziona almeno un paniere per visualizzare i dati.")
         return
 
-    # --- ELABORAZIONE DATI ---
-    with st.spinner(f"Analisi di {len(final_tickers)} asset in corso..."):
+    with st.spinner("Sincronizzazione dati inter-market..."):
+        # Usiamo safe_get_adj_close già presente o implementata
         df_prices = safe_get_adj_close(final_tickers, period="5y")
         
         if df_prices.empty:
-            st.error("Impossibile recuperare i dati. Verifica i ticker inseriti.")
+            st.error("Nessun dato recuperato. Verifica la connessione o i ticker.")
             return
 
-        # Pulizia: rimuove ticker che non hanno dati
-        df_prices = df_prices.dropna(axis=1, how='all')
-        returns = np.log(df_prices / df_prices.shift(1)).dropna()
+        # FILTRO CHIRURGICO: Rimuove colonne con troppi NaN (>20%) o tutte vuote
+        # Questo risolve il problema dei Metalli Industriali che non appaiono
+        df_prices = df_prices.dropna(axis=1, thresh=int(len(df_prices) * 0.8))
+        
+        if df_prices.empty:
+            st.error("I ticker selezionati non hanno abbastanza dati storici per la correlazione.")
+            return
 
-        # --- VISUALIZZAZIONE ---
-        st.subheader(f"📊 Matrice di Correlazione Universale ({len(df_prices.columns)} Asset)")
-        
+        returns = df_prices.pct_change().dropna()
         corr_matrix = returns.corr()
-        
+
+        # Heatmap Professionale
         fig = px.imshow(
             corr_matrix,
             text_auto=".2f",
             aspect="auto",
             color_continuous_scale='RdBu_r',
             range_color=[-1, 1],
-            labels=dict(color="Correlazione")
+            title=f"Matrice di Correlazione Universale ({len(df_prices.columns)} Asset attivi)"
         )
-        fig.update_layout(height=800)
+        fig.update_layout(height=900, margin=dict(l=0, r=0, b=0, t=40))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- ANALISI ROLLING (Focus tra due asset) ---
+        # Sezione Analisi Dinamica (Rolling)
         st.markdown("---")
-        st.subheader("🔄 Analisi Dinamica: Come cambia la correlazione nel tempo?")
-        col1, col2 = st.columns(2)
-        with col1:
-            asset_a = st.selectbox("Asset A", options=df_prices.columns, index=0)
-        with col2:
-            asset_b = st.selectbox("Asset B", options=df_prices.columns, index=min(1, len(df_prices.columns)-1))
+        st.subheader("🔄 Analisi delle Divergenze (Rolling Correlation)")
+        c1, c2 = st.columns(2)
+        with c1:
+            a1 = st.selectbox("Asset Primario", options=df_prices.columns, index=0)
+        with c2:
+            a2 = st.selectbox("Asset di Confronto", options=df_prices.columns, index=min(1, len(df_prices.columns)-1))
 
-        if asset_a and asset_b:
-            window = st.slider("Finestra Mobile (Giorni)", 20, 252, 60)
-            rolling_corr = returns[asset_a].rolling(window).corr(returns[asset_b])
-            
-            fig_line = px.line(rolling_corr, title=f"Correlazione Rolling {window}gg: {asset_a} vs {asset_b}")
-            fig_line.add_hline(y=0, line_dash="dash", line_color="gray")
-            fig_line.update_yaxes(range=[-1, 1])
-            st.plotly_chart(fig_line, use_container_width=True)
+        window = st.select_slider("Finestra di osservazione (Giorni lavorativi):", options=[20, 40, 60, 120, 252], value=60)
+        
+        rolling_corr = returns[a1].rolling(window).corr(returns[a2])
+        fig_roll = px.line(rolling_corr, title=f"Correlazione Mobile ({window}gg): {a1} vs {a2}")
+        fig_roll.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig_roll.add_hline(y=0.7, line_dash="dot", line_color="red", annotation_text="Alta Correlazione")
+        fig_roll.add_hline(y=-0.7, line_dash="dot", line_color="green", annotation_text="Alta Decorrelazione")
+        fig_roll.update_yaxes(range=[-1.1, 1.1])
+        st.plotly_chart(fig_roll, use_container_width=True)
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=0.045, q=0.0):
