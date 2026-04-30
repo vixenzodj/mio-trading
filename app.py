@@ -385,6 +385,16 @@ def display_macro_war_room():
             if st_type == "prev": return s.iloc[-21] if len(s) > 20 else s.iloc[0]
             if st_type == "ma50": return s.rolling(50).mean().iloc[-1] if len(s) >= 50 else s.mean()
 
+        # --- HELPER: SPARKLINE GENERATOR ---
+        def draw_sparkline(series, color="#2ecc71"):
+            fig = go.Figure(go.Scatter(y=series, mode='lines', line=dict(color=color, width=2.5)))
+            fig.update_layout(
+                height=50, margin=dict(l=0, r=0, t=0, b=0),
+                xaxis=dict(visible=False), yaxis=dict(visible=False),
+                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+            )
+            return fig
+
         # --- 2. ELABORAZIONE QUANTISTICA DELLE METRICHE ---
         
         # Livello Base (Prezzi Correnti e Medie)
@@ -478,41 +488,96 @@ def display_macro_war_room():
 
         st.markdown("---")
 
-        # --- 4. LIVELLO 2: SALUTE E FLUSSI OMBRA CON NUMERI E SUGGERIMENTI ---
+        # --- 4. LIVELLO 2: SALUTE E FLUSSI OMBRA (CON GRAFICI E SEMAFORI) ---
         st.header("🧬 Analisi Molecolare e Flussi Invisibili")
+        
+        # Preparazione serie storiche per i grafici
+        hist_breadth = (df["RSP"] / df["^GSPC"]).dropna()
+        hist_bnd = df["BND"].dropna()
+        hist_inf = (df["TIP"] / df["IEF"]).dropna()
+        hist_btc = df["BTC-USD"].dropna()
+        hist_yen = df["USDJPY=X"].dropna()
+        hist_vix = (df["^VIX"] / df["^VIX3M"]).dropna()
+
         r1, r2, r3 = st.columns(3)
         with r1:
             br_delta = breadth_ratio - breadth_ma
-            st.metric("Market Breadth (RSP/SPY)", f"{breadth_ratio:.3f}", delta=f"{br_delta:+.3f} vs Media", delta_color="normal" if is_healthy_breadth else "inverse")
+            tit_br = "Market Breadth 🟢" if is_healthy_breadth else "Market Breadth 🔴"
+            st.metric(tit_br, f"{breadth_ratio:.3f}", delta=f"{br_delta:+.3f} vs Media", delta_color="normal" if is_healthy_breadth else "inverse")
+            st.plotly_chart(draw_sparkline(hist_breadth[-60:], "#2ecc71" if is_healthy_breadth else "#e74c3c"), use_container_width=True)
             with st.expander("Cos'è e come si legge?"): 
-                st.write("Indica se il mercato sale in modo sano. **Sopra la media (Verde)**: Molte aziende stanno salendo. **Sotto la media (Rosso)**: L'indice è tenuto a galla solo da pochissime mega-aziende. Rischio crollo improvviso.")
+                st.write("Indica se il mercato sale in modo sano. **Sopra la media (Verde)**: Molte aziende salgono. **Sotto (Rosso)**: Pochi giganti tengono su l'indice.")
         with r2:
             bnd_delta = ((bnd_curr / bnd_ma) - 1) * 100
-            st.metric("Stress Debito (Prezzo Bond)", f"${bnd_curr:.2f}", delta=f"{bnd_delta:+.2f}%", delta_color="normal" if not bond_stress else "inverse")
+            tit_bnd = "Stress Debito 🔴 ALTO" if bond_stress else "Stress Debito 🟢 BASSO"
+            st.metric(tit_bnd, f"${bnd_curr:.2f}", delta=f"{bnd_delta:+.2f}%", delta_color="normal" if not bond_stress else "inverse")
+            st.plotly_chart(draw_sparkline(hist_bnd[-60:], "#e74c3c" if bond_stress else "#2ecc71"), use_container_width=True)
             with st.expander("Cos'è e come si legge?"): 
-                st.write("Mostra la salute del debito globale. Se il prezzo scende **sotto la media (Rosso)**, significa che i tassi stanno salendo troppo in fretta, mettendo sotto stress banche e aziende indebitate.")
+                st.write("Mostra la salute del debito globale. Prezzo sotto la media (**Rosso**) = tassi in aumento, forte stress sistemico.")
         with r3:
             inf_delta = inf_expect_ratio - inf_expect_ma
-            st.metric("Inflazione Attesa (TIP/IEF)", f"{inf_expect_ratio:.3f}", delta=f"{inf_delta:+.3f} Spinta Prezzi", delta_color="inverse" if inflation_fear else "normal")
+            tit_inf = "Inflazione Attesa 🔴 ALTA" if inflation_fear else "Inflazione Attesa 🟢 OK"
+            st.metric(tit_inf, f"{inf_expect_ratio:.3f}", delta=f"{inf_delta:+.3f} Spinta", delta_color="inverse" if inflation_fear else "normal")
+            st.plotly_chart(draw_sparkline(hist_inf[-60:], "#e74c3c" if inflation_fear else "#2ecc71"), use_container_width=True)
             with st.expander("Cos'è e come si legge?"): 
-                st.write("Il mercato obbligazionario prezza l'inflazione futura. Se il valore sale **(Rosso)**, significa che i grandi capitali si aspettano un ritorno dell'inflazione, il che costringerà le banche centrali ad alzare i tassi.")
+                st.write("Previsioni del mercato obbligazionario. Se sale (**Rosso**), i capitali temono un ritorno dell'inflazione (Tassi più alti a lungo).")
 
         r4, r5, r6 = st.columns(3)
         with r4:
             btc_delta = ((btc_curr / btc_ma) - 1) * 100
-            st.metric("Bitcoin Proxy (Liquidità)", f"${btc_curr:,.0f}", delta=f"{btc_delta:+.2f}%", delta_color="normal" if btc_liq else "inverse")
+            tit_btc = "Bitcoin Proxy 🟢 RISK-ON" if btc_liq else "Bitcoin Proxy 🔴 RISK-OFF"
+            st.metric(tit_btc, f"${btc_curr:,.0f}", delta=f"{btc_delta:+.2f}%", delta_color="normal" if btc_liq else "inverse")
+            st.plotly_chart(draw_sparkline(hist_btc[-60:], "#2ecc71" if btc_liq else "#e74c3c"), use_container_width=True)
             with st.expander("Cos'è e come si legge?"): 
-                st.write("Bitcoin agisce come un rilevatore sensibilissimo di liquidità. Se è **Verde**, nuovo denaro 'facile' sta entrando nel sistema finanziario. Se è **Rosso**, i rubinetti del credito si stanno chiudendo.")
+                st.write("Sensore di liquidità speculativa globale. **Verde** = Nuovo denaro entra nel sistema. **Rosso** = Denaro in fuga.")
         with r5:
             yen_delta = usdjpy_curr - usdjpy_prev
-            st.metric("Yen Carry Trade (USD/JPY)", f"¥{usdjpy_curr:.2f}", delta=f"{yen_delta:+.2f} ¥ vs Mese Prec.", delta_color="normal" if not carry_trade_risk else "inverse")
+            tit_yen = "Yen Carry Trade 🔴 FUGA" if carry_trade_risk else "Yen Carry Trade 🟢 STABILE"
+            st.metric(tit_yen, f"¥{usdjpy_curr:.2f}", delta=f"{yen_delta:+.2f} ¥ vs Mese", delta_color="normal" if not carry_trade_risk else "inverse")
+            st.plotly_chart(draw_sparkline(hist_yen[-60:], "#e74c3c" if carry_trade_risk else "#2ecc71"), use_container_width=True)
             with st.expander("Cos'è e come si legge?"): 
-                st.write("Misura la leva finanziaria globale. Se lo Yen si rafforza drasticamente (grafico scende = **Rosso**), i grossi fondi sono costretti a vendere le loro azioni americane per ripagare i prestiti contratti in Giappone. Panico in arrivo.")
+                st.write("Leva globale. Se lo Yen si rafforza e il grafico crolla (**Rosso**), i fondi vendono azioni per ripagare debiti. Crash in arrivo.")
         with r6:
             vix_delta = vix_ratio - 1.0
-            st.metric("VIX Curve Ratio (Spot/3M)", f"{vix_ratio:.2f}", delta=f"{vix_delta:+.2f} (Soglia Panico = 1)", delta_color="inverse" if vix_ratio > 1 else "normal")
+            vix_panic = vix_ratio > 1.0
+            tit_vix = "VIX Ratio (Spot/3M) 🔴 PANICO" if vix_panic else "VIX Ratio 🟢 CALMA"
+            st.metric(tit_vix, f"{vix_ratio:.2f}", delta=f"{vix_delta:+.2f} (Soglia 1)", delta_color="inverse" if vix_panic else "normal")
+            st.plotly_chart(draw_sparkline(hist_vix[-60:], "#e74c3c" if vix_panic else "#2ecc71"), use_container_width=True)
             with st.expander("Cos'è e come si legge?"): 
-                st.write("Rapporto tra paura immediata e paura a 3 mesi. Normalmente è sotto 1. Se supera 1 **(Rosso)**, le banche d'affari stanno letteralmente comprando protezioni disperate contro un crollo imminente a brevissimo termine.")
+                st.write("Se supera 1.0 (**Rosso**), le banche d'affari stanno pagando un sovrapprezzo disperato per assicurarsi contro un crollo immediato.")
+
+        # --- NUOVO LIVELLO 2.5: RADAR CORRELAZIONI ISTITUZIONALI (LIE DETECTOR) ---
+        st.markdown("---")
+        st.header("🔗 Radar Correlazioni (Macchina della Verità)")
+        st.write("Gli istituzionali usano queste correlazioni rolling (20gg) per scoprire se il mercato sta nascondendo un'anomalia sistemica.")
+        
+        # Calcoli correlazione mobile a 20 giorni
+        corr_eq_bnd = df["^GSPC"].rolling(20).corr(df["TLT"]).iloc[-1]  # SP500 vs Treasuries
+        corr_cu_au = df["HG=F"].rolling(20).corr(df["GC=F"]).iloc[-1]   # Copper vs Gold
+        corr_usd_oil = df["UUP"].rolling(20).corr(df["CL=F"]).iloc[-1]  # Dollar vs Oil
+
+        corr1, corr2, corr3 = st.columns(3)
+        
+        # 1. Rischio Sistemico (Azioni vs Bond)
+        with corr1:
+            is_sys_risk = corr_eq_bnd > 0.3
+            st.markdown(f"**Azioni (S&P) vs Bond (TLT)**")
+            st.metric("Correlazione 20gg", f"{corr_eq_bnd:.2f}", delta="🔴 CRISI LIQUIDITÀ" if is_sys_risk else "🟢 NORMALE", delta_color="inverse" if is_sys_risk else "normal")
+            st.caption("Normalmente decorrelati. Se salgono/scendono insieme (rosso), le banche centrali hanno perso il controllo (Stagflazione/Liquidity Crunch).")
+            
+        # 2. Salute Industriale (Rame vs Oro)
+        with corr2:
+            is_ind_risk = corr_cu_au < -0.3
+            st.markdown(f"**Rame (Industria) vs Oro (Paura)**")
+            st.metric("Correlazione 20gg", f"{corr_cu_au:.2f}", delta="🔴 RECESSIONE REALE" if is_ind_risk else "🟢 CRESCITA/INFLAZIONE", delta_color="inverse" if is_ind_risk else "normal")
+            st.caption("Se sono fortemente inversi (Rame crolla, Oro vola), il mercato prezza una recessione industriale profonda e imminente.")
+            
+        # 3. Shock Inflattivo (Dollaro vs Petrolio)
+        with corr3:
+            is_inf_shock = corr_usd_oil > 0.3
+            st.markdown(f"**Dollaro (USD) vs Petrolio (WTI)**")
+            st.metric("Correlazione 20gg", f"{corr_usd_oil:.2f}", delta="🔴 SHOCK INFLATTIVO/EMERGENTI" if is_inf_shock else "🟢 DINAMICA FX NORMALE", delta_color="inverse" if is_inf_shock else "normal")
+            st.caption("Normalmente inversi. Se salgono insieme (rosso), estremo dolore per l'Europa e mercati emergenti. Costi dell'energia insostenibili.")
 
         # --- 5. LIVELLO 3: IL CERVELLO CIO (ASSET ALLOCATION QUANTISTICA) ---
         st.markdown("---")
