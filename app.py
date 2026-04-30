@@ -368,7 +368,8 @@ def display_macro_war_room():
         "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",  # Aggiunto ^IRX
         "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE", "UUP", # Aggiunto UUP
         "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
-        "^VIX", "^VIX3M", "RSP", "XLK", "XLU"
+        "^VIX", "^VIX3M", "RSP", "XLK", "XLU",
+        "SPY", "EWJ", "XOP", "SI=F", "GDX", "SIL", "DBC", "XHB", "NG=F", "PL=F"
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -393,6 +394,26 @@ def display_macro_war_room():
                 xaxis=dict(visible=False), yaxis=dict(visible=False),
                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
             )
+            return fig
+
+        def draw_ranked_bars(ticker_map, title, period=20):
+            data = []
+            for name, ticker in ticker_map.items():
+                if ticker in df.columns:
+                    series = df[ticker].dropna()
+                    if len(series) >= period:
+                        perf = (series.iloc[-1] / series.iloc[-period]) - 1
+                        data.append({"Asset": name, "Performance": perf})
+            
+            if not data: return None
+            df_plot = pd.DataFrame(data).sort_values("Performance", ascending=True)
+            
+            fig = px.bar(df_plot, x="Performance", y="Asset", orientation='h',
+                         title=title, color="Performance",
+                         color_continuous_scale='RdYlGn', text_auto='.2%')
+            fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10),
+                              showlegend=False, coloraxis_showscale=False,
+                              xaxis_title="Perf. Relativa", yaxis_title="")
             return fig
 
         def calculate_z_score(series, window=60):
@@ -454,6 +475,15 @@ def display_macro_war_room():
             delta_eu = ((eur_curr / eur_ma) - 1) * 100
             st.metric("Europa (DAX)", f"{eur_curr:,.0f}", delta=f"{delta_eu:+.2f}% vs MA50", delta_color="normal" if eur_curr > eur_ma else "inverse")
 
+        st.markdown("#### 📊 Classifiche di Forza Relativa Globale")
+        c_rank1, c_rank2 = st.columns(2)
+        with c_rank1:
+            mkt_equity = {"USA (SPY)": "SPY", "Europa (VGK)": "VGK", "Cina (MCHI)": "MCHI", "Emergenti (EEM)": "EEM", "Giappone (EWJ)": "EWJ", "Germania (DAX)": "^GDAXI"}
+            st.plotly_chart(draw_ranked_bars(mkt_equity, "Equity Mondiale (20gg)"), use_container_width=True)
+        with c_rank2:
+            mkt_re = {"Real Estate USA": "VNQ", "Homebuilders": "XHB", "Energy": "XLE", "Gold Miners": "GDX"}
+            st.plotly_chart(draw_ranked_bars(mkt_re, "Real Estate & Settori Lead"), use_container_width=True)
+
         st.markdown("---")
 
         # --- NUOVO LIVELLO 1.5: MAPPA SETTORIALE E GEOPOLITICA ---
@@ -491,6 +521,18 @@ def display_macro_war_room():
                 st.success("🇺🇸 Capitali verso USA")
             else:
                 st.error("🇨🇳 Capitali verso Oriente")
+
+        st.markdown("#### ⚡ Gerarchia delle Asset Class & Hard Assets")
+        c_rank3, c_rank4, c_rank5 = st.columns(3)
+        with c_rank3:
+            mkt_geopol = {"Risk-ON (Nasdaq)": "^IXIC", "Safe Haven (Gold)": "GC=F", "Dollar Index": "UUP", "Bitcoin": "BTC-USD", "Bonds": "TLT"}
+            st.plotly_chart(draw_ranked_bars(mkt_geopol, "Ranking Geopolitico/Asset"), use_container_width=True)
+        with c_rank4:
+            mkt_energy = {"Petrolio WTI": "CL=F", "Gas Naturale": "NG=F", "Oil & Gas (XOP)": "XOP", "Energy (XLE)": "XLE"}
+            st.plotly_chart(draw_ranked_bars(mkt_energy, "Energia & Hard Assets"), use_container_width=True)
+        with c_rank5:
+            mkt_metals = {"Oro": "GC=F", "Argento": "SI=F", "Rame": "HG=F", "Platino": "PL=F"}
+            st.plotly_chart(draw_ranked_bars(mkt_metals, "Metalli Ranking"), use_container_width=True)
 
         st.markdown("---")
 
