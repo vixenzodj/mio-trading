@@ -364,11 +364,11 @@ def display_macro_war_room():
 
     # --- 1. MOTORE DATI (Sentinelle Espanse) ---
     sentinels = [
-        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",  # Equity & Geopolitica
-        "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND",        # Tassi & Bond
-        "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE",       # Commodities, Inflazione, Agricoltura, Energia
-        "REMX", "VNQ", "BTC-USD", "USDJPY=X", "UUP",       # Real Estate, Tech, Crypto, Forex
-        "^VIX", "^VIX3M", "RSP", "XLK", "XLU"              # Breadth & Sentiment
+        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",
+        "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",  # Aggiunto ^IRX
+        "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE", "UUP", # Aggiunto UUP
+        "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
+        "^VIX", "^VIX3M", "RSP", "XLK", "XLU"
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -394,6 +394,12 @@ def display_macro_war_room():
                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
             )
             return fig
+
+        def calculate_z_score(series, window=60):
+            if len(series) < window: return 0.0
+            mean = series.rolling(window=window).mean().iloc[-1]
+            std = series.rolling(window=window).std().iloc[-1]
+            return (series.iloc[-1] - mean) / std if std != 0 else 0.0
 
         # --- 2. ELABORAZIONE QUANTISTICA DELLE METRICHE ---
         
@@ -498,6 +504,14 @@ def display_macro_war_room():
         hist_btc = df["BTC-USD"].dropna()
         hist_yen = df["USDJPY=X"].dropna()
         hist_vix = (df["^VIX"] / df["^VIX3M"]).dropna()
+        
+        # Calcolo Z-Score
+        z_br = calculate_z_score(hist_breadth)
+        z_bnd = calculate_z_score(hist_bnd)
+        z_inf = calculate_z_score(hist_inf)
+        z_btc = calculate_z_score(hist_btc)
+        z_yen = calculate_z_score(hist_yen)
+        z_vix = calculate_z_score(hist_vix)
 
         r1, r2, r3 = st.columns(3)
         with r1:
@@ -505,6 +519,7 @@ def display_macro_war_room():
             tit_br = "Market Breadth 🟢" if is_healthy_breadth else "Market Breadth 🔴"
             st.metric(tit_br, f"{breadth_ratio:.3f}", delta=f"{br_delta:+.3f} vs Media", delta_color="normal" if is_healthy_breadth else "inverse")
             st.plotly_chart(draw_sparkline(hist_breadth[-60:], "#2ecc71" if is_healthy_breadth else "#e74c3c"), use_container_width=True)
+            st.caption(f"Z-Score (60gg): {z_br:.2f}σ")
             with st.expander("Cos'è e come si legge?"): 
                 st.write("Indica se il mercato sale in modo sano. **Sopra la media (Verde)**: Molte aziende salgono. **Sotto (Rosso)**: Pochi giganti tengono su l'indice.")
         with r2:
@@ -512,6 +527,7 @@ def display_macro_war_room():
             tit_bnd = "Stress Debito 🔴 ALTO" if bond_stress else "Stress Debito 🟢 BASSO"
             st.metric(tit_bnd, f"${bnd_curr:.2f}", delta=f"{bnd_delta:+.2f}%", delta_color="normal" if not bond_stress else "inverse")
             st.plotly_chart(draw_sparkline(hist_bnd[-60:], "#e74c3c" if bond_stress else "#2ecc71"), use_container_width=True)
+            st.caption(f"Z-Score (60gg): {z_bnd:.2f}σ")
             with st.expander("Cos'è e come si legge?"): 
                 st.write("Mostra la salute del debito globale. Prezzo sotto la media (**Rosso**) = tassi in aumento, forte stress sistemico.")
         with r3:
@@ -519,6 +535,7 @@ def display_macro_war_room():
             tit_inf = "Inflazione Attesa 🔴 ALTA" if inflation_fear else "Inflazione Attesa 🟢 OK"
             st.metric(tit_inf, f"{inf_expect_ratio:.3f}", delta=f"{inf_delta:+.3f} Spinta", delta_color="inverse" if inflation_fear else "normal")
             st.plotly_chart(draw_sparkline(hist_inf[-60:], "#e74c3c" if inflation_fear else "#2ecc71"), use_container_width=True)
+            st.caption(f"Z-Score (60gg): {z_inf:.2f}σ")
             with st.expander("Cos'è e come si legge?"): 
                 st.write("Previsioni del mercato obbligazionario. Se sale (**Rosso**), i capitali temono un ritorno dell'inflazione (Tassi più alti a lungo).")
 
@@ -528,6 +545,7 @@ def display_macro_war_room():
             tit_btc = "Bitcoin Proxy 🟢 RISK-ON" if btc_liq else "Bitcoin Proxy 🔴 RISK-OFF"
             st.metric(tit_btc, f"${btc_curr:,.0f}", delta=f"{btc_delta:+.2f}%", delta_color="normal" if btc_liq else "inverse")
             st.plotly_chart(draw_sparkline(hist_btc[-60:], "#2ecc71" if btc_liq else "#e74c3c"), use_container_width=True)
+            st.caption(f"Z-Score (60gg): {z_btc:.2f}σ")
             with st.expander("Cos'è e come si legge?"): 
                 st.write("Sensore di liquidità speculativa globale. **Verde** = Nuovo denaro entra nel sistema. **Rosso** = Denaro in fuga.")
         with r5:
@@ -535,6 +553,7 @@ def display_macro_war_room():
             tit_yen = "Yen Carry Trade 🔴 FUGA" if carry_trade_risk else "Yen Carry Trade 🟢 STABILE"
             st.metric(tit_yen, f"¥{usdjpy_curr:.2f}", delta=f"{yen_delta:+.2f} ¥ vs Mese", delta_color="normal" if not carry_trade_risk else "inverse")
             st.plotly_chart(draw_sparkline(hist_yen[-60:], "#e74c3c" if carry_trade_risk else "#2ecc71"), use_container_width=True)
+            st.caption(f"Z-Score (60gg): {z_yen:.2f}σ")
             with st.expander("Cos'è e come si legge?"): 
                 st.write("Leva globale. Se lo Yen si rafforza e il grafico crolla (**Rosso**), i fondi vendono azioni per ripagare debiti. Crash in arrivo.")
         with r6:
@@ -543,6 +562,7 @@ def display_macro_war_room():
             tit_vix = "VIX Ratio (Spot/3M) 🔴 PANICO" if vix_panic else "VIX Ratio 🟢 CALMA"
             st.metric(tit_vix, f"{vix_ratio:.2f}", delta=f"{vix_delta:+.2f} (Soglia 1)", delta_color="inverse" if vix_panic else "normal")
             st.plotly_chart(draw_sparkline(hist_vix[-60:], "#e74c3c" if vix_panic else "#2ecc71"), use_container_width=True)
+            st.caption(f"Z-Score (60gg): {z_vix:.2f}σ")
             with st.expander("Cos'è e come si legge?"): 
                 st.write("Se supera 1.0 (**Rosso**), le banche d'affari stanno pagando un sovrapprezzo disperato per assicurarsi contro un crollo immediato.")
 
@@ -578,6 +598,51 @@ def display_macro_war_room():
             st.markdown(f"**Dollaro (USD) vs Petrolio (WTI)**")
             st.metric("Correlazione 20gg", f"{corr_usd_oil:.2f}", delta="🔴 SHOCK INFLATTIVO/EMERGENTI" if is_inf_shock else "🟢 DINAMICA FX NORMALE", delta_color="inverse" if is_inf_shock else "normal")
             st.caption("Normalmente inversi. Se salgono insieme (rosso), estremo dolore per l'Europa e mercati emergenti. Costi dell'energia insostenibili.")
+
+        # --- LIVELLO 2.9: CREDIT & SYSTEMIC FRAGILITY (L'ULTIMA DIFESA) ---
+        st.markdown("---")
+        st.header("🏗️ Credit & Systemic Fragility (I nervi del sistema)")
+        
+        # Calcoli Tecnici
+        # 1. Credit Spread (HYG/IEF)
+        hist_hy_spread = (df["HYG"] / df["IEF"]).dropna()
+        hy_ratio = hist_hy_spread.iloc[-1]
+        z_credit = calculate_z_score(hist_hy_spread)
+        
+        # 2. Yield Curve (10Y - 3M)
+        yield_10y = get_stat("^TNX")
+        yield_3m = get_stat("^IRX")
+        curve_slope = (yield_10y - yield_3m) if (yield_10y and yield_3m) else 0
+        
+        # 3. Bond Volatility (MOVE Proxy - Volatilità Realizzata TLT)
+        hist_tlt_vol = df["TLT"].pct_change().rolling(20).std() * np.sqrt(252) * 100
+        bond_vol_curr = hist_tlt_vol.iloc[-1]
+        bond_vol_ma = hist_tlt_vol.rolling(60).mean().iloc[-1]
+
+        c_frag1, c_frag2, c_frag3 = st.columns(3)
+        
+        with c_frag1:
+            st.metric("High Yield Spread 🛡️", f"{hy_ratio:.3f}", 
+                      delta=f"Z-Score: {z_credit:.2f}σ", 
+                      delta_color="normal" if z_credit > -1 else "inverse")
+            st.plotly_chart(draw_sparkline(hist_hy_spread[-60:], "#2ecc71" if z_credit > -1 else "#e74c3c"), use_container_width=True)
+            st.caption("Se lo Z-Score scende sotto -1.5, le aziende High Yield sono in difficoltà: rischio fallimenti in aumento.")
+
+        with c_frag2:
+            st.metric("Yield Curve (10Y-3M) 📉", f"{curve_slope:.2f}%", 
+                      delta="INVERSIONE" if curve_slope < 0 else "NORMALE", 
+                      delta_color="inverse" if curve_slope < 0 else "normal")
+            # Sparkline della curva
+            hist_curve = (df["^TNX"] - df["^IRX"]).dropna()
+            st.plotly_chart(draw_sparkline(hist_curve[-60:], "#2ecc71" if curve_slope > 0 else "#f1c40f"), use_container_width=True)
+            st.caption("La curva invertita (negativa) ha previsto il 100% delle ultime recessioni. Monitorare il 'de-inversion' per il crash.")
+
+        with c_frag3:
+            st.metric("Bond Volatility (MOVE) ⚡", f"{bond_vol_curr:.1f}%", 
+                      delta="ALERT" if bond_vol_curr > bond_vol_ma else "STABILE", 
+                      delta_color="inverse" if bond_vol_curr > bond_vol_ma else "normal")
+            st.plotly_chart(draw_sparkline(hist_tlt_vol[-60:].dropna(), "#2ecc71" if bond_vol_curr < bond_vol_ma else "#e74c3c"), use_container_width=True)
+            st.caption("VIX dei Bond. Se esplode, i fondi pensione vendono azioni per coprire i margini sui bond. Pericolo sistemico.")
 
         # --- 5. LIVELLO 3: IL CERVELLO CIO (ASSET ALLOCATION QUANTISTICA) ---
         st.markdown("---")
