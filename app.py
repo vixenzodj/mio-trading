@@ -364,10 +364,10 @@ def display_macro_war_room():
 
     # --- 1. MOTORE DATI (Sentinelle Espanse) ---
     sentinels = [
-        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",  # Equity & Geopolitica (EEM = Emergenti/BRICS)
+        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",  # Equity & Geopolitica
         "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND",        # Tassi & Bond
         "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE",       # Commodities, Inflazione, Agricoltura, Energia
-        "REMX", "VNQ", "BTC-USD", "USDJPY=X",              # Real Estate, Tech, Crypto, Forex
+        "REMX", "VNQ", "BTC-USD", "USDJPY=X", "UUP",       # Real Estate, Tech, Crypto, Forex
         "^VIX", "^VIX3M", "RSP", "XLK", "XLU"              # Breadth & Sentiment
     ]
 
@@ -551,10 +551,10 @@ def display_macro_war_room():
         st.header("🔗 Radar Correlazioni (Macchina della Verità)")
         st.write("Gli istituzionali usano queste correlazioni rolling (20gg) per scoprire se il mercato sta nascondendo un'anomalia sistemica.")
         
-        # Calcoli correlazione mobile a 20 giorni
-        corr_eq_bnd = df["^GSPC"].rolling(20).corr(df["TLT"]).iloc[-1]  # SP500 vs Treasuries
-        corr_cu_au = df["HG=F"].rolling(20).corr(df["GC=F"]).iloc[-1]   # Copper vs Gold
-        corr_usd_oil = df["UUP"].rolling(20).corr(df["CL=F"]).iloc[-1]  # Dollar vs Oil
+        # Calcoli correlazione mobile a 20 giorni (Versione Blindata Anti-Crash)
+        corr_eq_bnd = df["^GSPC"].rolling(20).corr(df["TLT"]).iloc[-1] if "^GSPC" in df.columns and "TLT" in df.columns else 0.0
+        corr_cu_au = df["HG=F"].rolling(20).corr(df["GC=F"]).iloc[-1] if "HG=F" in df.columns and "GC=F" in df.columns else 0.0
+        corr_usd_oil = df["UUP"].rolling(20).corr(df["CL=F"]).iloc[-1] if "UUP" in df.columns and "CL=F" in df.columns else 0.0
 
         corr1, corr2, corr3 = st.columns(3)
         
