@@ -645,95 +645,159 @@ def display_macro_war_room():
         st.markdown("---")
         st.header("🏗️ Credit & Systemic Fragility (I nervi del sistema)")
         
-        # Calcoli Tecnici
-        # 1. Credit Spread (HYG/IEF)
+        # Calcoli Tecnici (Esistenti)
         hist_hy_spread = (df["HYG"] / df["IEF"]).dropna()
         hy_ratio = hist_hy_spread.iloc[-1]
         z_credit = calculate_z_score(hist_hy_spread)
         
-        # 2. Yield Curve (10Y - 3M)
         yield_10y = get_stat("^TNX")
         yield_3m = get_stat("^IRX")
         curve_slope = (yield_10y - yield_3m) if (yield_10y and yield_3m) else 0
         
-        # 3. Bond Volatility (MOVE Proxy - Volatilità Realizzata TLT)
         hist_tlt_vol = df["TLT"].pct_change().rolling(20).std() * np.sqrt(252) * 100
         bond_vol_curr = hist_tlt_vol.iloc[-1]
         bond_vol_ma = hist_tlt_vol.rolling(60).mean().iloc[-1]
 
+        # --- NUOVA LOGICA SEMAFORICA ---
+        status_hy = "🟢" if z_credit > -0.5 else "🟡" if z_credit > -1.5 else "🔴"
+        status_curve = "🟢" if curve_slope > 0.5 else "🟡" if curve_slope >= 0 else "🔴"
+        status_move = "🟢" if bond_vol_curr < bond_vol_ma else "🟡" if bond_vol_curr < (bond_vol_ma * 1.15) else "🔴"
+
         c_frag1, c_frag2, c_frag3 = st.columns(3)
         
         with c_frag1:
-            st.metric("High Yield Spread 🛡️", f"{hy_ratio:.3f}", 
+            st.metric(f"{status_hy} High Yield Spread 🛡️", f"{hy_ratio:.3f}", 
                       delta=f"Z-Score: {z_credit:.2f}σ", 
                       delta_color="normal" if z_credit > -1 else "inverse")
-            st.plotly_chart(draw_sparkline(hist_hy_spread[-60:], "#2ecc71" if z_credit > -1 else "#e74c3c"), use_container_width=True)
+            st.plotly_chart(draw_sparkline(hist_hy_spread[-60:], "#2ecc71" if status_hy=="🟢" else "#f1c40f" if status_hy=="🟡" else "#e74c3c"), use_container_width=True)
             st.caption("Se lo Z-Score scende sotto -1.5, le aziende High Yield sono in difficoltà: rischio fallimenti in aumento.")
 
         with c_frag2:
-            st.metric("Yield Curve (10Y-3M) 📉", f"{curve_slope:.2f}%", 
+            st.metric(f"{status_curve} Yield Curve (10Y-3M) 📉", f"{curve_slope:.2f}%", 
                       delta="INVERSIONE" if curve_slope < 0 else "NORMALE", 
                       delta_color="inverse" if curve_slope < 0 else "normal")
-            # Sparkline della curva
             hist_curve = (df["^TNX"] - df["^IRX"]).dropna()
-            st.plotly_chart(draw_sparkline(hist_curve[-60:], "#2ecc71" if curve_slope > 0 else "#f1c40f"), use_container_width=True)
-            st.caption("La curva invertita (negativa) ha previsto il 100% delle ultime recessioni. Monitorare il 'de-inversion' per il crash.")
+            st.plotly_chart(draw_sparkline(hist_curve[-60:], "#2ecc71" if status_curve=="🟢" else "#f1c40f" if status_curve=="🟡" else "#e74c3c"), use_container_width=True)
+            st.caption("La curva invertita (negativa) ha previsto il 100% delle ultime recessioni.")
 
         with c_frag3:
-            st.metric("Bond Volatility (MOVE) ⚡", f"{bond_vol_curr:.1f}%", 
+            st.metric(f"{status_move} Bond Volatility (MOVE) ⚡", f"{bond_vol_curr:.1f}%", 
                       delta="ALERT" if bond_vol_curr > bond_vol_ma else "STABILE", 
                       delta_color="inverse" if bond_vol_curr > bond_vol_ma else "normal")
-            st.plotly_chart(draw_sparkline(hist_tlt_vol[-60:].dropna(), "#2ecc71" if bond_vol_curr < bond_vol_ma else "#e74c3c"), use_container_width=True)
-            st.caption("VIX dei Bond. Se esplode, i fondi pensione vendono azioni per coprire i margini sui bond. Pericolo sistemico.")
+            st.plotly_chart(draw_sparkline(hist_tlt_vol[-60:].dropna(), "#2ecc71" if status_move=="🟢" else "#f1c40f" if status_move=="🟡" else "#e74c3c"), use_container_width=True)
+            st.caption("VIX dei Bond. Se esplode, i fondi pensione vendono azioni per coprire i margini sui bond.")
 
         # --- 5. LIVELLO 3: IL CERVELLO CIO (ASSET ALLOCATION QUANTISTICA) ---
         st.markdown("---")
-        st.header("🎯 Strategia Operativa Suggerita (CIO View)")
+        st.header("🎯 Strategia Operativa Suggerita (CIO View Integrata)")
+        
+        # --- CALCOLO SYSTEMIC HEALTH SCORE (0-100) ---
+        health_score = 50 # Base Neutral
+        
+        # Analisi Molecolare & Flussi
+        if is_healthy_breadth: health_score += 10
+        else: health_score -= 10
+        if not bond_stress: health_score += 5
+        else: health_score -= 10
+        if not inflation_fear: health_score += 5
+        if btc_liq: health_score += 10
+        if carry_trade_risk: health_score -= 15
+        else: health_score += 5
+        if vix_ratio > 1: health_score -= 20
+        else: health_score += 10
+            
+        # Analisi Mappa Fisica & Correlazioni
+        if ind_growth: health_score += 10
+        if is_sys_risk: health_score -= 15
+        if is_ind_risk: health_score -= 10
+        
+        # Analisi Nervi del Sistema (Fragility)
+        if z_credit < -1.5: health_score -= 15
+        elif z_credit > 0: health_score += 5
+        if curve_slope < 0: health_score -= 15
+        if bond_vol_curr > bond_vol_ma: health_score -= 10
+            
+        # Normalizzazione Score (0-100)
+        health_score = max(0, min(100, health_score))
+        
+        # --- ASSET ALLOCATION DINAMICA (RISK MANAGER) ---
+        if health_score < 35:
+            regime = "🔴 RISK-OFF (Preservation)"
+            weights = {'Cash / USD': 50, 'Bonds (TLT/IEF)': 30, 'Gold (Safe Haven)': 15, 'Defensive Equity': 5}
+            color_seq = px.colors.sequential.Reds_r
+        elif health_score < 65:
+            regime = "🟡 NEUTRAL (Transition)"
+            weights = {'Cash / USD': 20, 'Bonds (TLT/IEF)': 30, 'Gold / Commodities': 10, 'Broad Equity (SPY)': 40}
+            color_seq = px.colors.sequential.YlOrBr
+        else:
+            regime = "🟢 RISK-ON (Expansion)"
+            weights = {'Cash / USD': 5, 'Bonds (TLT/IEF)': 15, 'Broad Equity (SPY)': 45, 'Tech / High Beta': 25, 'Crypto / Speculative': 10}
+            color_seq = px.colors.sequential.Greens_r
+
+        # --- RENDERIZZAZIONE DASHBOARD CIO ---
+        col_charts1, col_charts2 = st.columns(2)
+        
+        with col_charts1:
+            # Gauge / Istogramma Salute Sistemica
+            fig_health = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = health_score,
+                title = {'text': "Systemic Health Score", 'font': {'size': 20}},
+                gauge = {
+                    'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                    'bar': {'color': "white", 'thickness': 0.2},
+                    'bgcolor': "rgba(0,0,0,0)",
+                    'steps': [
+                        {'range': [0, 35], 'color': "rgba(231, 76, 60, 0.8)"},
+                        {'range': [35, 65], 'color': "rgba(241, 196, 15, 0.8)"},
+                        {'range': [65, 100], 'color': "rgba(46, 204, 113, 0.8)"}],
+                }
+            ))
+            fig_health.update_layout(height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
+            st.plotly_chart(fig_health, use_container_width=True)
+
+        with col_charts2:
+            # Grafico a Torta (Risk Manager Portfolio)
+            labels = list(weights.keys())
+            values = list(weights.values())
+            fig_pie = px.pie(names=labels, values=values, hole=0.4, title=f"Allocazione Portafoglio Suggerita", color_discrete_sequence=color_seq)
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#000000', width=2)))
+            fig_pie.update_layout(height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"}, showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        # --- SUGGERIMENTI OPERATIVI E TESTUALI ---
+        st.markdown(f"### Valutazione di Mercato Attuale: **{regime}**")
         
         strat_col, list_col = st.columns([1.5, 1])
-        
         with strat_col:
-            # MOTORE LOGICO CHE LEGGE LA MAPPA COMPLETA
-            if carry_trade_risk and vix_ratio > 1 and bond_stress:
-                st.error("### 🚨 DE-LEVERAGING DI MASSA / CRASH RISK")
-                st.write("**Contesto Macro:** Il sistema sta liquidando gli asset a leva (Yen forte), il mercato del debito è crollato e le istituzioni sono in panico totale (VIX > 1). Fuga verso la liquidità pura.")
+            if health_score < 35:
+                st.error("### 🚨 DE-LEVERAGING / CRASH RISK")
+                st.write("**Diagnosi Integrata:** Le metriche indicano stress grave. I rendimenti sono invertiti, lo Yen prezza deleverage, o c'è panico nei bond. Liquidità in fuga.")
                 buys = ["Cash (Dollari - UUP)", "Bond a breve scadenza (SHY)", "Indici Volatilità (VIX)"]
                 sells = ["Tutto l'azionario (USA, EU, Cina)", "Bitcoin e Crypto", "Real Estate (VNQ)", "Titoli Growth ad alto Beta"]
             
-            elif inflation_fear and not ind_growth and (gc_curr > gc_ma):
-                st.warning("### 🏗️ TRAPPOLA STAGFLATTIVA (Stagflation)")
-                st.write("**Contesto Macro:** L'inflazione risale violentemente, ma l'industria è ferma (Rame in calo, Oro in salita). I rendimenti azionari reali verranno distrutti. Le banche centrali hanno le mani legate.")
-                buys = ["Metalli Preziosi (Oro, Argento)", "Energia e Petrolio (CL=F, XLE)", "Materia Prima Agricola (DBA)", "Bond indicizzati all'inflazione (TIP)"]
-                sells = ["Tecnologia USA (XLK)", "Real Estate globale (VNQ)", "Bond tradizionali a lungo termine (TLT)"]
+            elif health_score < 65:
+                if inflation_fear and not ind_growth:
+                    st.warning("### 🏗️ TRAPPOLA STAGFLATTIVA (Stagflation)")
+                    st.write("**Diagnosi Integrata:** L'economia reale rallenta ma l'inflazione attesa sale. Scenario pessimo per l'azionario tradizionale.")
+                    buys = ["Metalli Preziosi (Oro, Argento)", "Materia Prima Agricola (DBA)", "Bond indicizzati all'inflazione (TIP)"]
+                    sells = ["Tecnologia USA (XLK)", "Real Estate (VNQ)", "Bond tradizionali a lungo termine (TLT)"]
+                else:
+                    st.info("### ⚖️ FASE DI TRANSIZIONE (Stock Picking Market)")
+                    st.write("**Diagnosi Integrata:** Le metriche si annullano a vicenda. Assenza di trend macro chiaro. Rotazione continua tra settori.")
+                    buys = ["Aziende Value con dividendi sicuri", "Settori difensivi (Utilities, Staples)", "Mercati esteri sottovalutati"]
+                    sells = ["Asset iper-comprati a livello tecnico", "Aziende fortemente indebitate"]
 
-            elif us_curr > us_ma and ind_growth and btc_liq and is_healthy_breadth:
-                st.success("### 🚀 ESPANSIONE FULL RISK-ON (Goldilocks)")
-                st.write("**Contesto Macro:** Condizioni perfette. Crescita economica reale (Rame sale), massima partecipazione di mercato (Breadth OK) e iniezioni di liquidità (BTC sale). Rischio sistemico assente.")
-                buys = ["Azionario Tecnologia & Semiconduttori (XLK)", "Terre Rare (REMX)", "Bitcoin e Crypto", "Small Caps USA (IWM)", "Real Estate (VNQ)"]
-                sells = ["Asset Difensivi (Utilities - XLU)", "Dollaro Cash (UUP)", "Oro (sovrappesato)"]
-
-            elif (china_curr > china_ma or eem_curr > eem_ma) and not (us_curr > us_ma) and not inflation_fear:
-                st.info("### 🔄 ROTAZIONE GEOPOLITICA (Emerging Markets)")
-                st.write("**Contesto Macro:** Gli Stati Uniti rallentano, mentre i capitali cercano valutazioni più convenienti in Asia e nei mercati emergenti. Il Dollaro debole favorisce questo spostamento.")
-                buys = ["Azionario Cina (MCHI)", "Mercati Emergenti (EEM)", "Europa (VGK)", "Materie prime industriali di base"]
-                sells = ["Mega-Cap USA sopravvalutate", "Dollaro americano"]
-            
-            elif btc_liq and not is_healthy_breadth and us_curr > us_ma:
-                st.warning("### 🎈 BOLLA SPECULATIVA (Low Breadth)")
-                st.write("**Contesto Macro:** Il mercato sale spinto solo dall'inerzia speculativa e da pochissimi titoli dominanti. Le fondamenta scricchiolano. Altissimo rischio di ritracciamento violento.")
-                buys = ["Aziende Value con dividendi sicuri", "Healthcare (XLV)", "Oro come bilanciamento"]
-                sells = ["Titoli speculativi senza utili", "Aziende fortemente indebitate", "Esposizione eccessiva al Nasdaq"]
-                
             else:
-                st.info("### ⚖️ TRANSIZIONE (Stock Picking Market)")
-                st.write("**Contesto Macro:** Segnali contrastanti tra economia reale e mercati finanziari. Nessun trend macroeconomico dirompente. In questa fase il mercato premia le singole aziende eccellenti, non gli ETF generici.")
-                buys = ["Azioni con forte bilancio (F-Score alto)", "Settori stabili (Consumer Staples, Utilities)"]
-                sells = ["Asset iper-comprati a livello tecnico"]
+                st.success("### 🚀 ESPANSIONE FULL RISK-ON (Goldilocks)")
+                st.write("**Diagnosi Integrata:** Allineamento quantistico perfetto. Crescita reale, partecipazione di mercato ampia (Breadth), tassi stabili e iniezioni di liquidità (BTC).")
+                buys = ["Azionario Tecnologia & Semiconduttori (XLK)", "Terre Rare (REMX)", "Bitcoin e Crypto", "Small Caps USA (IWM)"]
+                sells = ["Asset Difensivi (Utilities - XLU)", "Dollaro Cash (UUP)", "Protezioni / VIX"]
 
         with list_col:
-            st.markdown("#### ✅ ALLOCAZIONE FOCUS (Da Avere)")
+            st.markdown("#### ✅ FOCUS ACCUMULO")
             for b in buys: st.write(f"- {b}")
-            st.markdown("#### ❌ RISCHIO TOSSICO (Da Evitare)")
+            st.markdown("#### ❌ FOCUS DISTRIBUZIONE")
             for s in sells: st.write(f"- {s}")
 
 # --- CORE QUANT ENGINE ---
