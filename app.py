@@ -365,13 +365,20 @@ def display_macro_war_room():
 
     # --- 1. MOTORE DATI (Sentinelle Espanse) ---
     sentinels = [
-        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM", "IWM", # Equity Global
+        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM", "IWM",
         "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",
-        "GC=F", "SI=F", "PL=F", "PA=F", "HG=F", "CL=F", "BZ=F", "NG=F", "XOP", # Hard Assets + XOP
-        "TIP", "DBA", "XLE", "UUP", "GLD", "SLV", "GDX", "ITB", # Builders & Miners
+        "GC=F", "SI=F", "HG=F", "CL=F", "NG=F", "XOP",
+        "TIP", "DBA", "XLE", "UUP", "GLD", "SLV", "GDX", "ITB",
         "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
         "^VIX", "^VIX3M", "RSP", "XLK", "XLU", "XLY", "XLP",
-        "EWG", "EWQ", "EWI", "EWU", "EWC", "EWA", "EWL", "EWJ", "INDA", "EWY", "EWT", "EWZ", "EWW", "EZA"
+        # EUROPA ESPANSA
+        "EWG", "EWQ", "EWI", "EWP", "EWN", "EWD", "EWL",
+        # DEVELOPED EX-US & EX-EU
+        "EWU", "EWC", "EWA", "EWS", "EWH",
+        # ASIA ESPANSA
+        "EWJ", "INDA", "EWY", "EWT", "EIDO", "VNM", "EPHE",
+        # EMERGING ESPANSI
+        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK"
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -769,13 +776,35 @@ def display_macro_war_room():
             return fig
 
         with tab_eu:
-            st.plotly_chart(plot_drilldown({"Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI"}, "Focus Eurozona"), use_container_width=True)
+            eu_list = {
+                "Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI", 
+                "Spagna (EWP)": "EWP", "Olanda (EWN)": "EWN", "Svezia (EWD)": "EWD", 
+                "Svizzera (EWL)": "EWL", "Indice Area (VGK)": "VGK"
+            }
+            st.plotly_chart(plot_drilldown(eu_list, "Matrice Europea Core & Periferia"), use_container_width=True)
+
         with tab_dev:
-            st.plotly_chart(plot_drilldown({"UK (EWU)": "EWU", "Canada (EWC)": "EWC", "Australia (EWA)": "EWA", "Svizzera (EWL)": "EWL"}, "Paesi Sviluppati"), use_container_width=True)
+            dev_list = {
+                "UK (EWU)": "EWU", "Canada (EWC)": "EWC", "Australia (EWA)": "EWA", 
+                "Singapore (EWS)": "EWS", "Hong Kong (EWH)": "EWH"
+            }
+            st.plotly_chart(plot_drilldown(dev_list, "Commonwealth & Developed Hubs"), use_container_width=True)
+
         with tab_as:
-            st.plotly_chart(plot_drilldown({"Cina (MCHI)": "MCHI", "Giappone (EWJ)": "EWJ", "India (INDA)": "INDA", "Corea Sud (EWY)": "EWY", "Taiwan (EWT)": "EWT"}, "Matrice Asiatica"), use_container_width=True)
+            as_list = {
+                "Giappone (EWJ)": "EWJ", "Cina (MCHI)": "MCHI", "India (INDA)": "INDA", 
+                "Corea (EWY)": "EWY", "Taiwan (EWT)": "EWT", "Indonesia (EIDO)": "EIDO", 
+                "Vietnam (VNM)": "VNM", "Filippine (EPHE)": "EPHE"
+            }
+            st.plotly_chart(plot_drilldown(as_list, "Forza Relativa Asiatica"), use_container_width=True)
+
         with tab_em:
-            st.plotly_chart(plot_drilldown({"Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA", "Indice Broad (EEM)": "EEM"}, "Matrice Mercati Emergenti"), use_container_width=True)
+            em_list = {
+                "Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA", 
+                "Arabia Saudita (KSA)": "KSA", "Turchia (TUR)": "TUR", "Cile (ECH)": "ECH", 
+                "Grecia (GREK)": "GREK", "Indice Broad (EEM)": "EEM"
+            }
+            st.plotly_chart(plot_drilldown(em_list, "Mercati Emergenti & Frontiera"), use_container_width=True)
         with tab_us:
             st.plotly_chart(plot_drilldown({"S&P 500 (SPY)": "^GSPC", "Nasdaq 100 (Tech)": "^IXIC", "Small Caps (Rischio)": "RSP", "Real Estate (VNQ)": "VNQ"}, "Dinamica USA Interna"), use_container_width=True)
 
