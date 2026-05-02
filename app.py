@@ -378,7 +378,7 @@ def display_macro_war_room():
         # ASIA ESPANSA
         "EWJ", "INDA", "EWY", "EWT", "EIDO", "VNM", "EPHE",
         # EMERGING ESPANSI
-        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK", "IMOEX.ME"
+        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK", "ERUS"
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -768,6 +768,7 @@ def display_macro_war_room():
             for name, ticker in ticker_dict.items():
                 if ticker in df.columns:
                     perf = (df[ticker].iloc[-1] / df[ticker].iloc[-20]) - 1
+                    if pd.isna(perf): perf = 0.0
                     data.append({"Nazione": name, "Forza Relativa": perf})
             if not data: return None
             dff = pd.DataFrame(data).sort_values("Forza Relativa", ascending=True)
@@ -802,7 +803,7 @@ def display_macro_war_room():
             em_list = {
                 "Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA", 
                 "Arabia Saudita (KSA)": "KSA", "Turchia (TUR)": "TUR", "Cile (ECH)": "ECH", 
-                "Grecia (GREK)": "GREK", "Russia (MOEX)": "IMOEX.ME", "Indice Broad (EEM)": "EEM"
+                "Grecia (GREK)": "GREK", "Russia (ERUS)": "ERUS", "Indice Broad (EEM)": "EEM"
             }
             st.plotly_chart(plot_drilldown(em_list, "Mercati Emergenti & Frontiera"), use_container_width=True)
         with tab_us:
