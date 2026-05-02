@@ -367,7 +367,7 @@ def display_macro_war_room():
     sentinels = [
         "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM", "IWM",
         "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",
-        "GC=F", "SI=F", "HG=F", "CL=F", "NG=F", "XOP",
+        "GC=F", "SI=F", "PL=F", "HG=F", "CL=F", "NG=F", "XOP",
         "TIP", "DBA", "XLE", "UUP", "GLD", "SLV", "GDX", "ITB",
         "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
         "^VIX", "^VIX3M", "RSP", "XLK", "XLU", "XLY", "XLP",
@@ -612,16 +612,24 @@ def display_macro_war_room():
             mkt_metals = {"Oro": "GC=F", "Argento": "SI=F", "Rame": "HG=F", "Platino": "PL=F"}
             st.plotly_chart(draw_ranked_bars(mkt_metals, "Metalli Ranking"), use_container_width=True)
 
-        st.markdown("#### 💎 Metalli & Hard Assets Ranking")
-        m_cols = st.columns(4)
-        metalli = {
-            "Oro": "GC=F", "Argento": "SI=F", 
-            "Rame": "HG=F", "Platino": "PL=F"
+        st.markdown("#### ⛏️ Metals Ranking & Relative Strength")
+        metal_map = {
+            "Oro (GC=F)": "GC=F", 
+            "Argento (SI=F)": "SI=F", 
+            "Platino (PL=F)": "PL=F",
+            "Rame (HG=F)": "HG=F"
         }
-        for i, (name, tk) in enumerate(metalli.items()):
-            with m_cols[i % 4]:
-                p = (get_stat(tk) / get_stat(tk, "ma50")) - 1 if get_stat(tk, "ma50") > 0 else 0
-                st.metric(name, f"{p:.2%}", delta="Bullish" if p > 0 else "Bearish")
+        data_metals = []
+        for name, tk in metal_map.items():
+            if tk in df.columns:
+                perf = (df[tk].iloc[-1] / df[tk].iloc[-20]) - 1
+                data_metals.append({"Metallo": name, "Performance": perf})
+        
+        df_metals = pd.DataFrame(data_metals).sort_values("Performance", ascending=False)
+        fig_m = px.bar(df_metals, x="Performance", y="Metallo", orientation='h', 
+                       color="Performance", color_continuous_scale='Bluered', text_auto='.2%')
+        fig_m.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig_m, use_container_width=True)
 
         st.markdown("---")
 
