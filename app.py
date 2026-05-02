@@ -365,11 +365,15 @@ def display_macro_war_room():
     # --- 1. MOTORE DATI (Sentinelle Espanse) ---
     sentinels = [
         "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",
-        "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",  # Aggiunto ^IRX
-        "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE", "UUP", # Aggiunto UUP
+        "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",
+        "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE", "UUP",
         "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
         "^VIX", "^VIX3M", "RSP", "XLK", "XLU",
-        "SPY", "EWJ", "XOP", "SI=F", "GDX", "SIL", "DBC", "XHB", "NG=F", "PL=F"
+        # NUOVI TICKER: Liquidità, Settori, e Drill-Down Paesi
+        "GLD", "XLY", "XLP", 
+        "EWG", "EWQ", "EWI", "EWU",  # Europa (Ger, Fra, Ita, UK)
+        "EWJ", "INDA", "EWY", "EWT", # Asia (Jap, Ind, Kor, Tai)
+        "EWZ", "EWW", "EZA"          # Emergenti (Bra, Mex, SA)
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -641,6 +645,58 @@ def display_macro_war_room():
             st.metric("Correlazione 20gg", f"{corr_usd_oil:.2f}", delta="🔴 SHOCK INFLATTIVO/EMERGENTI" if is_inf_shock else "🟢 DINAMICA FX NORMALE", delta_color="inverse" if is_inf_shock else "normal")
             st.caption("Normalmente inversi. Se salgono insieme (rosso), estremo dolore per l'Europa e mercati emergenti. Costi dell'energia insostenibili.")
 
+        # --- LIVELLO 2.8: GLOBAL MACRO, LIQUIDITÀ & REGIONAL DRILL-DOWN ---
+        st.markdown("---")
+        st.header("🌐 Global Macro, Liquidità & Migrazione Capitali")
+
+        # 1. Calcoli Istituzionali (Liquidità & Propensione al Rischio)
+        # Liquidità Reale Proxy: (Oro / Dollaro) / Tassi Reali
+        liq_proxy = (get_stat("GLD") / get_stat("UUP")) / get_stat("TIP") if get_stat("TIP") > 0 else 1
+        liq_proxy_ma = (get_stat("GLD", "ma50") / get_stat("UUP", "ma50")) / get_stat("TIP", "ma50") if get_stat("TIP", "ma50") > 0 else 1
+        is_liq_expanding = liq_proxy > liq_proxy_ma
+
+        # Risk Appetite: Beni Voluttuari (XLY) vs Beni di Necessità (XLP)
+        xly_xlp = get_stat("XLY") / get_stat("XLP")
+        xly_xlp_ma = get_stat("XLY", "ma50") / get_stat("XLP", "ma50")
+        is_risk_on = xly_xlp > xly_xlp_ma
+
+        c_mac1, c_mac2 = st.columns(2)
+        with c_mac1:
+            st.metric("Liquidità Globale Netta (GLD/UUP/TIP)", "ESPANSIONE 🟢" if is_liq_expanding else "CONTRAZIONE 🔴", 
+                      delta="Stampa Denaro / Svalutazione" if is_liq_expanding else "Stretta Monetaria", delta_color="normal" if is_liq_expanding else "inverse")
+            st.caption("Se in espansione, le Banche Centrali stanno immettendo liquidità segreta. Fortemente Bullish per Crypto e Azioni.")
+        with c_mac2:
+            st.metric("Risk-Appetite Istituzionale (XLY/XLP)", "RISCHIO 🟢" if is_risk_on else "DIFESA 🔴",
+                      delta="Acquisto Voluttuari" if is_risk_on else "Fuga verso Beni Rifugio", delta_color="normal" if is_risk_on else "inverse")
+            st.caption("Il 'Smart Money' sta comprando Amazon/Tesla (Rischio) o Walmart/P&G (Difesa)? Anticipa i crolli azionari.")
+
+        # 2. Interactive Regional Drill-Down (La Mappa a Schede)
+        st.markdown("#### 🗺️ Esplorazione Capitali per Continente (Drill-Down)")
+        st.write("Clicca su una regione per vedere esattamente quali nazioni stanno assorbendo o perdendo capitali (Performance 20gg).")
+        
+        tab_eu, tab_as, tab_em, tab_us = st.tabs(["🇪🇺 Europa", "🌏 Asia", "🌍 Emergenti", "🇺🇸 Stati Uniti"])
+
+        def plot_drilldown(ticker_dict, title):
+            data = []
+            for name, ticker in ticker_dict.items():
+                if ticker in df.columns:
+                    perf = (df[ticker].iloc[-1] / df[ticker].iloc[-20]) - 1
+                    data.append({"Nazione": name, "Forza Relativa": perf})
+            if not data: return None
+            dff = pd.DataFrame(data).sort_values("Forza Relativa", ascending=True)
+            fig = px.bar(dff, x="Forza Relativa", y="Nazione", orientation='h', title=title, color="Forza Relativa", color_continuous_scale='RdYlGn', text_auto='.2%')
+            fig.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="Performance 1 Mese", yaxis_title="")
+            return fig
+
+        with tab_eu:
+            st.plotly_chart(plot_drilldown({"Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI", "Regno Unito (EWU)": "EWU", "Indice Broad (VGK)": "VGK"}, "Matrice Europea"), use_container_width=True)
+        with tab_as:
+            st.plotly_chart(plot_drilldown({"Cina (MCHI)": "MCHI", "Giappone (EWJ)": "EWJ", "India (INDA)": "INDA", "Corea Sud (EWY)": "EWY", "Taiwan (EWT)": "EWT"}, "Matrice Asiatica"), use_container_width=True)
+        with tab_em:
+            st.plotly_chart(plot_drilldown({"Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA", "Indice Broad (EEM)": "EEM"}, "Matrice Mercati Emergenti"), use_container_width=True)
+        with tab_us:
+            st.plotly_chart(plot_drilldown({"S&P 500 (SPY)": "^GSPC", "Nasdaq 100 (Tech)": "^IXIC", "Small Caps (Rischio)": "RSP", "Real Estate (VNQ)": "VNQ"}, "Dinamica USA Interna"), use_container_width=True)
+
         # --- LIVELLO 2.9: CREDIT & SYSTEMIC FRAGILITY (L'ULTIMA DIFESA) ---
         st.markdown("---")
         st.header("🏗️ Credit & Systemic Fragility (I nervi del sistema)")
@@ -691,30 +747,36 @@ def display_macro_war_room():
         st.markdown("---")
         st.header("🎯 Strategia Operativa Suggerita (CIO View Integrata)")
         
-        # --- CALCOLO SYSTEMIC HEALTH SCORE (0-100) ---
+        # --- CALCOLO SYSTEMIC HEALTH SCORE (0-100) AGGIORNATO ---
         health_score = 50 # Base Neutral
         
-        # Analisi Molecolare & Flussi
-        if is_healthy_breadth: health_score += 10
+        # 1. Macro, Liquidità & Flussi Istituzionali (NUOVO)
+        if is_liq_expanding: health_score += 10
+        else: health_score -= 10
+        if is_risk_on: health_score += 10
+        else: health_score -= 10
+        
+        # 2. Analisi Molecolare & Flussi Ombra
+        if is_healthy_breadth: health_score += 5
         else: health_score -= 10
         if not bond_stress: health_score += 5
         else: health_score -= 10
         if not inflation_fear: health_score += 5
-        if btc_liq: health_score += 10
+        if btc_liq: health_score += 5
         if carry_trade_risk: health_score -= 15
         else: health_score += 5
-        if vix_ratio > 1: health_score -= 20
-        else: health_score += 10
+        if vix_ratio > 1: health_score -= 15
+        else: health_score += 5
             
-        # Analisi Mappa Fisica & Correlazioni
-        if ind_growth: health_score += 10
-        if is_sys_risk: health_score -= 15
+        # 3. Analisi Mappa Fisica & Correlazioni
+        if ind_growth: health_score += 5
+        if is_sys_risk: health_score -= 10
         if is_ind_risk: health_score -= 10
         
-        # Analisi Nervi del Sistema (Fragility)
-        if z_credit < -1.5: health_score -= 15
+        # 4. Analisi Nervi del Sistema (Fragility)
+        if z_credit < -1.5: health_score -= 10
         elif z_credit > 0: health_score += 5
-        if curve_slope < 0: health_score -= 15
+        if curve_slope < 0: health_score -= 10
         if bond_vol_curr > bond_vol_ma: health_score -= 10
             
         # Normalizzazione Score (0-100)
