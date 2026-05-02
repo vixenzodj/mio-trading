@@ -366,14 +366,14 @@ def display_macro_war_room():
     sentinels = [
         "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",
         "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",
-        "GC=F", "HG=F", "CL=F", "TIP", "DBA", "XLE", "UUP",
+        "GC=F", "SI=F", "PL=F", "PA=F", "HG=F", "CL=F", "BZ=F", "NG=F", # Metalli & Energia Completi
+        "TIP", "DBA", "XLE", "UUP", "GLD", "SLV",
         "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
-        "^VIX", "^VIX3M", "RSP", "XLK", "XLU",
-        # NUOVI TICKER: Liquidità, Settori, e Drill-Down Paesi
-        "GLD", "XLY", "XLP", 
-        "EWG", "EWQ", "EWI", "EWU",  # Europa (Ger, Fra, Ita, UK)
-        "EWJ", "INDA", "EWY", "EWT", # Asia (Jap, Ind, Kor, Tai)
-        "EWZ", "EWW", "EZA"          # Emergenti (Bra, Mex, SA)
+        "^VIX", "^VIX3M", "RSP", "XLK", "XLU", "XLY", "XLP",
+        "EWG", "EWQ", "EWI", # Europa core
+        "EWJ", "INDA", "EWY", "EWT", # Asia
+        "EWZ", "EWW", "EZA", # Emergenti
+        "EWC", "EWA", "EWL", "EWU" # Paesi Sviluppati (Canada, Australia, Svizzera, UK)
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -488,6 +488,36 @@ def display_macro_war_room():
             mkt_re = {"Real Estate USA": "VNQ", "Homebuilders": "XHB", "Energy": "XLE", "Gold Miners": "GDX"}
             st.plotly_chart(draw_ranked_bars(mkt_re, "Real Estate & Settori Lead"), use_container_width=True)
 
+        # --- RIPRISTINO CLASSIFICHE DI FORZA ---
+        st.markdown("#### ⚡ Classifiche di Forza & Market Breadth")
+        col_f1, col_f2, col_f3 = st.columns(3)
+        
+        with col_f1:
+            st.write("**Settori Lead & Breadth**")
+            # Ripristino metriche fondamentali rimosse
+            m1 = (get_stat("RSP") / get_stat("^GSPC")) - 1 # Breadth
+            m2 = (get_stat("XLK") / get_stat("^GSPC")) - 1 # Tech Leadership
+            m3 = (get_stat("XLY") / get_stat("XLP")) - 1   # Risk Appetite
+            st.metric("Market Breadth (RSP/SPY)", f"{m1:.2%}", delta="Sano" if m1 > 0 else "Debole")
+            st.metric("Tech Dominance (XLK/SPY)", f"{m2:.2%}")
+            st.metric("Consumer Ratio (XLY/XLP)", f"{m3:.2%}")
+
+        with col_f2:
+            st.write("**Real Estate & Yield Sensitive**")
+            # Espansione Real Estate e Utilities
+            re_perf = (get_stat("VNQ") / get_stat("VNQ", "ma50")) - 1 if get_stat("VNQ", "ma50") else 0
+            ut_perf = (get_stat("XLU") / get_stat("XLU", "ma50")) - 1 if get_stat("XLU", "ma50") else 0
+            st.metric("Real Estate (VNQ)", f"{re_perf:.2%}", delta="Tassi ok" if re_perf > 0 else "Stress Tassi")
+            st.metric("Utilities (XLU)", f"{ut_perf:.2%}")
+
+        with col_f3:
+            st.write("**Energia & Hard Assets**")
+            # Espansione Energy Complex
+            oil_p = (get_stat("CL=F") / get_stat("CL=F", "ma50")) - 1 if get_stat("CL=F", "ma50") else 0
+            gas_p = (get_stat("NG=F") / get_stat("NG=F", "ma50")) - 1 if get_stat("NG=F", "ma50") else 0
+            st.metric("Petrolio WTI", f"{oil_p:.2%}")
+            st.metric("Gas Naturale", f"{gas_p:.2%}")
+
         st.markdown("---")
 
         # --- NUOVO LIVELLO 1.5: MAPPA SETTORIALE E GEOPOLITICA ---
@@ -537,6 +567,17 @@ def display_macro_war_room():
         with c_rank5:
             mkt_metals = {"Oro": "GC=F", "Argento": "SI=F", "Rame": "HG=F", "Platino": "PL=F"}
             st.plotly_chart(draw_ranked_bars(mkt_metals, "Metalli Ranking"), use_container_width=True)
+
+        st.markdown("#### 💎 Metalli & Hard Assets Ranking")
+        m_cols = st.columns(4)
+        metalli = {
+            "Oro": "GC=F", "Argento": "SI=F", 
+            "Rame": "HG=F", "Platino": "PL=F"
+        }
+        for i, (name, tk) in enumerate(metalli.items()):
+            with m_cols[i % 4]:
+                p = (get_stat(tk) / get_stat(tk, "ma50")) - 1 if get_stat(tk, "ma50") > 0 else 0
+                st.metric(name, f"{p:.2%}", delta="Bullish" if p > 0 else "Bearish")
 
         st.markdown("---")
 
@@ -671,10 +712,12 @@ def display_macro_war_room():
             st.caption("Il 'Smart Money' sta comprando Amazon/Tesla (Rischio) o Walmart/P&G (Difesa)? Anticipa i crolli azionari.")
 
         # 2. Interactive Regional Drill-Down (La Mappa a Schede)
-        st.markdown("#### 🗺️ Esplorazione Capitali per Continente (Drill-Down)")
+        st.markdown("#### 🗺️ Esplorazione Geografica (Drill-Down)")
         st.write("Clicca su una regione per vedere esattamente quali nazioni stanno assorbendo o perdendo capitali (Performance 20gg).")
         
-        tab_eu, tab_as, tab_em, tab_us = st.tabs(["🇪🇺 Europa", "🌏 Asia", "🌍 Emergenti", "🇺🇸 Stati Uniti"])
+        tab_eu, tab_dev, tab_as, tab_em, tab_us = st.tabs([
+            "🇪🇺 Europa (EU)", "🇬🇧 Developed (ex-US)", "🌏 Asia", "🌍 Emergenti", "🇺🇸 USA"
+        ])
 
         def plot_drilldown(ticker_dict, title):
             data = []
@@ -689,7 +732,9 @@ def display_macro_war_room():
             return fig
 
         with tab_eu:
-            st.plotly_chart(plot_drilldown({"Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI", "Regno Unito (EWU)": "EWU", "Indice Broad (VGK)": "VGK"}, "Matrice Europea"), use_container_width=True)
+            st.plotly_chart(plot_drilldown({"Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI"}, "Focus Eurozona"), use_container_width=True)
+        with tab_dev:
+            st.plotly_chart(plot_drilldown({"UK (EWU)": "EWU", "Canada (EWC)": "EWC", "Australia (EWA)": "EWA", "Svizzera (EWL)": "EWL"}, "Paesi Sviluppati"), use_container_width=True)
         with tab_as:
             st.plotly_chart(plot_drilldown({"Cina (MCHI)": "MCHI", "Giappone (EWJ)": "EWJ", "India (INDA)": "INDA", "Corea Sud (EWY)": "EWY", "Taiwan (EWT)": "EWT"}, "Matrice Asiatica"), use_container_width=True)
         with tab_em:
@@ -769,7 +814,7 @@ def display_macro_war_room():
         else: health_score += 5
             
         # 3. Analisi Mappa Fisica & Correlazioni
-        if ind_growth: health_score += 5
+        if ind_growth: health_score += 10
         if is_sys_risk: health_score -= 10
         if is_ind_risk: health_score -= 10
         
@@ -778,6 +823,16 @@ def display_macro_war_room():
         elif z_credit > 0: health_score += 5
         if curve_slope < 0: health_score -= 10
         if bond_vol_curr > bond_vol_ma: health_score -= 10
+
+        # 5. Fattori Aggiuntivi (CIO View Finale)
+        dev_tickers = ["EWC", "EWA", "EWL", "EWU"]
+        dev_perfs = [(get_stat(tk) / get_stat(tk, "ma50")) - 1 for tk in dev_tickers if get_stat(tk, "ma50") > 0]
+        if dev_perfs and sum(dev_perfs)/len(dev_perfs) > 0:
+            health_score += 5  # Developed Strength
+            
+        re_perf_cio = (get_stat("VNQ") / get_stat("VNQ", "ma50")) - 1 if get_stat("VNQ", "ma50") > 0 else 0
+        if re_perf_cio < 0:
+            health_score -= 10  # Real Estate Stress
             
         # Normalizzazione Score (0-100)
         health_score = max(0, min(100, health_score))
