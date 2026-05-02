@@ -29,6 +29,7 @@ TICKER_NAMES = {
     "NG=F": "Gas Naturale", "HO=F": "Heating Oil", "RB=F": "Benzina RBOB", "XLE": "Energia USA (ETF)", "XOP": "Oil & Gas Exploration",
     "UNG": "Gas Naturale (ETF)", "DBO": "Petrolio (ETF)", "HG=F": "Rame (Future)", "CPER": "Rame (ETF)", "DBB": "Base Metals (ETF)",
     "XME": "Metals & Mining", "JJU": "Alluminio (ETF)", "JJN": "Nickel (ETF)", "PICK": "Global Mining", "LIT": "Litio (ETF)", "REMX": "Terre Rare",
+    "ITB": "Homebuilders (ETF)",
     # Agricoltura
     "ZW=F": "Grano", "ZC=F": "Mais", "ZS=F": "Soia", "KC=F": "Caffè", "CT=F": "Cotone", "CC=F": "Cacao", "SB=F": "Zucchero", "DBA": "Agricoltura (ETF)", "MOO": "Agribusiness",
     # Indici & Equity
@@ -364,16 +365,13 @@ def display_macro_war_room():
 
     # --- 1. MOTORE DATI (Sentinelle Espanse) ---
     sentinels = [
-        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM",
+        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM", "IWM", # Equity Global
         "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",
-        "GC=F", "SI=F", "PL=F", "PA=F", "HG=F", "CL=F", "BZ=F", "NG=F", # Metalli & Energia Completi
-        "TIP", "DBA", "XLE", "UUP", "GLD", "SLV",
+        "GC=F", "SI=F", "PL=F", "PA=F", "HG=F", "CL=F", "BZ=F", "NG=F", "XOP", # Hard Assets + XOP
+        "TIP", "DBA", "XLE", "UUP", "GLD", "SLV", "GDX", "ITB", # Builders & Miners
         "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
         "^VIX", "^VIX3M", "RSP", "XLK", "XLU", "XLY", "XLP",
-        "EWG", "EWQ", "EWI", # Europa core
-        "EWJ", "INDA", "EWY", "EWT", # Asia
-        "EWZ", "EWW", "EZA", # Emergenti
-        "EWC", "EWA", "EWL", "EWU" # Paesi Sviluppati (Canada, Australia, Svizzera, UK)
+        "EWG", "EWQ", "EWI", "EWU", "EWC", "EWA", "EWL", "EWJ", "INDA", "EWY", "EWT", "EWZ", "EWW", "EZA"
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -479,44 +477,83 @@ def display_macro_war_room():
             delta_eu = ((eur_curr / eur_ma) - 1) * 100
             st.metric("Europa (DAX)", f"{eur_curr:,.0f}", delta=f"{delta_eu:+.2f}% vs MA50", delta_color="normal" if eur_curr > eur_ma else "inverse")
 
-        st.markdown("#### 📊 Classifiche di Forza Relativa Globale")
-        c_rank1, c_rank2 = st.columns(2)
-        with c_rank1:
-            mkt_equity = {"USA (SPY)": "SPY", "Europa (VGK)": "VGK", "Cina (MCHI)": "MCHI", "Emergenti (EEM)": "EEM", "Giappone (EWJ)": "EWJ", "Germania (DAX)": "^GDAXI"}
-            st.plotly_chart(draw_ranked_bars(mkt_equity, "Equity Mondiale (20gg)"), use_container_width=True)
-        with c_rank2:
-            mkt_re = {"Real Estate USA": "VNQ", "Homebuilders": "XHB", "Energy": "XLE", "Gold Miners": "GDX"}
-            st.plotly_chart(draw_ranked_bars(mkt_re, "Real Estate & Settori Lead"), use_container_width=True)
-
-        # --- RIPRISTINO CLASSIFICHE DI FORZA ---
-        st.markdown("#### ⚡ Classifiche di Forza & Market Breadth")
-        col_f1, col_f2, col_f3 = st.columns(3)
+        # --- LIVELLO 2.6: GLOBAL RELATIVE STRENGTH (20D) ---
+        st.markdown("#### 🌍 Classifica Forza Relativa Globale (20gg)")
+        equity_map = {
+            "USA (S&P500)": "^GSPC", "USA Tech (NDX)": "^IXIC", "USA Small Caps (IWM)": "IWM",
+            "Europa (VGK)": "VGK", "Germania (DAX)": "^GDAXI", "Cina (MCHI)": "MCHI", "Emergenti (EEM)": "EEM"
+        }
+        data_equity = []
+        for name, tk in equity_map.items():
+            if tk in df.columns:
+                perf = (df[tk].iloc[-1] / df[tk].iloc[-20]) - 1
+                data_equity.append({"Mercato": name, "Performance": perf})
         
-        with col_f1:
-            st.write("**Settori Lead & Breadth**")
-            # Ripristino metriche fondamentali rimosse
-            m1 = (get_stat("RSP") / get_stat("^GSPC")) - 1 # Breadth
-            m2 = (get_stat("XLK") / get_stat("^GSPC")) - 1 # Tech Leadership
-            m3 = (get_stat("XLY") / get_stat("XLP")) - 1   # Risk Appetite
-            st.metric("Market Breadth (RSP/SPY)", f"{m1:.2%}", delta="Sano" if m1 > 0 else "Debole")
-            st.metric("Tech Dominance (XLK/SPY)", f"{m2:.2%}")
-            st.metric("Consumer Ratio (XLY/XLP)", f"{m3:.2%}")
+        df_equity = pd.DataFrame(data_equity).sort_values("Performance", ascending=False)
+        fig_eq = px.bar(df_equity, x="Performance", y="Mercato", orientation='h', 
+                        color="Performance", color_continuous_scale='RdYlGn', text_auto='.2%')
+        fig_eq.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
+        st.plotly_chart(fig_eq, use_container_width=True)
 
-        with col_f2:
-            st.write("**Real Estate & Yield Sensitive**")
-            # Espansione Real Estate e Utilities
-            re_perf = (get_stat("VNQ") / get_stat("VNQ", "ma50")) - 1 if get_stat("VNQ", "ma50") else 0
-            ut_perf = (get_stat("XLU") / get_stat("XLU", "ma50")) - 1 if get_stat("XLU", "ma50") else 0
-            st.metric("Real Estate (VNQ)", f"{re_perf:.2%}", delta="Tassi ok" if re_perf > 0 else "Stress Tassi")
-            st.metric("Utilities (XLU)", f"{ut_perf:.2%}")
+        st.markdown("#### 🚀 Settori Lead, Breadth & Risk-Appetite")
+        
+        # Calcolo Metriche
+        m_breadth = (get_stat("RSP") / get_stat("^GSPC")) - 1
+        m_tech = (get_stat("XLK") / get_stat("^GSPC")) - 1
+        m_risk = (get_stat("XLY") / get_stat("XLP")) - 1
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric(f"{'🟢' if m_breadth > 0 else '🔴'} Market Breadth", f"{m_breadth:.2%}", help="RSP vs SPY")
+        with c2:
+            st.metric(f"{'🟢' if m_tech > 0 else '🔴'} Tech Leadership", f"{m_tech:.2%}", help="XLK vs SPY")
+        with c3:
+            st.metric(f"{'🟢' if m_risk > 0 else '🔴'} Risk Appetite", f"{m_risk:.2%}", help="XLY vs XLP")
 
-        with col_f3:
-            st.write("**Energia & Hard Assets**")
-            # Espansione Energy Complex
-            oil_p = (get_stat("CL=F") / get_stat("CL=F", "ma50")) - 1 if get_stat("CL=F", "ma50") else 0
-            gas_p = (get_stat("NG=F") / get_stat("NG=F", "ma50")) - 1 if get_stat("NG=F", "ma50") else 0
-            st.metric("Petrolio WTI", f"{oil_p:.2%}")
-            st.metric("Gas Naturale", f"{gas_p:.2%}")
+        # Istogramma Settori Lead
+        lead_data = pd.DataFrame([
+            {"Settore": "Market Breadth", "Valore": m_breadth},
+            {"Settore": "Tech Leadership", "Valore": m_tech},
+            {"Settore": "Risk Appetite", "Valore": m_risk}
+        ])
+        fig_lead = px.bar(lead_data, x="Valore", y="Settore", orientation='h', 
+                          color="Valore", color_continuous_scale='Geyser', text_auto='.2%')
+        fig_lead.update_layout(height=200, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_lead, use_container_width=True)
+
+        st.markdown("#### 🏗️ Real Estate, Builders & Alpha Sectors")
+        alpha_map = {
+            "Real Estate (VNQ)": "VNQ", "Homebuilders (ITB)": "ITB", 
+            "Small Caps (IWM)": "IWM", "Gold Miners (GDX)": "GDX"
+        }
+        data_alpha = []
+        for name, tk in alpha_map.items():
+            if tk in df.columns:
+                perf = (df[tk].iloc[-1] / df[tk].iloc[-50]) - 1 # Forza relativa 50gg
+                data_alpha.append({"Settore": name, "Forza": perf})
+        
+        df_alpha = pd.DataFrame(data_alpha).sort_values("Forza", ascending=False)
+        fig_alpha = px.bar(df_alpha, x="Forza", y="Settore", orientation='h', 
+                           color="Forza", color_continuous_scale='Viridis', text_auto='.2%')
+        fig_alpha.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig_alpha, use_container_width=True)
+
+        st.markdown("#### 🛢️ Energy Complex & Hard Assets")
+        energy_map = {
+            "Oil & Gas Exp (XOP)": "XOP", "Crude Oil (WTI)": "CL=F", 
+            "Natural Gas": "NG=F", "Energy ETF (XLE)": "XLE"
+        }
+        data_energy = []
+        for name, tk in energy_map.items():
+            if tk in df.columns:
+                perf = (df[tk].iloc[-1] / df[tk].iloc[-20]) - 1
+                data_energy.append({"Asset": name, "Performance": perf})
+        
+        df_energy = pd.DataFrame(data_energy).sort_values("Performance", ascending=False)
+        fig_energy = px.bar(df_energy, x="Performance", y="Asset", orientation='h', 
+                            color="Performance", color_continuous_scale='Tropic', text_auto='.2%')
+        fig_energy.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig_energy, use_container_width=True)
 
         st.markdown("---")
 
