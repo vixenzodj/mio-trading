@@ -378,7 +378,7 @@ def display_macro_war_room():
         # ASIA ESPANSA
         "EWJ", "INDA", "EWY", "EWT", "EIDO", "VNM", "EPHE",
         # EMERGING ESPANSI
-        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK"
+        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK", "IMOEX.ME"
     ]
 
     with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
@@ -802,7 +802,7 @@ def display_macro_war_room():
             em_list = {
                 "Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA", 
                 "Arabia Saudita (KSA)": "KSA", "Turchia (TUR)": "TUR", "Cile (ECH)": "ECH", 
-                "Grecia (GREK)": "GREK", "Indice Broad (EEM)": "EEM"
+                "Grecia (GREK)": "GREK", "Russia (MOEX)": "IMOEX.ME", "Indice Broad (EEM)": "EEM"
             }
             st.plotly_chart(plot_drilldown(em_list, "Mercati Emergenti & Frontiera"), use_container_width=True)
         with tab_us:
