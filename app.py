@@ -779,14 +779,14 @@ def display_macro_war_room():
             eu_list = {
                 "Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI", 
                 "Spagna (EWP)": "EWP", "Olanda (EWN)": "EWN", "Svezia (EWD)": "EWD", 
-                "Svizzera (EWL)": "EWL", "Indice Area (VGK)": "VGK"
+                "Indice Area (VGK)": "VGK"
             }
             st.plotly_chart(plot_drilldown(eu_list, "Matrice Europea Core & Periferia"), use_container_width=True)
 
         with tab_dev:
             dev_list = {
                 "UK (EWU)": "EWU", "Canada (EWC)": "EWC", "Australia (EWA)": "EWA", 
-                "Singapore (EWS)": "EWS", "Hong Kong (EWH)": "EWH"
+                "Svizzera (EWL)": "EWL", "Singapore (EWS)": "EWS", "Hong Kong (EWH)": "EWH"
             }
             st.plotly_chart(plot_drilldown(dev_list, "Commonwealth & Developed Hubs"), use_container_width=True)
 
