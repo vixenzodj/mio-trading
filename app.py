@@ -1699,7 +1699,7 @@ def display_seasonality_and_calendar():
         # 1. CATEGORIE ISTITUZIONALI PREDEFINITE
         st.markdown("### 🔍 Setup Asset & Historical Data")
         cats = {
-            "Indici Equity (ETF)": ["SPY (S&P 500)", "QQQ (Nasdaq)", "DIA (Dow Jones)", "IWM (Small Cap)", "VGK (Europa)", "EEM (Emerging)", "VIX (Volatilità)"],
+            "Indici Equity (ETF)": ["SPY (S&P 500)", "QQQ (Nasdaq)", "DIA (Dow Jones)", "IWM (Small Cap)", "VGK (Europa)", "EEM (Emerging)", "^VIX (Volatilità)"],
             "Forex (Valute)": [
                 "EURUSD=X (Euro)", "JPYUSD=X (Yen)", "GBPUSD=X (Sterlina)", "USDCHF=X (Franco Svizzero)", 
                 "AUDUSD=X (Australiano)", "USDCAD=X (Canadese)", "NZDUSD=X (Neozelandese)",
