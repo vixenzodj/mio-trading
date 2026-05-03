@@ -1697,11 +1697,12 @@ def display_seasonality_and_calendar():
         # 1. CATEGORIE ISTITUZIONALI PREDEFINITE
         st.markdown("### 🔍 Setup Asset & Historical Data")
         cats = {
-            "Indici Equity (ETF)": ["SPY", "QQQ", "DIA", "IWM", "EFA", "EEM"],
-            "Forex (Valute)": ["EURUSD=X", "JPYUSD=X", "GBPUSD=X", "USDCHF=X", "AUDUSD=X", "USDCAD=X"],
-            "Metalli & Materie Prime": ["GC=F", "SI=F", "HG=F", "PL=F", "PA=F", "DBA", "CORN", "WEAT"],
-            "Settore Energetico": ["CL=F", "NG=F", "BZ=F", "XLE", "XOP"],
-            "Bond & Tassi": ["TLT", "IEF", "HYG", "LQD", "^TNX"],
+            "Indici Equity (ETF)": ["SPY (S&P 500)", "QQQ (Nasdaq)", "DIA (Dow Jones)", "IWM (Small Cap)", "VGK (Europa)", "EEM (Emerging)"],
+            "Forex (Valute)": ["EURUSD=X (Euro)", "JPYUSD=X (Yen)", "GBPUSD=X (Sterlina)", "USDCHF=X (Franco Svizzero)", "AUDUSD=X (Australiano)", "USDCAD=X (Canadese)"],
+            "Metalli Preziosi & Ind.": ["GC=F (Oro)", "SI=F (Argento)", "PL=F (Platino)", "PA=F (Palladio)", "HG=F (Rame)"],
+            "Materie Prime (Commodities)": ["CORN (Mais)", "WEAT (Grano)", "SOYB (Soia)", "CANE (Zucchero)", "BAL (Cotone)", "COFFEE (Caffè)", "DBA (Agricoltura G.)"],
+            "Settore Energetico": ["CL=F (Crude Oil)", "NG=F (Natural Gas)", "BZ=F (Brent)", "XLE (Energy ETF)", "XOP (Exploration)"],
+            "Bond & Tassi": ["TLT (20Y Bond)", "IEF (7-10Y Bond)", "HYG (High Yield)", "LQD (Corporate)", "^TNX (10Y Yield)"],
             "Custom (Inserimento Manuale)": []
         }
         
@@ -1712,7 +1713,8 @@ def display_seasonality_and_calendar():
             if cat_choice == "Custom (Inserimento Manuale)":
                 ticker = st.text_input("Inserisci Ticker (es. AAPL, EURUSD=X)", "AAPL").upper().strip()
             else:
-                ticker = st.selectbox("Seleziona Ticker", cats[cat_choice])
+                selected_val = st.selectbox("Seleziona Ticker", cats[cat_choice])
+                ticker = selected_val.split(" ")[0] if selected_val else ""
                 
         if not ticker:
             st.warning("Seleziona o inserisci un ticker valido.")
@@ -1793,34 +1795,29 @@ def display_seasonality_and_calendar():
                     if len(m_data) > 0:
                         win_rate = (len(m_data[m_data > 0]) / len(m_data)) * 100
                         avg_ret = m_data.mean()
-                        med_ret = m_data.median()
-                        best = m_data.max()
-                        worst = m_data.min()
+                        # Identificazione Bias
+                        bias = "🟢 LONG" if avg_ret > 0 else "🔴 SHORT"
                         stats_data.append({
                             "Mese": months_labels[m-1],
-                            "Win Rate %": round(win_rate, 1),
-                            "Rend. Medio %": round(avg_ret, 2),
-                            "Rend. Mediano %": round(med_ret, 2),
-                            "Max Gain %": round(best, 2),
-                            "Max Loss %": round(worst, 2),
-                            "Campione Storico (Anni)": len(m_data)
+                            "Bias": bias,
+                            "Win Rate (%)": int(round(win_rate, 0)),
+                            "Rend. Medio (%)": round(avg_ret, 2),
+                            "Max Gain (%)": round(m_data.max(), 2),
+                            "Max Loss (%)": round(m_data.min(), 2),
+                            "Anni Analizzati": len(m_data)
                         })
                 
                 df_stats = pd.DataFrame(stats_data)
+                st.dataframe(df_stats.style.background_gradient(subset=['Rend. Medio (%)'], cmap='RdYlGn'), use_container_width=True, hide_index=True)
                 
-                # Formattazione Colori
-                def color_winrate(val):
-                    color = '#2ecc71' if val >= 60 else ('#e74c3c' if val <= 40 else 'white')
-                    return f'color: {color}; font-weight: bold'
-                    
-                def color_return(val):
-                    color = '#2ecc71' if val > 0 else '#e74c3c'
-                    return f'color: {color}'
-
-                styled_stats = df_stats.style.map(color_winrate, subset=['Win Rate %']) \
-                                           .map(color_return, subset=['Rend. Medio %', 'Rend. Mediano %'])
-                
-                st.dataframe(styled_stats, use_container_width=True, hide_index=True)
+                # 7. EXECUTIVE SUMMARY (Top vs Worst)
+                st.markdown("### 🏆 Seasonal Performance Ranking")
+                top_months = df_stats.sort_values("Rend. Medio (%)", ascending=False)
+                col_best, col_worst = st.columns(2)
+                with col_best:
+                    st.success(f"**Top 3 Mesi Performanti:**\n1. {top_months.iloc[0]['Mese']} ({top_months.iloc[0]['Rend. Medio (%)']}%)\n2. {top_months.iloc[1]['Mese']} ({top_months.iloc[1]['Rend. Medio (%)']}%)\n3. {top_months.iloc[2]['Mese']} ({top_months.iloc[2]['Rend. Medio (%)']}%)")
+                with col_worst:
+                    st.error(f"**Top 3 Mesi Deboli:**\n1. {top_months.iloc[-1]['Mese']} ({top_months.iloc[-1]['Rend. Medio (%)']}%)\n2. {top_months.iloc[-2]['Mese']} ({top_months.iloc[-2]['Rend. Medio (%)']}%)\n3. {top_months.iloc[-3]['Mese']} ({top_months.iloc[-3]['Rend. Medio (%)']}%)")
 
             except Exception as e:
                 st.error(f"Errore durante l'elaborazione della stagionalità: {e}")
