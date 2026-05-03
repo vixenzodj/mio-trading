@@ -1823,7 +1823,7 @@ def display_seasonality_and_calendar():
                 df_stats = pd.DataFrame(stats_data)
                 st.dataframe(df_stats, use_container_width=True, hide_index=True)
                 
-                # Executive Summary Finale
+                # Executive Summary Finale (Aggiornato con Percentuali)
                 st.markdown("### 🏆 Seasonal Alpha Ranking")
                 df_numeric = pd.DataFrame([
                     {"Mese": months_labels[m-1], "Avg": monthly_data[monthly_data['Month'] == m]['Close'].mean()} 
@@ -1834,9 +1834,19 @@ def display_seasonality_and_calendar():
                 
                 c_best, c_worst = st.columns(2)
                 with c_best:
-                    st.success(f"**Mesi Migliori (Long):**\n1. {top_3.iloc[0]['Mese']}\n2. {top_3.iloc[1]['Mese']}\n3. {top_3.iloc[2]['Mese']}")
+                    st.success(
+                        f"**Mesi Migliori (Long):**\n\n"
+                        f"1. {top_3.iloc[0]['Mese']} ({top_3.iloc[0]['Avg']:.2f}%)\n"
+                        f"2. {top_3.iloc[1]['Mese']} ({top_3.iloc[1]['Avg']:.2f}%)\n"
+                        f"3. {top_3.iloc[2]['Mese']} ({top_3.iloc[2]['Avg']:.2f}%)"
+                    )
                 with c_worst:
-                    st.error(f"**Mesi Peggiori (Short):**\n1. {worst_3.iloc[0]['Mese']}\n2. {worst_3.iloc[1]['Mese']}\n3. {worst_3.iloc[2]['Mese']}")
+                    st.error(
+                        f"**Mesi Peggiori (Short):**\n\n"
+                        f"1. {worst_3.iloc[0]['Mese']} ({worst_3.iloc[0]['Avg']:.2f}%)\n"
+                        f"2. {worst_3.iloc[1]['Mese']} ({worst_3.iloc[1]['Avg']:.2f}%)\n"
+                        f"3. {worst_3.iloc[2]['Mese']} ({worst_3.iloc[2]['Avg']:.2f}%)"
+                    )
 
             except Exception as e:
                 st.error(f"Errore durante l'elaborazione della stagionalità: {e}")
