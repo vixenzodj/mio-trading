@@ -1699,11 +1699,22 @@ def display_seasonality_and_calendar():
         # 1. CATEGORIE ISTITUZIONALI PREDEFINITE
         st.markdown("### 🔍 Setup Asset & Historical Data")
         cats = {
-            "Indici Equity (ETF)": ["SPY (S&P 500)", "QQQ (Nasdaq)", "DIA (Dow Jones)", "IWM (Small Cap)", "VGK (Europa)", "EEM (Emerging)"],
-            "Forex (Valute)": ["EURUSD=X (Euro)", "JPYUSD=X (Yen)", "GBPUSD=X (Sterlina)", "USDCHF=X (Franco Svizzero)", "AUDUSD=X (Australiano)", "USDCAD=X (Canadese)"],
-            "Metalli Preziosi & Ind.": ["GC=F (Oro)", "SI=F (Argento)", "PL=F (Platino)", "PA=F (Palladio)", "HG=F (Rame)"],
-            "Materie Prime (Commodities)": ["CORN (Mais)", "WEAT (Grano)", "SOYB (Soia)", "CANE (Zucchero)", "BAL (Cotone)", "COFFEE (Caffè)", "DBA (Agricoltura G.)"],
-            "Settore Energetico": ["CL=F (Crude Oil)", "NG=F (Natural Gas)", "BZ=F (Brent)", "XLE (Energy ETF)", "XOP (Exploration)"],
+            "Indici Equity (ETF)": ["SPY (S&P 500)", "QQQ (Nasdaq)", "DIA (Dow Jones)", "IWM (Small Cap)", "VGK (Europa)", "EEM (Emerging)", "VIX (Volatilità)"],
+            "Forex (Valute)": [
+                "EURUSD=X (Euro)", "JPYUSD=X (Yen)", "GBPUSD=X (Sterlina)", "USDCHF=X (Franco Svizzero)", 
+                "AUDUSD=X (Australiano)", "USDCAD=X (Canadese)", "NZDUSD=X (Neozelandese)",
+                "EURJPY=X (Euro/Yen)", "EURGBP=X (Euro/Sterlina)", "GBPJPY=X (Sterlina/Yen)", "EURCHF=X (Euro/Franco)"
+            ],
+            "Metalli Preziosi & Ind.": ["GC=F (Oro)", "SI=F (Argento)", "PL=F (Platino)", "PA=F (Palladio)", "HG=F (Rame)", "ALI=F (Alluminio)"],
+            "Materie Prime (Agricoltura)": [
+                "KC=F (Caffè)", "CORN (Mais)", "WEAT (Grano)", "SOYB (Soia)", "ZL=F (Olio di Soia)", 
+                "ZO=F (Avena)", "ZR=F (Riso Grezzo)", "KE=F (Grano Rosso Inv.)", "MG=F (Grano Primavera)", 
+                "CT=F (Cotone)", "SB=F (Zucchero)", "CC=F (Cacao)", "DBA (Agricoltura G.)"
+            ],
+            "Settore Zootecnico (Livestock)": [
+                "LE=F (Bovini Vivi)", "GF=F (Bovini da Ingrasso)", "HE=F (Maiali Magri)"
+            ],
+            "Settore Energetico": ["CL=F (Crude Oil)", "NG=F (Natural Gas)", "BZ=F (Brent)", "RB=F (Benzina)", "HO=F (Heating Oil)", "XLE (Energy ETF)"],
             "Bond & Tassi": ["TLT (20Y Bond)", "IEF (7-10Y Bond)", "HYG (High Yield)", "LQD (Corporate)", "^TNX (10Y Yield)"],
             "Custom (Inserimento Manuale)": []
         }
@@ -1713,10 +1724,10 @@ def display_seasonality_and_calendar():
             cat_choice = st.selectbox("Seleziona Categoria Asset", list(cats.keys()))
         with col2:
             if cat_choice == "Custom (Inserimento Manuale)":
-                ticker = st.text_input("Inserisci Ticker (es. AAPL, EURUSD=X)", "AAPL").upper().strip()
+                ticker = st.text_input("Inserisci Ticker", "AAPL").upper().strip()
             else:
-                selected_val = st.selectbox("Seleziona Ticker", cats[cat_choice])
-                ticker = selected_val.split(" ")[0] if selected_val else ""
+                ticker_raw = st.selectbox("Seleziona Ticker", cats[cat_choice])
+                ticker = ticker_raw.split(" (")[0] # Estrae solo la parte prima della parentesi (es. KC=F)
                 
         if not ticker:
             st.warning("Seleziona o inserisci un ticker valido.")
@@ -1797,29 +1808,35 @@ def display_seasonality_and_calendar():
                     if len(m_data) > 0:
                         win_rate = (len(m_data[m_data > 0]) / len(m_data)) * 100
                         avg_ret = m_data.mean()
-                        # Identificazione Bias
-                        bias = "🟢 LONG" if avg_ret > 0 else "🔴 SHORT"
+                        # Identificazione Bias Direzionale
+                        bias = "🟢 BULLISH (Long)" if avg_ret > 0 else "🔴 BEARISH (Short)"
                         stats_data.append({
                             "Mese": months_labels[m-1],
-                            "Bias": bias,
-                            "Win Rate (%)": int(round(win_rate, 0)),
-                            "Rend. Medio (%)": round(avg_ret, 2),
-                            "Max Gain (%)": round(m_data.max(), 2),
-                            "Max Loss (%)": round(m_data.min(), 2),
-                            "Anni Analizzati": len(m_data)
+                            "Previsione Storica": bias,
+                            "Win Rate (%)": f"{int(round(win_rate, 0))}%",
+                            "Rend. Medio (%)": f"{avg_ret:.2f}%",
+                            "Max Gain (%)": f"{m_data.max():.2f}%",
+                            "Max Loss (%)": f"{m_data.min():.2f}%",
+                            "Campione (Anni)": len(m_data)
                         })
                 
                 df_stats = pd.DataFrame(stats_data)
-                st.dataframe(df_stats.style.background_gradient(subset=['Rend. Medio (%)'], cmap='RdYlGn'), use_container_width=True, hide_index=True)
+                st.dataframe(df_stats, use_container_width=True, hide_index=True)
                 
-                # 7. EXECUTIVE SUMMARY (Top vs Worst)
-                st.markdown("### 🏆 Seasonal Performance Ranking")
-                top_months = df_stats.sort_values("Rend. Medio (%)", ascending=False)
-                col_best, col_worst = st.columns(2)
-                with col_best:
-                    st.success(f"**Top 3 Mesi Performanti:**\n1. {top_months.iloc[0]['Mese']} ({top_months.iloc[0]['Rend. Medio (%)']}%)\n2. {top_months.iloc[1]['Mese']} ({top_months.iloc[1]['Rend. Medio (%)']}%)\n3. {top_months.iloc[2]['Mese']} ({top_months.iloc[2]['Rend. Medio (%)']}%)")
-                with col_worst:
-                    st.error(f"**Top 3 Mesi Deboli:**\n1. {top_months.iloc[-1]['Mese']} ({top_months.iloc[-1]['Rend. Medio (%)']}%)\n2. {top_months.iloc[-2]['Mese']} ({top_months.iloc[-2]['Rend. Medio (%)']}%)\n3. {top_months.iloc[-3]['Mese']} ({top_months.iloc[-3]['Rend. Medio (%)']}%)")
+                # Executive Summary Finale
+                st.markdown("### 🏆 Seasonal Alpha Ranking")
+                df_numeric = pd.DataFrame([
+                    {"Mese": months_labels[m-1], "Avg": monthly_data[monthly_data['Month'] == m]['Close'].mean()} 
+                    for m in range(1, 13)
+                ])
+                top_3 = df_numeric.sort_values("Avg", ascending=False).head(3)
+                worst_3 = df_numeric.sort_values("Avg", ascending=True).head(3)
+                
+                c_best, c_worst = st.columns(2)
+                with c_best:
+                    st.success(f"**Mesi Migliori (Long):**\n1. {top_3.iloc[0]['Mese']}\n2. {top_3.iloc[1]['Mese']}\n3. {top_3.iloc[2]['Mese']}")
+                with c_worst:
+                    st.error(f"**Mesi Peggiori (Short):**\n1. {worst_3.iloc[0]['Mese']}\n2. {worst_3.iloc[1]['Mese']}\n3. {worst_3.iloc[2]['Mese']}")
 
             except Exception as e:
                 st.error(f"Errore durante l'elaborazione della stagionalità: {e}")
