@@ -1821,7 +1821,21 @@ def display_seasonality_and_calendar():
                         })
                 
                 df_stats = pd.DataFrame(stats_data)
-                st.dataframe(df_stats, use_container_width=True, hide_index=True)
+                
+                # Trasformazione temporanea per la formattazione (rimozione simbolo % per calcolo gradiente)
+                df_viz = df_stats.copy()
+                df_viz['Rend. Medio (%)'] = df_viz['Rend. Medio (%)'].str.replace('%', '').astype(float)
+                
+                # Applichiamo lo stile con gradiente sulla colonna del Rendimento Medio
+                # Usiamo la colonna numerica originale o pulita per il calcolo del colore
+                styled_df = df_viz.style.background_gradient(
+                    subset=['Rend. Medio (%)'], 
+                    cmap='RdYlGn', # Scala da Rosso (Red) a Verde (Green)
+                    vmin=-3.0,     # Range minimo per il colore pieno
+                    vmax=3.0       # Range massimo per il colore pieno
+                ).format({'Rend. Medio (%)': '{:.2f}%'}, precision=2)
+
+                st.dataframe(styled_df, use_container_width=True, hide_index=True)
                 
                 # Executive Summary Finale (Aggiornato con Percentuali)
                 st.markdown("### 🏆 Seasonal Alpha Ranking")
