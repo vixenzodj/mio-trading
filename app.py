@@ -1685,6 +1685,169 @@ def get_whale_intelligence(ticker):
     except Exception as e:
         return {"Whale_Price": None, "Whale_Intensity": 0, "Confluence_Status": "N/A", "Whale_Bias": "NEUTRAL", "Volume_Buyers": 0, "Volume_Sellers": 0, "Error": str(e)}
 
+import streamlit.components.v1 as components
+
+def display_seasonality_and_calendar():
+    st.title("📅 INSTITUTIONAL SEASONALITY & MACRO CALENDAR")
+    st.info("Motore quantitativo per il vantaggio statistico storico e tracking degli eventi macroeconomici.")
+    
+    tab_seas, tab_cal = st.tabs(["📊 Multi-Asset Seasonality Engine", "📆 Global Economic Calendar"])
+    
+    with tab_seas:
+        # 1. CATEGORIE ISTITUZIONALI PREDEFINITE
+        st.markdown("### 🔍 Setup Asset & Historical Data")
+        cats = {
+            "Indici Equity (ETF)": ["SPY", "QQQ", "DIA", "IWM", "EFA", "EEM"],
+            "Forex (Valute)": ["EURUSD=X", "JPYUSD=X", "GBPUSD=X", "USDCHF=X", "AUDUSD=X", "USDCAD=X"],
+            "Metalli & Materie Prime": ["GC=F", "SI=F", "HG=F", "PL=F", "PA=F", "DBA", "CORN", "WEAT"],
+            "Settore Energetico": ["CL=F", "NG=F", "BZ=F", "XLE", "XOP"],
+            "Bond & Tassi": ["TLT", "IEF", "HYG", "LQD", "^TNX"],
+            "Custom (Inserimento Manuale)": []
+        }
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            cat_choice = st.selectbox("Seleziona Categoria Asset", list(cats.keys()))
+        with col2:
+            if cat_choice == "Custom (Inserimento Manuale)":
+                ticker = st.text_input("Inserisci Ticker (es. AAPL, EURUSD=X)", "AAPL").upper().strip()
+            else:
+                ticker = st.selectbox("Seleziona Ticker", cats[cat_choice])
+                
+        if not ticker:
+            st.warning("Seleziona o inserisci un ticker valido.")
+            return
+
+        with st.spinner(f"Scaricamento di tutto lo storico disponibile per {ticker}..."):
+            try:
+                # 2. SCARICAMENTO TUTTI I DATI ESISTENTI (MAX)
+                df_raw = yf.download(ticker, period="max", progress=False)
+                if df_raw.empty:
+                    st.error(f"Nessun dato trovato per {ticker}.")
+                    return
+                
+                if isinstance(df_raw.columns, pd.MultiIndex):
+                    df_raw.columns = df_raw.columns.get_level_values(0)
+                
+                if 'Close' not in df_raw.columns:
+                    st.error("Dati Close mancanti.")
+                    return
+                    
+                df_close = df_raw[['Close']].dropna()
+                first_date = df_close.index.min().strftime('%Y-%m-%d')
+                last_date = df_close.index.max().strftime('%Y-%m-%d')
+                total_years = (df_close.index.max() - df_close.index.min()).days / 365.25
+                
+                st.success(f"✅ Storico acquisito: {total_years:.1f} Anni di dati (Dal {first_date} al {last_date})")
+                
+                # 3. ELABORAZIONE RENDIMENTI MENSILI
+                # Resample fine mese e calcolo variazione %
+                monthly_data = df_close.resample('ME').last().pct_change() * 100
+                monthly_data = monthly_data.dropna()
+                monthly_data['Year'] = monthly_data.index.year
+                monthly_data['Month'] = monthly_data.index.month
+                
+                # 4. FUNZIONE CALCOLO CURVA STAGIONALE
+                current_year = datetime.now().year
+                def get_seasonality_curve(data, years_back=None):
+                    if years_back:
+                        data = data[data['Year'] >= (current_year - years_back)]
+                    return data.groupby('Month')['Close'].mean()
+
+                s_all = get_seasonality_curve(monthly_data)
+                s_20 = get_seasonality_curve(monthly_data, 20)
+                s_10 = get_seasonality_curve(monthly_data, 10)
+                s_5 = get_seasonality_curve(monthly_data, 5)
+                
+                months_labels = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic']
+                
+                # 5. PLOT GRAFICO COMPARATIVO
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=months_labels, y=s_all.values, mode='lines+markers', name=f'All-Time Storico ({total_years:.0f} Anni)', line=dict(color='white', width=4)))
+                if total_years >= 20:
+                    fig.add_trace(go.Scatter(x=months_labels, y=s_20.values, mode='lines', name='Ultimi 20 Anni', line=dict(color='gold', width=2, dash='dash')))
+                if total_years >= 10:
+                    fig.add_trace(go.Scatter(x=months_labels, y=s_10.values, mode='lines', name='Ultimi 10 Anni', line=dict(color='cyan', width=2, dash='dot')))
+                if total_years >= 5:
+                    fig.add_trace(go.Scatter(x=months_labels, y=s_5.values, mode='lines', name='Ultimi 5 Anni', line=dict(color='magenta', width=2, dash='longdash')))
+
+                fig.update_layout(
+                    title=f"Analisi Stagionalità Sovrapposta: {ticker}",
+                    xaxis_title="Mese dell'Anno",
+                    yaxis_title="Rendimento Medio Mensile (%)",
+                    template="plotly_dark",
+                    hovermode="x unified",
+                    height=500,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # 6. MOTORE STATISTICO (TABELLA RIEPILOGATIVA)
+                st.markdown("### 🧠 Macchina Statistica (Dati All-Time)")
+                st.write("Analisi matematica per singolo mese. Il **Win Rate** indica quante volte storicamente il mese ha chiuso in positivo.")
+                
+                stats_data = []
+                for m in range(1, 13):
+                    m_data = monthly_data[monthly_data['Month'] == m]['Close']
+                    if len(m_data) > 0:
+                        win_rate = (len(m_data[m_data > 0]) / len(m_data)) * 100
+                        avg_ret = m_data.mean()
+                        med_ret = m_data.median()
+                        best = m_data.max()
+                        worst = m_data.min()
+                        stats_data.append({
+                            "Mese": months_labels[m-1],
+                            "Win Rate %": round(win_rate, 1),
+                            "Rend. Medio %": round(avg_ret, 2),
+                            "Rend. Mediano %": round(med_ret, 2),
+                            "Max Gain %": round(best, 2),
+                            "Max Loss %": round(worst, 2),
+                            "Campione Storico (Anni)": len(m_data)
+                        })
+                
+                df_stats = pd.DataFrame(stats_data)
+                
+                # Formattazione Colori
+                def color_winrate(val):
+                    color = '#2ecc71' if val >= 60 else ('#e74c3c' if val <= 40 else 'white')
+                    return f'color: {color}; font-weight: bold'
+                    
+                def color_return(val):
+                    color = '#2ecc71' if val > 0 else '#e74c3c'
+                    return f'color: {color}'
+
+                styled_stats = df_stats.style.map(color_winrate, subset=['Win Rate %']) \
+                                           .map(color_return, subset=['Rend. Medio %', 'Rend. Mediano %'])
+                
+                st.dataframe(styled_stats, use_container_width=True, hide_index=True)
+
+            except Exception as e:
+                st.error(f"Errore durante l'elaborazione della stagionalità: {e}")
+
+    with tab_cal:
+        st.markdown("### 📆 Global Economic Calendar (Real-Time)")
+        st.write("Monitora i dati macroeconomici (CPI, NFP, Riunioni FED/BCE) in tempo reale. Filtra per importanza.")
+        
+        # Widget TradingView istituzionale
+        calendar_html = """
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-events.js" async>
+          {
+          "colorTheme": "dark",
+          "isTransparent": true,
+          "width": "100%",
+          "height": "600",
+          "locale": "it",
+          "importanceFilter": "-1,0,1",
+          "currencyFilter": "USD,EUR,GBP,JPY,AUD,CAD,CHF,CNY"
+        }
+          </script>
+        </div>
+        """
+        components.html(calendar_html, height=620)
+
 # --- NAVIGAZIONE ---
 st.sidebar.markdown("## 🔑 API KEYS")
 st.session_state.alpaca_api_key = st.sidebar.text_input("Alpaca API Key ID", value=st.session_state.get("alpaca_api_key", "PKQVMHYR25JUXQVLTEEBEKVIMV"), type="password")
@@ -1701,7 +1864,7 @@ if uploaded_file is not None:
 st.sidebar.markdown("---")
 
 st.sidebar.markdown("## 🧭 SISTEMA")
-menu = st.sidebar.radio("Seleziona Vista:", ["🌍 WAR ROOM (Dashboard Globale)", "🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)", "🕸️ Macro & Correlazione"])
+menu = st.sidebar.radio("Seleziona Vista:", ["🌍 WAR ROOM (Dashboard Globale)", "🏟️ DASHBOARD SINGOLA", "🔥 SCANNER HOT TICKERS", "🔙 BACKTESTING STRATEGIA", "🛠️ STRATEGY BUILDER", "🏛️ BLOOMBERG TERMINAL (Inst.)", "🔍 GLOBAL SCANNER (Alpha)", "🕸️ Macro & Correlazione", "📅 SEASONALITY & CALENDAR"])
 
 with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False):
     st.write("Estrai automaticamente i ticker da Testo o da Link Web.")
@@ -7141,3 +7304,6 @@ elif menu == "🕸️ Macro & Correlazione":
 
 elif menu == "🌍 WAR ROOM (Dashboard Globale)":
     display_macro_war_room()
+
+elif menu == "📅 SEASONALITY & CALENDAR":
+    display_seasonality_and_calendar()
