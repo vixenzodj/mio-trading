@@ -1,6 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas_ta as ta
 import plotly.graph_objects as go
