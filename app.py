@@ -2073,17 +2073,38 @@ def display_seasonality_and_calendar():
                             </div>
                             """, unsafe_allow_html=True)
 
-                            # 2. VISUALIZZAZIONE METRICHE CHIAVE (Livello Istituzionale su 2 Righe)
+                            # 2. VISUALIZZAZIONE METRICHE CHIAVE (Semaforica Individuale)
                             r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-                            r1c1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", f"{int(d1w_comm):,} (1W)", delta_color="normal")
-                            r1c2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", f"{int(d1w_spec):,} (1W)", delta_color="inverse")
-                            r1c3.metric("COT Index (Comm)", f"{cot_index_comm:.1f}%", help="> 80% Estremo Bullish, < 20% Estremo Bearish")
-                            r1c4.metric("Comm as % of Open Int.", f"{cpoi_latest:.1f}%", help="Valuta il vero peso degli istituzionali sul totale del mercato. Valori estremi indicano manipolazione o fine ciclo.")
+                            
+                            # Net Comm: Verde se positivo (Buy), Rosso se negativo (Sell)
+                            r1c1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", 
+                                       f"{int(d1w_comm):,} (1W)", delta_color="normal")
+                            
+                            # Net Specs: Rosso se positivo (pericoloso), Verde se negativo (contrarian)
+                            r1c2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", 
+                                       f"{int(d1w_spec):,} (1W)", delta_color="inverse")
+                            
+                            # COT Index: Semaforo su base 80/20
+                            idx_color = "normal" if cot_index_comm > 50 else "inverse"
+                            r1c3.metric("COT Index (Comm)", f"{cot_index_comm:.1f}%", 
+                                       delta="BULLISH" if cot_index_comm > 60 else "BEARISH" if cot_index_comm < 40 else "NEUTRAL",
+                                       delta_color=idx_color)
 
+                            # CP/OI: Colore basato sugli estremi ±15%
+                            cpoi_status = "⚠️ EXTREME" if abs(cpoi_latest) > 15 else "STABLE"
+                            r1c4.metric("Comm/OI Weight", f"{cpoi_latest:.1f}%", delta=cpoi_status, delta_color="off", help="Valori > ±15% indicano esposizione elevata. > ±20% indicano estremi storici di fine ciclo o manipolazione istituzionale (Overcrowded Trade).")
+
+                            st.markdown("---")
                             r2c1, r2c2, r2c3 = st.columns([2, 1, 1])
-                            r2c1.metric("Open Interest Totale (OI)", f"{int(latest[col_mapping['open_interest']]):,}", f"{int(d1w_oi):,} (1W Delta OI)", help="L'aumento dell'OI conferma il trend in atto (nuova liquidità). Un calo indica chiusura di posizioni.", delta_color="normal")
-                            r2c2.metric("Delta Mensile Comm", f"{int(d4w_comm):,}", "Contratti 4W", delta_color="normal")
-                            r2c3.metric("Delta Mensile Specs", f"{int(d4w_spec):,}", "Contratti 4W", delta_color="inverse")
+                            
+                            # Open Interest: Verde se sale (conferma trend), Grigio se scende
+                            oi_delta_label = f"{int(d1w_oi):,} (New Liquidity)" if d1w_oi > 0 else f"{int(d1w_oi):,} (Liquidation)"
+                            r2c1.metric("Open Interest Totale (OI)", f"{int(latest[col_mapping['open_interest']]):,}", 
+                                       oi_delta_label, delta_color="normal")
+                            
+                            # Delta Mensili
+                            r2c2.metric("Delta 4W Comm", f"{int(d4w_comm):,}", "Contratti", delta_color="normal")
+                            r2c3.metric("Delta 4W Specs", f"{int(d4w_spec):,}", "Contratti", delta_color="inverse")
 
                             # 3. ISTOGRAMMA DELTA VOLUMI (Flussi di Liquidità)
                             st.markdown("##### 🌊 Analisi della Liquidità (Delta Contratti Mensile)")
@@ -2115,7 +2136,8 @@ def display_seasonality_and_calendar():
                                 df_inspec = df_cot.tail(12)[['date', 'Net_Comm', 'Net_NonComm', col_mapping['open_interest']]].copy()
                                 df_inspec = df_inspec.rename(columns={col_mapping['open_interest']: 'Open Interest'})
                                 df_inspec['Variazione Comm %'] = df_inspec['Net_Comm'].pct_change() * 100
-                                st.dataframe(df_inspec.sort_values('date', ascending=False), use_container_width=True)
+                                # Formattazione visiva veloce
+                                st.dataframe(df_inspec.sort_values('date', ascending=False).style.background_gradient(cmap='RdYlGn', subset=['Variazione Comm %']), use_container_width=True)
                             
                             st.caption("💡 **Guida alla Lettura:** I **Commercials (Verde)** sono i produttori e operatori del settore fisico; agiscono spesso come *Smart Money contrarian* (es. comprano quando i prezzi crollano). I **Large Specs (Rosso)** sono i grandi fondi che seguono il trend. Quando queste due linee raggiungono divergenze estreme, indicano probabili inversioni di mercato a medio termine.")
                         else:
