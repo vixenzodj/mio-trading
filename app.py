@@ -1997,6 +1997,66 @@ def display_seasonality_and_calendar():
                             )
                             st.plotly_chart(fig_cot, use_container_width=True)
                             
+                            # --- START INSTITUTIONAL DASHBOARD ---
+                            st.markdown("#### 📊 Wall Street Intelligence Dashboard")
+                            
+                            # 1. CALCOLO METRICHE AVANZATE (Delta & Percentili)
+                            latest = df_cot.iloc[-1]
+                            prev_1w = df_cot.iloc[-2] if len(df_cot) > 1 else latest
+                            prev_4w = df_cot.iloc[-5] if len(df_cot) > 4 else latest
+                            prev_12w = df_cot.iloc[-13] if len(df_cot) > 12 else latest
+
+                            # Delta 1 Settimana
+                            d1w_comm = latest['Net_Comm'] - prev_1w['Net_Comm']
+                            d1w_spec = latest['Net_NonComm'] - prev_1w['Net_NonComm']
+                            
+                            # Delta 1 Mese (4W)
+                            d4w_comm = latest['Net_Comm'] - prev_4w['Net_Comm']
+                            d4w_spec = latest['Net_NonComm'] - prev_4w['Net_NonComm']
+
+                            # COT Index (Percentile a 2 anni) - Fondamentale per eccessi
+                            comm_net_min = df_cot['Net_Comm'].min()
+                            comm_net_max = df_cot['Net_Comm'].max()
+                            cot_index_comm = ((latest['Net_Comm'] - comm_net_min) / (comm_net_max - comm_net_min)) * 100
+
+                            # 2. VISUALIZZAZIONE METRICHE CHIAVE
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", f"{int(d1w_comm):,}")
+                            m2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", f"{int(d1w_spec):,}")
+                            m3.metric("COT Index (Comm)", f"{cot_index_comm:.1f}%", help="Sopra 80% estremo Bullish, Sotto 20% estremo Bearish")
+                            m4.metric("Delta Mensile (Specs)", f"{int(d4w_spec):,}", "Contratti 4W", delta_color="off")
+
+                            # 3. ISTOGRAMMA DELTA VOLUMI (Flussi di Liquidità)
+                            st.markdown("##### 🌊 Analisi della Liquidità (Delta Contratti Mensile)")
+                            
+                            # Prepariamo i dati per l'istogramma degli ultimi 12 report
+                            df_delta = df_cot.tail(12).copy()
+                            df_delta['Comm_Delta'] = df_delta['Net_Comm'].diff()
+                            df_delta['Spec_Delta'] = df_delta['Net_NonComm'].diff()
+                            
+                            fig_delta = go.Figure()
+                            fig_delta.add_trace(go.Bar(
+                                x=df_delta['date'], y=df_delta['Comm_Delta'],
+                                name='Flusso Smart Money', marker_color='#2ecc71', opacity=0.7
+                            ))
+                            fig_delta.add_trace(go.Bar(
+                                x=df_delta['date'], y=df_delta['Spec_Delta'],
+                                name='Flusso Hedge Funds', marker_color='#e74c3c', opacity=0.7
+                            ))
+                            
+                            fig_delta.update_layout(
+                                barmode='group', height=300, template="plotly_dark",
+                                margin=dict(l=0, r=0, t=20, b=0),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                            )
+                            st.plotly_chart(fig_delta, use_container_width=True)
+
+                            # 4. TABELLA ANOMALIE
+                            with st.expander("🔍 Ispezione Anomalie Dati (Raw Data Analysis)"):
+                                df_inspec = df_cot.tail(12)[['date', 'Net_Comm', 'Net_NonComm']].copy()
+                                df_inspec['Variazione Comm %'] = df_inspec['Net_Comm'].pct_change() * 100
+                                st.dataframe(df_inspec.sort_values('date', ascending=False), use_container_width=True)
+                            
                             st.caption("💡 **Guida alla Lettura:** I **Commercials (Verde)** sono i produttori e operatori del settore fisico; agiscono spesso come *Smart Money contrarian* (es. comprano quando i prezzi crollano). I **Large Specs (Rosso)** sono i grandi fondi che seguono il trend. Quando queste due linee raggiungono divergenze estreme, indicano probabili inversioni di mercato a medio termine.")
                         else:
                             st.warning("Dati storici COT non disponibili attualmente per questo contratto.")
