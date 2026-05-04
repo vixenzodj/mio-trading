@@ -7411,38 +7411,60 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             t1, t2, t3, t4 = st.tabs(["📊 BILANCI DETTAGLIATI", "📈 GRAFICO INTERATTIVO", "🐋 FLUSSI WHALES", "📰 NEWS"])
 
             with t1:
-                st.write(f"Valori espressi in **{inf.get('financialCurrency', 'Valuta Locale')}**")
-                st.markdown("### 📊 Financial Statements")
+                st.markdown("### 📊 Financial Intelligence Terminal")
                 
-                # Selettore Periodicità
-                period_type = st.radio(
-                    "Seleziona Periodicità:",
-                    ["Annuale (FY)", "Trimestrale (Latest Q)"],
-                    horizontal=True,
-                    help="Scegli 'Trimestrale' per vedere i dati più recenti del 2026 (Q1, Q2, Q3)."
+                # 1. Layout Superiore: Switch Periodo e Valuta
+                col_head1, col_head2 = st.columns([1, 1])
+                with col_head1:
+                    period_choice = st.toggle("📅 Visualizza Trimestrali (Latest Q)", value=False)
+                    prefix = "q_" if period_choice else ""
+                
+                with col_head2:
+                    currency_symbol = data['info'].get('currency', 'USD')
+                    st.write(f"**Valuta:** {currency_symbol}")
+
+                # 2. Menu a Tendina (Selectbox) per i Rendiconti
+                statement_type = st.selectbox(
+                    "Seleziona Rendiconto Finanziario:",
+                    ["Conto Economico (Income Statement)", "Stato Patrimoniale (Balance Sheet)", "Rendiconto Finanziario (Cash Flow)"]
                 )
 
-                suffix = "" if period_type == "Annuale (FY)" else "q_"
+                # Mappatura dati
+                mapping = {
+                    "Conto Economico (Income Statement)": f"{prefix}fin",
+                    "Stato Patrimoniale (Balance Sheet)": f"{prefix}bs",
+                    "Rendiconto Finanziario (Cash Flow)": f"{prefix}cf"
+                }
                 
-                col_f1, col_f2 = st.columns(2)
-                with col_f1:
-                    st.write("**Income Statement**")
-                    if data[f'{suffix}fin'] is not None and not data[f'{suffix}fin'].empty:
-                        st.dataframe(data[f'{suffix}fin'], use_container_width=True)
+                raw_data = data.get(mapping[statement_type])
+
+                # 3. Formattazione Professionale (B/M)
+                def format_finance(n):
+                    try:
+                        if pd.isna(n) or n == 0: return "-"
+                        abs_n = abs(float(n))
+                        sign = "-" if n < 0 else ""
+                        if abs_n >= 1e9: return f"{sign}{currency_symbol} {abs_n/1e9:.2f}B"
+                        if abs_n >= 1e6: return f"{sign}{currency_symbol} {abs_n/1e6:.1f}M"
+                        return f"{sign}{currency_symbol} {abs_n:,.0f}"
+                    except:
+                        return str(n)
+
+                if raw_data is not None and not raw_data.empty:
+                    df_to_show = raw_data.copy()
+                    # Applichiamo la formattazione a tutte le colonne (che sono date)
+                    if hasattr(df_to_show, 'map'):
+                        formatted_df = df_to_show.map(format_finance)
                     else:
-                        st.warning("Dati non disponibili.")
-                with col_f2:
-                    st.write("**Balance Sheet**")
-                    if data[f'{suffix}bs'] is not None and not data[f'{suffix}bs'].empty:
-                        st.dataframe(data[f'{suffix}bs'], use_container_width=True)
-                    else:
-                        st.warning("Dati non disponibili.")
-                
-                st.write("**Cash Flow Statement**")
-                if data[f'{suffix}cf'] is not None and not data[f'{suffix}cf'].empty:
-                    st.dataframe(data[f'{suffix}cf'], use_container_width=True)
+                        formatted_df = df_to_show.applymap(format_finance)
+                    
+                    st.dataframe(
+                        formatted_df,
+                        use_container_width=True,
+                        height=400
+                    )
                 else:
-                    st.warning("Dati non disponibili.")
+                    st.warning("Dati non disponibili per questa selezione.")
                     
             with t2:
                 fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
