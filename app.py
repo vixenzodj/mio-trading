@@ -1954,7 +1954,8 @@ def display_seasonality_and_calendar():
                                 'comm_long': 'comm_positions_long_all' if 'comm_positions_long_all' in df_cot.columns else 'commercial_long_all',
                                 'comm_short': 'comm_positions_short_all' if 'comm_positions_short_all' in df_cot.columns else 'commercial_short_all',
                                 'retail_long': 'nonrept_positions_long_all' if 'nonrept_positions_long_all' in df_cot.columns else 'nonreportable_positions_long_all',
-                                'retail_short': 'nonrept_positions_short_all' if 'nonrept_positions_short_all' in df_cot.columns else 'nonreportable_positions_short_all'
+                                'retail_short': 'nonrept_positions_short_all' if 'nonrept_positions_short_all' in df_cot.columns else 'nonreportable_positions_short_all',
+                                'open_interest': 'open_interest_all' if 'open_interest_all' in df_cot.columns else 'open_interest'
                             }
                             
                             for c in col_mapping.values():
@@ -2000,31 +2001,39 @@ def display_seasonality_and_calendar():
                             # --- START INSTITUTIONAL DASHBOARD ---
                             st.markdown("#### 📊 Wall Street Intelligence Dashboard")
                             
-                            # 1. CALCOLO METRICHE AVANZATE (Delta & Percentili)
+                            # 1. CALCOLO METRICHE AVANZATE (Delta, Percentili e OI)
                             latest = df_cot.iloc[-1]
                             prev_1w = df_cot.iloc[-2] if len(df_cot) > 1 else latest
                             prev_4w = df_cot.iloc[-5] if len(df_cot) > 4 else latest
-                            prev_12w = df_cot.iloc[-13] if len(df_cot) > 12 else latest
 
                             # Delta 1 Settimana
                             d1w_comm = latest['Net_Comm'] - prev_1w['Net_Comm']
                             d1w_spec = latest['Net_NonComm'] - prev_1w['Net_NonComm']
+                            d1w_oi = latest[col_mapping['open_interest']] - prev_1w[col_mapping['open_interest']]
                             
                             # Delta 1 Mese (4W)
                             d4w_comm = latest['Net_Comm'] - prev_4w['Net_Comm']
                             d4w_spec = latest['Net_NonComm'] - prev_4w['Net_NonComm']
 
-                            # COT Index (Percentile a 2 anni) - Fondamentale per eccessi
+                            # COT Index (Percentile a 2 anni)
                             comm_net_min = df_cot['Net_Comm'].min()
                             comm_net_max = df_cot['Net_Comm'].max()
-                            cot_index_comm = ((latest['Net_Comm'] - comm_net_min) / (comm_net_max - comm_net_min)) * 100
+                            cot_index_comm = ((latest['Net_Comm'] - comm_net_min) / (comm_net_max - comm_net_min)) * 100 if comm_net_max != comm_net_min else 50
+                            
+                            # Normalizzazione: Commercial Net % of Open Interest (CP/OI)
+                            cpoi_latest = (latest['Net_Comm'] / latest[col_mapping['open_interest']]) * 100 if latest[col_mapping['open_interest']] > 0 else 0
 
-                            # 2. VISUALIZZAZIONE METRICHE CHIAVE
-                            m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", f"{int(d1w_comm):,}")
-                            m2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", f"{int(d1w_spec):,}")
-                            m3.metric("COT Index (Comm)", f"{cot_index_comm:.1f}%", help="Sopra 80% estremo Bullish, Sotto 20% estremo Bearish")
-                            m4.metric("Delta Mensile (Specs)", f"{int(d4w_spec):,}", "Contratti 4W", delta_color="off")
+                            # 2. VISUALIZZAZIONE METRICHE CHIAVE (Livello Istituzionale su 2 Righe)
+                            r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+                            r1c1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", f"{int(d1w_comm):,} (1W)")
+                            r1c2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", f"{int(d1w_spec):,} (1W)")
+                            r1c3.metric("COT Index (Comm)", f"{cot_index_comm:.1f}%", help="> 80% Estremo Bullish, < 20% Estremo Bearish")
+                            r1c4.metric("Comm as % of Open Int.", f"{cpoi_latest:.1f}%", help="Valuta il vero peso degli istituzionali sul totale del mercato. Valori estremi indicano manipolazione o fine ciclo.")
+
+                            r2c1, r2c2, r2c3 = st.columns([2, 1, 1])
+                            r2c1.metric("Open Interest Totale (OI)", f"{int(latest[col_mapping['open_interest']]):,}", f"{int(d1w_oi):,} (1W Delta OI)", help="L'aumento dell'OI conferma il trend in atto (nuova liquidità). Un calo indica chiusura di posizioni.")
+                            r2c2.metric("Delta Mensile Comm", f"{int(d4w_comm):,}", "Contratti 4W")
+                            r2c3.metric("Delta Mensile Specs", f"{int(d4w_spec):,}", "Contratti 4W", delta_color="off")
 
                             # 3. ISTOGRAMMA DELTA VOLUMI (Flussi di Liquidità)
                             st.markdown("##### 🌊 Analisi della Liquidità (Delta Contratti Mensile)")
@@ -2053,7 +2062,8 @@ def display_seasonality_and_calendar():
 
                             # 4. TABELLA ANOMALIE
                             with st.expander("🔍 Ispezione Anomalie Dati (Raw Data Analysis)"):
-                                df_inspec = df_cot.tail(12)[['date', 'Net_Comm', 'Net_NonComm']].copy()
+                                df_inspec = df_cot.tail(12)[['date', 'Net_Comm', 'Net_NonComm', col_mapping['open_interest']]].copy()
+                                df_inspec = df_inspec.rename(columns={col_mapping['open_interest']: 'Open Interest'})
                                 df_inspec['Variazione Comm %'] = df_inspec['Net_Comm'].pct_change() * 100
                                 st.dataframe(df_inspec.sort_values('date', ascending=False), use_container_width=True)
                             
