@@ -2146,6 +2146,44 @@ def display_seasonality_and_calendar():
                             )
                             st.plotly_chart(fig_delta, use_container_width=True)
 
+                            # --- 5. GRAFICO DI CONFLUENZA: PREZZO VS SMART MONEY ---
+                            st.markdown("##### 📈 Divergenza Prezzo vs. Smart Money (Commercials)")
+                            
+                            # Allineamento dati: Prendiamo i prezzi settimanali per matchare il COT
+                            df_price_weekly = df_close.resample('W-TUE').last().dropna()
+                            # Uniamo i dati su data comune
+                            df_merged = pd.merge(df_price_weekly, df_cot[['date', 'Net_Comm']], left_index=True, right_on='date', how='inner')
+                            
+                            if not df_merged.empty:
+                                fig_div = go.Figure()
+                                
+                                # Asse Y Sinistro: Prezzo
+                                fig_div.add_trace(go.Scatter(
+                                    x=df_merged['date'], y=df_merged['Close'],
+                                    name='Prezzo Asset', line=dict(color='#3498db', width=2),
+                                    yaxis="y1"
+                                ))
+                                
+                                # Asse Y Destro: Net Commercials
+                                fig_div.add_trace(go.Scatter(
+                                    x=df_merged['date'], y=df_merged['Net_Comm'],
+                                    name='Net Comm (Smart Money)', line=dict(color='#2ecc71', width=3),
+                                    yaxis="y2", fill='tozeroy', fillcolor='rgba(46, 204, 113, 0.1)'
+                                ))
+                                
+                                fig_div.update_layout(
+                                    template="plotly_dark", height=500,
+                                    hovermode="x unified",
+                                    margin=dict(l=0, r=0, t=30, b=0),
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                    yaxis=dict(title="Prezzo Asset", side="left", showgrid=False),
+                                    yaxis2=dict(title="Posizionamento Smart Money", side="right", overlaying="y", showgrid=True, gridcolor='rgba(255,255,255,0.1)')
+                                )
+                                st.plotly_chart(fig_div, use_container_width=True)
+                                st.caption("🔍 **Analisi Divergenze:** Se il Prezzo (Blu) scende ma lo Smart Money (Verde) sale, siamo in accumulazione (Bullish). Se il Prezzo sale ma lo Smart Money scende, siamo in distribuzione (Bearish).")
+                            else:
+                                st.info("Dati insufficienti per generare il grafico di divergenza prezzo/COT.")
+
                             # 4. TABELLA ANOMALIE
                             with st.expander("🔍 Ispezione Anomalie Dati (Raw Data Analysis)"):
                                 df_inspec = df_cot.tail(12)[['date', 'Net_Comm', 'Net_NonComm', col_mapping['open_interest']]].copy()
