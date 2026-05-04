@@ -1865,6 +1865,86 @@ def display_seasonality_and_calendar():
             except Exception as e:
                 st.error(f"Errore durante l'elaborazione della stagionalità: {e}")
 
+        # ==========================================
+        # NUOVA SEZIONE: C.O.T. REPORT (CFTC)
+        # ==========================================
+        st.markdown("<br><hr>", unsafe_allow_html=True)
+        st.markdown("### 🏛️ Commitment of Traders (COT) - Smart Money Tracker")
+        
+        # Mappatura Ticker -> Codice CFTC Ufficiale
+        cot_mapping = {
+            "EURUSD=X": "099741", "JPYUSD=X": "097741", "GBPUSD=X": "096742", 
+            "AUDUSD=X": "232741", "USDCAD=X": "090741", "USDCHF=X": "092741",
+            "GC=F": "088691", "SI=F": "084691", "HG=F": "085692", "PL=F": "076651", "PA=F": "075651",
+            "CL=F": "067651", "NG=F": "023651", "BZ=F": "06765T",
+            "CORN": "002602", "WEAT": "001602", "SOYB": "005602", "KC=F": "083731", "SB=F": "080732",
+            "LE=F": "057642", "HE=F": "054642", "GF=F": "061641",
+            "SPY": "13874A", "QQQ": "209742", "DIA": "124603",
+            "TLT": "043602", "^TNX": "044601", "IEF": "044601"
+        }
+        
+        # Estraiamo solo il simbolo pulito ignorando i nomi estesi
+        base_ticker = ticker.split(" (")[0].strip() if "(" in ticker else ticker.strip()
+        
+        if base_ticker in cot_mapping:
+            cftc_code = cot_mapping[base_ticker]
+            with st.spinner("Estrazione dati COT Report dal database governativo CFTC..."):
+                try:
+                    # Chiamata API Socrata CFTC (ultime 104 settimane = 2 anni)
+                    cftc_url = f"https://publicreporting.cftc.gov/resource/dea-history.json?cftc_contract_market_code={cftc_code}&$order=report_date_as_yyyy_mm_dd DESC&$limit=104"
+                    response = requests.get(cftc_url, timeout=10)
+                    
+                    if response.status_code == 200:
+                        cot_data = response.json()
+                        if cot_data:
+                            df_cot = pd.DataFrame(cot_data)
+                            df_cot['date'] = pd.to_datetime(df_cot['report_date_as_yyyy_mm_dd'])
+                            
+                            # Calcolo posizioni NETTE (Long - Short)
+                            # Non-Commercial (Hedge Funds / Speculators)
+                            df_cot['Net_NonComm'] = df_cot['noncomm_positions_long_all'].astype(float) - df_cot['noncomm_positions_short_all'].astype(float)
+                            # Commercial (Hedgers / Smart Money - Produttori/Banche)
+                            df_cot['Net_Comm'] = df_cot['comm_positions_long_all'].astype(float) - df_cot['comm_positions_short_all'].astype(float)
+                            # Non-Reportable (Retail / Piccoli Speculatori)
+                            df_cot['Net_Retail'] = df_cot['nonrept_positions_long_all'].astype(float) - df_cot['nonrept_positions_short_all'].astype(float)
+                            
+                            df_cot = df_cot.sort_values('date')
+                            
+                            # Creazione Grafico Istituzionale Plotly
+                            fig_cot = go.Figure()
+                            
+                            # Linea Zero di equilibrio
+                            fig_cot.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
+                            
+                            # Tracciato Commercials (Spesso Area Fill)
+                            fig_cot.add_trace(go.Scatter(x=df_cot['date'], y=df_cot['Net_Comm'], mode='lines', name='Commercials (Smart Money/Hedgers)', line=dict(color='#2ecc71', width=2), fill='tozeroy', fillcolor='rgba(46, 204, 113, 0.2)'))
+                            # Tracciato Hedge Funds
+                            fig_cot.add_trace(go.Scatter(x=df_cot['date'], y=df_cot['Net_NonComm'], mode='lines', name='Large Specs (Hedge Funds)', line=dict(color='#e74c3c', width=2)))
+                            # Tracciato Retail
+                            fig_cot.add_trace(go.Scatter(x=df_cot['date'], y=df_cot['Net_Retail'], mode='lines', name='Retail (Small Specs)', line=dict(color='#f1c40f', width=1.5, dash='dot')))
+                            
+                            fig_cot.update_layout(
+                                title=f"Posizionamento Netto COT - Ultimi 2 Anni ({base_ticker})",
+                                xaxis_title="Data (Weekly)",
+                                yaxis_title="Contratti Netti (Long - Short)",
+                                template="plotly_dark",
+                                hovermode="x unified",
+                                height=450,
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                margin=dict(l=0, r=0, t=50, b=0)
+                            )
+                            st.plotly_chart(fig_cot, use_container_width=True)
+                            
+                            st.caption("💡 **Guida alla Lettura:** I **Commercials (Verde)** sono i produttori e operatori del settore fisico; agiscono spesso come *Smart Money contrarian* (es. comprano quando i prezzi crollano). I **Large Specs (Rosso)** sono i grandi fondi che seguono il trend. Quando queste due linee raggiungono divergenze estreme, indicano probabili inversioni di mercato a medio termine.")
+                        else:
+                            st.warning("Dati COT non disponibili attualmente per questo contratto.")
+                    else:
+                        st.error("Impossibile connettersi al database governativo CFTC in questo momento.")
+                except Exception as e:
+                    st.error(f"Errore durante l'elaborazione dei dati COT: {e}")
+        else:
+            st.info(f"Dati COT non mappati per il ticker {base_ticker}. Il report CFTC è disponibile principalmente per Futures (Materie Prime, Valute, Tassi) e Indici principali.")
+
     with tab_cal:
         st.markdown("### 📆 Global Economic Calendar (Real-Time)")
         st.write("Monitora i dati macroeconomici (CPI, NFP, Riunioni FED/BCE) in tempo reale. Filtra per importanza.")
