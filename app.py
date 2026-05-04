@@ -1903,9 +1903,15 @@ def display_seasonality_and_calendar():
                     # Pulizia nome per ricerca migliore
                     search_term = search_term.split(" ")[0].upper() # Es. "Copper Futures" -> "COPPER"
 
+                    # Configurazione Header Istituzionali (Necessari per evitare il blocco CFTC)
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'application/json'
+                    }
+                    
                     # Chiamata al catalogo mercati CFTC per trovare il codice
-                    catalog_url = "https://publicreporting.cftc.gov/resource/j7ed-idbc.json"
-                    cat_response = requests.get(catalog_url, timeout=10)
+                    discovery_url = f"https://publicreporting.cftc.gov/resource/j7ed-idbc.json?$where=upper(market_and_exchange_names) like '%25{search_term}%25'&$limit=1"
+                    cat_response = requests.get(discovery_url, headers=headers, timeout=10)
                     
                     if cat_response.status_code == 200:
                         catalog = cat_response.json()
@@ -1921,20 +1927,48 @@ def display_seasonality_and_calendar():
         if cftc_code:
             with st.spinner("Estrazione dati COT Report dal database governativo CFTC..."):
                 try:
-                    # Chiamata API Socrata CFTC (ultime 104 settimane = 2 anni)
-                    cftc_url = f"https://publicreporting.cftc.gov/resource/dea-history.json?cftc_contract_market_code={cftc_code}&$order=report_date_as_yyyy_mm_dd DESC&$limit=104"
-                    response = requests.get(cftc_url, timeout=10)
+                    # Configurazione Header Istituzionali (Necessari per evitare il blocco CFTC)
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'application/json'
+                    }
+                    
+                    # URL Dataset Legacy (più stabile per analisi storica)
+                    # ID Dataset: jun7-fc8e (Legacy Combined)
+                    cftc_url = f"https://publicreporting.cftc.gov/resource/jun7-fc8e.json?cftc_contract_market_code={cftc_code}&$order=report_date_as_yyyy_mm_dd DESC&$limit=104"
+                    
+                    response = requests.get(cftc_url, headers=headers, timeout=20) # Timeout aumentato a 20s
                     
                     if response.status_code == 200:
                         cot_data = response.json()
                         if cot_data:
                             df_cot = pd.DataFrame(cot_data)
+                            # Conversione colonne con gestione errori
                             df_cot['date'] = pd.to_datetime(df_cot['report_date_as_yyyy_mm_dd'])
                             
-                            # Calcolo posizioni NETTE (Long - Short)
-                            df_cot['Net_NonComm'] = df_cot['noncomm_positions_long_all'].astype(float) - df_cot['noncomm_positions_short_all'].astype(float)
-                            df_cot['Net_Comm'] = df_cot['comm_positions_long_all'].astype(float) - df_cot['comm_positions_short_all'].astype(float)
-                            df_cot['Net_Retail'] = df_cot['nonrept_positions_long_all'].astype(float) - df_cot['nonrept_positions_short_all'].astype(float)
+                            # Identificazione colonne corrette per il dataset Legacy
+                            # Nota: I nomi delle colonne possono variare tra 'noncomm_positions_long_all' e 'non_commercial_long_all'
+                            col_mapping = {
+                                'long': 'noncomm_positions_long_all' if 'noncomm_positions_long_all' in df_cot.columns else 'non_commercial_long_all',
+                                'short': 'noncomm_positions_short_all' if 'noncomm_positions_short_all' in df_cot.columns else 'non_commercial_short_all',
+                                'comm_long': 'comm_positions_long_all' if 'comm_positions_long_all' in df_cot.columns else 'commercial_long_all',
+                                'comm_short': 'comm_positions_short_all' if 'comm_positions_short_all' in df_cot.columns else 'commercial_short_all',
+                                'retail_long': 'nonrept_positions_long_all' if 'nonrept_positions_long_all' in df_cot.columns else 'nonreportable_positions_long_all',
+                                'retail_short': 'nonrept_positions_short_all' if 'nonrept_positions_short_all' in df_cot.columns else 'nonreportable_positions_short_all'
+                            }
+                            
+                            for c in col_mapping.values():
+                                if c in df_cot.columns:
+                                    df_cot[c] = pd.to_numeric(df_cot[c], errors='coerce').fillna(0)
+
+                            # Calcolo Posizioni Nette
+                            df_cot['Net_NonComm'] = df_cot[col_mapping['long']] - df_cot[col_mapping['short']]
+                            df_cot['Net_Comm'] = df_cot[col_mapping['comm_long']] - df_cot[col_mapping['comm_short']]
+                            
+                            if col_mapping['retail_long'] in df_cot.columns:
+                                df_cot['Net_Retail'] = df_cot[col_mapping['retail_long']] - df_cot[col_mapping['retail_short']]
+                            else:
+                                df_cot['Net_Retail'] = 0
                             
                             df_cot = df_cot.sort_values('date')
                             
