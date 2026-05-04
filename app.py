@@ -7077,8 +7077,11 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 "sym": sym,
                 "history": t.history(period="2y"),
                 "fin": t.financials,
+                "q_fin": t.quarterly_financials,  # <-- AGGIUNTO
                 "bs": t.balance_sheet,
+                "q_bs": t.quarterly_balance_sheet, # <-- AGGIUNTO
                 "cf": t.cashflow,
+                "q_cf": t.quarterly_cashflow,      # <-- AGGIUNTO
                 "inst": t.institutional_holders,
                 "insider": t.insider_transactions,
                 "news": t.news
@@ -7409,33 +7412,37 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
 
             with t1:
                 st.write(f"Valori espressi in **{inf.get('financialCurrency', 'Valuta Locale')}**")
-                report = st.selectbox("Seleziona Rendiconto:", ["Conto Economico", "Stato Patrimoniale", "Cash Flow"])
+                st.markdown("### 📊 Financial Statements")
                 
-                # Selezione del DataFrame grezzo
-                if report == "Conto Economico": raw_df = data["fin"]
-                elif report == "Stato Patrimoniale": raw_df = data["bs"]
-                else: raw_df = data["cf"]
-                
-                if raw_df is not None and not raw_df.empty:
-                    # FIX CHIRURGICO: Uso di map() per Pandas moderno o applymap per versioni vecchie
-                    try:
-                        if hasattr(raw_df, 'map'):
-                            fmt_df = raw_df.map(lambda x: format_big_num(x, s))
-                        else:
-                            fmt_df = raw_df.applymap(lambda x: format_big_num(x, s))
-                    except Exception as e:
-                        # Fallback se il mapping fallisce su qualche cella strana
-                        fmt_df = raw_df.astype(str)
+                # Selettore Periodicità
+                period_type = st.radio(
+                    "Seleziona Periodicità:",
+                    ["Annuale (FY)", "Trimestrale (Latest Q)"],
+                    horizontal=True,
+                    help="Scegli 'Trimestrale' per vedere i dati più recenti del 2026 (Q1, Q2, Q3)."
+                )
 
-                    # Pulizia intestazioni (Date leggibili)
-                    fmt_df.columns = [col.strftime('%Y-%m-%d') if hasattr(col, 'strftime') else str(col) for col in fmt_df.columns]
-                    
-                    # Visualizzazione Tabella Professionale
-                    st.dataframe(fmt_df, use_container_width=True)
-                    
-                    st.caption("💡 Suggerimento: I valori sono abbreviati (B = Miliardi, M = Milioni). Scorri la tabella per vedere gli anni precedenti.")
+                suffix = "" if period_type == "Annuale (FY)" else "q_"
+                
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    st.write("**Income Statement**")
+                    if data[f'{suffix}fin'] is not None and not data[f'{suffix}fin'].empty:
+                        st.dataframe(data[f'{suffix}fin'], use_container_width=True)
+                    else:
+                        st.warning("Dati non disponibili.")
+                with col_f2:
+                    st.write("**Balance Sheet**")
+                    if data[f'{suffix}bs'] is not None and not data[f'{suffix}bs'].empty:
+                        st.dataframe(data[f'{suffix}bs'], use_container_width=True)
+                    else:
+                        st.warning("Dati non disponibili.")
+                
+                st.write("**Cash Flow Statement**")
+                if data[f'{suffix}cf'] is not None and not data[f'{suffix}cf'].empty:
+                    st.dataframe(data[f'{suffix}cf'], use_container_width=True)
                 else:
-                    st.warning("Dati di bilancio non disponibili per questo specifico Ticker.")
+                    st.warning("Dati non disponibili.")
                     
             with t2:
                 fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
