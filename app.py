@@ -1871,8 +1871,11 @@ def display_seasonality_and_calendar():
         st.markdown("<br><hr>", unsafe_allow_html=True)
         st.markdown("### 🏛️ Commitment of Traders (COT) - Smart Money Tracker")
         
-        # Mappatura Ticker -> Codice CFTC Ufficiale
-        cot_mapping = {
+        # Estrazione base ticker
+        base_ticker = ticker.split(" (")[0].strip() if "(" in ticker else ticker.strip()
+        
+        # 1. MAPPING VELOCE (Per gli asset più comuni, per velocità) - include vecchio e nuovo
+        fast_mapping = {
             "EURUSD=X": "099741", "JPYUSD=X": "097741", "GBPUSD=X": "096742", 
             "AUDUSD=X": "232741", "USDCAD=X": "090741", "USDCHF=X": "092741",
             "GC=F": "088691", "SI=F": "084691", "HG=F": "085692", "PL=F": "076651", "PA=F": "075651",
@@ -1882,12 +1885,40 @@ def display_seasonality_and_calendar():
             "SPY": "13874A", "QQQ": "209742", "DIA": "124603",
             "TLT": "043602", "^TNX": "044601", "IEF": "044601"
         }
+
+        cftc_code = None
         
-        # Estraiamo solo il simbolo pulito ignorando i nomi estesi
-        base_ticker = ticker.split(" (")[0].strip() if "(" in ticker else ticker.strip()
-        
-        if base_ticker in cot_mapping:
-            cftc_code = cot_mapping[base_ticker]
+        if base_ticker in fast_mapping:
+            cftc_code = fast_mapping[base_ticker]
+        else:
+            # 2. AUTO-DISCOVERY TRAMITE RICERCA YFINANCE -> CFTC
+            with st.spinner(f"Ricerca codice CFTC dinamico per {base_ticker}..."):
+                try:
+                    # Otteniamo info sull'asset per estrarre il nome
+                    yf_info = yf.Ticker(base_ticker).info
+                    search_term = yf_info.get('shortName', base_ticker)
+                    # Se non lo trova, fallback sul base_ticker
+                    if not search_term or pd.isna(search_term):
+                         search_term = base_ticker
+                    # Pulizia nome per ricerca migliore
+                    search_term = search_term.split(" ")[0].upper() # Es. "Copper Futures" -> "COPPER"
+
+                    # Chiamata al catalogo mercati CFTC per trovare il codice
+                    catalog_url = "https://publicreporting.cftc.gov/resource/j7ed-idbc.json"
+                    cat_response = requests.get(catalog_url, timeout=10)
+                    
+                    if cat_response.status_code == 200:
+                        catalog = cat_response.json()
+                        # Cerchiamo il nome dell'asset all'interno del nome del mercato CFTC
+                        for market in catalog:
+                            if "market_and_exchange_names" in market and search_term in market["market_and_exchange_names"].upper():
+                                cftc_code = market.get("cftc_contract_market_code")
+                                st.success(f"Trovato codice CFTC correlato: {cftc_code} ({market['market_and_exchange_names']})")
+                                break
+                except Exception as e:
+                    st.write(f"Discovery fallita: {e}")
+
+        if cftc_code:
             with st.spinner("Estrazione dati COT Report dal database governativo CFTC..."):
                 try:
                     # Chiamata API Socrata CFTC (ultime 104 settimane = 2 anni)
@@ -1901,11 +1932,8 @@ def display_seasonality_and_calendar():
                             df_cot['date'] = pd.to_datetime(df_cot['report_date_as_yyyy_mm_dd'])
                             
                             # Calcolo posizioni NETTE (Long - Short)
-                            # Non-Commercial (Hedge Funds / Speculators)
                             df_cot['Net_NonComm'] = df_cot['noncomm_positions_long_all'].astype(float) - df_cot['noncomm_positions_short_all'].astype(float)
-                            # Commercial (Hedgers / Smart Money - Produttori/Banche)
                             df_cot['Net_Comm'] = df_cot['comm_positions_long_all'].astype(float) - df_cot['comm_positions_short_all'].astype(float)
-                            # Non-Reportable (Retail / Piccoli Speculatori)
                             df_cot['Net_Retail'] = df_cot['nonrept_positions_long_all'].astype(float) - df_cot['nonrept_positions_short_all'].astype(float)
                             
                             df_cot = df_cot.sort_values('date')
@@ -1916,7 +1944,7 @@ def display_seasonality_and_calendar():
                             # Linea Zero di equilibrio
                             fig_cot.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
                             
-                            # Tracciato Commercials (Spesso Area Fill)
+                            # Tracciato Commercials
                             fig_cot.add_trace(go.Scatter(x=df_cot['date'], y=df_cot['Net_Comm'], mode='lines', name='Commercials (Smart Money/Hedgers)', line=dict(color='#2ecc71', width=2), fill='tozeroy', fillcolor='rgba(46, 204, 113, 0.2)'))
                             # Tracciato Hedge Funds
                             fig_cot.add_trace(go.Scatter(x=df_cot['date'], y=df_cot['Net_NonComm'], mode='lines', name='Large Specs (Hedge Funds)', line=dict(color='#e74c3c', width=2)))
@@ -1924,7 +1952,7 @@ def display_seasonality_and_calendar():
                             fig_cot.add_trace(go.Scatter(x=df_cot['date'], y=df_cot['Net_Retail'], mode='lines', name='Retail (Small Specs)', line=dict(color='#f1c40f', width=1.5, dash='dot')))
                             
                             fig_cot.update_layout(
-                                title=f"Posizionamento Netto COT - Ultimi 2 Anni ({base_ticker})",
+                                title=f"Posizionamento Netto COT - Ultimi 2 Anni ({base_ticker} - Codice: {cftc_code})",
                                 xaxis_title="Data (Weekly)",
                                 yaxis_title="Contratti Netti (Long - Short)",
                                 template="plotly_dark",
@@ -1937,13 +1965,13 @@ def display_seasonality_and_calendar():
                             
                             st.caption("💡 **Guida alla Lettura:** I **Commercials (Verde)** sono i produttori e operatori del settore fisico; agiscono spesso come *Smart Money contrarian* (es. comprano quando i prezzi crollano). I **Large Specs (Rosso)** sono i grandi fondi che seguono il trend. Quando queste due linee raggiungono divergenze estreme, indicano probabili inversioni di mercato a medio termine.")
                         else:
-                            st.warning("Dati COT non disponibili attualmente per questo contratto.")
+                            st.warning("Dati storici COT non disponibili attualmente per questo contratto.")
                     else:
                         st.error("Impossibile connettersi al database governativo CFTC in questo momento.")
                 except Exception as e:
                     st.error(f"Errore durante l'elaborazione dei dati COT: {e}")
         else:
-            st.info(f"Dati COT non mappati per il ticker {base_ticker}. Il report CFTC è disponibile principalmente per Futures (Materie Prime, Valute, Tassi) e Indici principali.")
+            st.info(f"Il motore Auto-Discovery non ha trovato un codice CFTC associato a {base_ticker}. Il report COT è disponibile per i principali Futures fisici e valutari.")
 
     with tab_cal:
         st.markdown("### 📆 Global Economic Calendar (Real-Time)")
