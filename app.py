@@ -2023,17 +2023,67 @@ def display_seasonality_and_calendar():
                             # Normalizzazione: Commercial Net % of Open Interest (CP/OI)
                             cpoi_latest = (latest['Net_Comm'] / latest[col_mapping['open_interest']]) * 100 if latest[col_mapping['open_interest']] > 0 else 0
 
+                            # --- LOGICA DI SCORE ISTITUZIONALE (CONFLUENCE SCORE) ---
+                            score = 0
+                            max_score = 6
+                            
+                            # 1. Valutazione COT Index (Peso: 2)
+                            if cot_index_comm > 80: score += 2
+                            elif cot_index_comm > 60: score += 1
+                            elif cot_index_comm < 20: score -= 2
+                            elif cot_index_comm < 40: score -= 1
+
+                            # 2. Valutazione Delta 1W Smart Money (Peso: 1)
+                            if d1w_comm > 0: score += 1
+                            else: score -= 1
+
+                            # 3. Valutazione Delta 4W Smart Money (Peso: 1)
+                            if d4w_comm > 0: score += 1
+                            else: score -= 1
+
+                            # 4. Valutazione Open Interest & Liquidità (Peso: 1)
+                            # Se OI sale insieme al posizionamento Smart Money, il segnale è forte
+                            if d1w_oi > 0 and d1w_comm > 0: score += 1
+                            elif d1w_oi > 0 and d1w_comm < 0: score -= 1
+
+                            # 5. Valutazione CP/OI (Peso: 1)
+                            if cpoi_latest > 10: score += 1
+                            elif cpoi_latest < -10: score -= 1
+
+                            # Normalizzazione in percentuale (0% Bearish - 100% Bullish)
+                            bias_percent = ((score + max_score) / (max_score * 2)) * 100
+                            
+                            # Definizione Semaforo e Colore
+                            if bias_percent >= 70: 
+                                signal_text, signal_col, signal_emoji = "STRONG BUY (Institutional Accumulation)", "#2ecc71", "🟢"
+                            elif bias_percent >= 55: 
+                                signal_text, signal_col, signal_emoji = "NEUTRAL/BULLISH (Mild Buying)", "#f1c40f", "🟡"
+                            elif bias_percent <= 30: 
+                                signal_text, signal_col, signal_emoji = "STRONG SELL (Institutional Distribution)", "#e74c3c", "🔴"
+                            elif bias_percent <= 45: 
+                                signal_text, signal_col, signal_emoji = "NEUTRAL/BEARISH (Mild Selling)", "#e67e22", "🟠"
+                            else: 
+                                signal_text, signal_col, signal_emoji = "NEUTRAL (No Clear Bias)", "#95a5a6", "⚪"
+
+                            # --- VISUALIZZAZIONE BIAS DASHBOARD ---
+                            st.markdown(f"""
+                            <div style="background-color: {signal_col}22; padding: 20px; border-radius: 10px; border: 2px solid {signal_col}; margin-bottom: 20px;">
+                                <h3 style="margin:0; color:{signal_col};">{signal_emoji} Institutional Bias Score: {bias_percent:.1f}%</h3>
+                                <p style="margin:5px 0 0 0; font-size: 1.2rem; font-weight: bold;">Sentiment: {signal_text}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
                             # 2. VISUALIZZAZIONE METRICHE CHIAVE (Livello Istituzionale su 2 Righe)
                             r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-                            r1c1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", f"{int(d1w_comm):,} (1W)")
-                            r1c2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", f"{int(d1w_spec):,} (1W)")
+                            r1c1.metric("Net Comm (Smart Money)", f"{int(latest['Net_Comm']):,}", f"{int(d1w_comm):,} (1W)", delta_color="normal")
+                            r1c2.metric("Net Specs (Hedge Funds)", f"{int(latest['Net_NonComm']):,}", f"{int(d1w_spec):,} (1W)", delta_color="inverse")
                             r1c3.metric("COT Index (Comm)", f"{cot_index_comm:.1f}%", help="> 80% Estremo Bullish, < 20% Estremo Bearish")
                             r1c4.metric("Comm as % of Open Int.", f"{cpoi_latest:.1f}%", help="Valuta il vero peso degli istituzionali sul totale del mercato. Valori estremi indicano manipolazione o fine ciclo.")
 
                             r2c1, r2c2, r2c3 = st.columns([2, 1, 1])
-                            r2c1.metric("Open Interest Totale (OI)", f"{int(latest[col_mapping['open_interest']]):,}", f"{int(d1w_oi):,} (1W Delta OI)", help="L'aumento dell'OI conferma il trend in atto (nuova liquidità). Un calo indica chiusura di posizioni.")
-                            r2c2.metric("Delta Mensile Comm", f"{int(d4w_comm):,}", "Contratti 4W")
-                            r2c3.metric("Delta Mensile Specs", f"{int(d4w_spec):,}", "Contratti 4W", delta_color="off")
+                            r2c1.metric("Open Interest Totale (OI)", f"{int(latest[col_mapping['open_interest']]):,}", f"{int(d1w_oi):,} (1W Delta OI)", help="L'aumento dell'OI conferma il trend in atto (nuova liquidità). Un calo indica chiusura di posizioni.", delta_color="normal")
+                            r2c2.metric("Delta Mensile Comm", f"{int(d4w_comm):,}", "Contratti 4W", delta_color="normal")
+                            r2c3.metric("Delta Mensile Specs", f"{int(d4w_spec):,}", "Contratti 4W", delta_color="inverse")
 
                             # 3. ISTOGRAMMA DELTA VOLUMI (Flussi di Liquidità)
                             st.markdown("##### 🌊 Analisi della Liquidità (Delta Contratti Mensile)")
