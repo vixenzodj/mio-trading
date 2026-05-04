@@ -2186,11 +2186,28 @@ def display_seasonality_and_calendar():
 
                             # 4. TABELLA ANOMALIE
                             with st.expander("🔍 Ispezione Anomalie Dati (Raw Data Analysis)"):
-                                df_inspec = df_cot.tail(12)[['date', 'Net_Comm', 'Net_NonComm', col_mapping['open_interest']]].copy()
-                                df_inspec = df_inspec.rename(columns={col_mapping['open_interest']: 'Open Interest'})
-                                df_inspec['Variazione Comm %'] = df_inspec['Net_Comm'].pct_change() * 100
-                                # Formattazione visiva veloce
-                                st.dataframe(df_inspec.sort_values('date', ascending=False).style.background_gradient(cmap='RdYlGn', subset=['Variazione Comm %']), use_container_width=True)
+                                # Preparazione dati
+                                df_inspec = df_cot.tail(15)[['date', 'Net_Comm', 'Net_NonComm', col_mapping['open_interest']]].copy()
+                                df_inspec = df_inspec.rename(columns={
+                                    'Net_Comm': 'Smart Money (Net)',
+                                    'Net_NonComm': 'Hedge Funds (Net)',
+                                    col_mapping['open_interest']: 'Open Interest'
+                                })
+                                df_inspec['Variazione Comm %'] = df_inspec['Smart Money (Net)'].pct_change() * 100
+                                
+                                # Ordinamento decrescente
+                                df_inspec_sorted = df_inspec.sort_values('date', ascending=False)
+                                
+                                # Applichiamo formattazione estetica senza rompere pd.NA/inf
+                                styled_df = df_inspec_sorted.style.format({
+                                    'Smart Money (Net)': "{:,.0f}",
+                                    'Hedge Funds (Net)': "{:,.0f}",
+                                    'Open Interest': "{:,.0f}",
+                                    'Variazione Comm %': "{:+.1f}%"
+                                }, na_rep="-").background_gradient(cmap='RdYlGn', subset=['Variazione Comm %'])
+                                
+                                st.dataframe(styled_df, use_container_width=True)
+                                st.caption("💡 **Tip:** Cerca variazioni superiori al ±10% per identificare entrate/uscite aggressive degli istituzionali.")
                             
                             st.caption("💡 **Guida alla Lettura:** I **Commercials (Verde)** sono i produttori e operatori del settore fisico; agiscono spesso come *Smart Money contrarian* (es. comprano quando i prezzi crollano). I **Large Specs (Rosso)** sono i grandi fondi che seguono il trend. Quando queste due linee raggiungono divergenze estreme, indicano probabili inversioni di mercato a medio termine.")
                         else:
