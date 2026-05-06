@@ -7601,42 +7601,51 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
 
                         # --- DASHBOARD VISIVA ---
                         st.write("**Historical Fundamentals (Passato)**")
+                        
                         # Riga 1 Storica
                         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
                         with r1c1:
                             msg, col = get_status(rev_growth, 10, 0)
-                            st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Misura l'espansione del fatturato. Fondamentale per capire se l'azienda guadagna quote di mercato.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
                             render_sparkline(rev, "#00FFCC")
                         with r1c2:
                             msg, col = get_status(ni_growth, 10, 0)
-                            st.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            st.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Misura la crescita dell'utile netto. Deve idealmente crescere in linea o più dei ricavi.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
                             render_sparkline(net_inc, "#00CCFF")
                         with r1c3:
                             msg, col = get_status(fcf_margin, 15, 5)
-                            st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
+                            st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Quanta cassa libera resta da ogni dollaro di fatturato. Indica la profittabilità reale (Cash Cow).\n\nSOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
                             render_sparkline(fcf_series / rev.replace(0,1), "#FFCC00")
                         with r1c4:
                             msg, col = get_status(capex_ocf, 40, 70, True)
-                            st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col, help="SOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
+                            st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Indica quanto flusso operativo viene assorbito dagli investimenti fissi. Più è basso, più l'azienda è leggera e flessibile.\n\nSOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
                             render_sparkline(abs(capex)/ocf.replace(0,1), "#FF6600")
 
                         # Riga 2 Storica
                         r2c1, r2c2, r2c3, r2c4 = st.columns(4)
                         with r2c1:
                             msg, col = get_status(op_leverage, 1.5, 1.0)
-                            st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col, help="SOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
+                            st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Capacità di generare più utile operativo a parità di crescita ricavi. Indica l'efficienza dei costi fissi e la scalabilità.\n\nSOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
                             render_sparkline(ebit/rev.replace(0,1), "#AAFF00")
                         with r2c2:
                             msg, col = get_status(int_coverage, 5.0, 2.0)
-                            st.metric("Int Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col, help="SOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
+                            st.metric("Int Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Capacità di rimborsare gli interessi sul debito tramite l'utile operativo. Indica la protezione contro il rischio di default.\n\nSOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
                             render_sparkline(ebit/int_expense.replace(0, 1), "#FF00FF")
                         with r2c3:
                             msg, col = get_status(earn_quality, 1.0, 0.7)
-                            st.metric("Earn Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col, help="SOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
+                            st.metric("Earn Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: Rapporto tra Flusso di Cassa Operativo e Utile Netto. Se < 1, gli utili potrebbero essere solo 'contabili' e non monetari.\n\nSOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
                             render_sparkline(ocf/net_inc.replace(0,1), "#BBBBBB")
                         with r2c4:
                             msg, col = get_status(fcf_growth, 10, 0)
-                            st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col, 
+                                      help="SIGNIFICATO: La crescita del denaro contante libero. È il vero motore dietro il pagamento di dividendi e il riacquisto di azioni proprie.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
                             render_sparkline(fcf_series, "#00FF00")
 
                         st.markdown("---")
