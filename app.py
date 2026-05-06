@@ -7534,6 +7534,55 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                                 if val <= y: return "Attenzione 🟡", "off"
                                 return "Critico 🔴", "inverse"
 
+                        # --- CALCOLO SCORE ISTITUZIONALE (0-100) ---
+                        score = 0
+                        score += 12.5 if rev_growth > 10 else (6 if rev_growth > 0 else 0)
+                        score += 12.5 if ni_growth > 10 else (6 if ni_growth > 0 else 0)
+                        score += 12.5 if fcf_margin > 15 else (6 if fcf_margin > 5 else 0)
+                        score += 12.5 if capex_ocf < 40 else (6 if capex_ocf < 70 else 0)
+                        score += 12.5 if op_leverage > 1.5 else (6 if op_leverage > 1.0 else 0)
+                        score += 12.5 if int_coverage > 5 else (6 if int_coverage > 2 else 0)
+                        score += 12.5 if earn_quality > 1.0 else (6 if earn_quality > 0.7 else 0)
+                        score += 12.5 if fcf_growth > 10 else (6 if fcf_growth > 0 else 0)
+
+                        # Determinazione fase aziendale
+                        if score >= 75: 
+                            status_label = "ESPANSIONE / ECCELLENZA 🚀"
+                            status_color = "#00FF00"
+                        elif score >= 45: 
+                            status_label = "EQUITY / STABILITÀ ⚖️"
+                            status_color = "#FFFF00"
+                        else: 
+                            status_label = "SCARSITÀ / RISCHIO ⚠️"
+                            status_color = "#FF0000"
+
+                        # --- RENDERING TACHIMETRO (GAUGE CHART) ---
+                        fig_gauge = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = score,
+                            domain = {'x': [0, 1], 'y': [0, 1]},
+                            title = {'text': f"Health Score: {status_label}", 'font': {'size': 20, 'color': status_color}},
+                            gauge = {
+                                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                                'bar': {'color': status_color},
+                                'bgcolor': "rgba(0,0,0,0)",
+                                'borderwidth': 2,
+                                'bordercolor': "gray",
+                                'steps': [
+                                    {'range': [0, 45], 'color': 'rgba(255, 0, 0, 0.3)'},
+                                    {'range': [45, 75], 'color': 'rgba(255, 255, 0, 0.3)'},
+                                    {'range': [75, 100], 'color': 'rgba(0, 255, 0, 0.3)'}
+                                ],
+                                'threshold': {
+                                    'line': {'color': "white", 'width': 4},
+                                    'thickness': 0.75,
+                                    'value': score
+                                }
+                            }
+                        ))
+                        fig_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
+
                         # --- RENDERING DASHBOARD 4x2 ---
                         st.write("**Institutional Health Score Card**")
                         
