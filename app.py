@@ -7540,21 +7540,80 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         rel_outperf = stock_52w - spy_52w
                         rel_spark_data = pd.Series([spy_52w, stock_52w])
 
+                        # --- RILEVAMENTO SETTORE FINANZIARIO ---
+                        is_financial = info_data.get('sector') == 'Financial Services'
+                        
+                        if is_financial:
+                            # Estrazione Dati per Banche/Holding
+                            equity = get_row(bs_data, ['Total Stockholders Equity', 'Common Stock Equity'])
+                            net_inc_series = get_row(fin_data, ['Net Income Common Stockholders', 'Net Income'])
+                            total_assets = get_row(bs_data, ['Total Assets'])
+                            goodwill = get_row(bs_data, ['Goodwill', 'Goodwill And Other Intangible Assets'])
+                            intangibles = get_row(bs_data, ['Intangible Assets'])
+                            op_exp = get_row(fin_data, ['Total Operating Expenses', 'Operating Expense'])
+                            total_rev = get_row(fin_data, ['Total Revenue'])
+                            
+                            # Calcolo Metriche Finanziarie (8 Pilastri)
+                            # 1. ROE
+                            roe = (net_inc_series.iloc[0] / equity.iloc[0]) * 100 if not equity.empty and equity.iloc[0] != 0 else np.nan
+                            # 2. ROTCE (Tangible Common Equity)
+                            tce = equity.iloc[0] - goodwill.iloc[0] - intangibles.iloc[0] if not equity.empty else 0
+                            rotce = (net_inc_series.iloc[0] / tce) * 100 if tce > 0 else np.nan
+                            # 3. ROA
+                            roa = (net_inc_series.iloc[0] / total_assets.iloc[0]) * 100 if not total_assets.empty and total_assets.iloc[0] != 0 else np.nan
+                            # 4. P/B Ratio
+                            pb_ratio = info_data.get('priceToBook', np.nan)
+                            # 5. Efficiency Ratio (Target < 60%)
+                            eff_ratio = (op_exp.iloc[0] / total_rev.iloc[0]) * 100 if not total_rev.empty and total_rev.iloc[0] != 0 else np.nan
+                            # 6. Net Margin
+                            net_margin_fin = (net_inc_series.iloc[0] / total_rev.iloc[0]) * 100 if not total_rev.empty and total_rev.iloc[0] != 0 else np.nan
+                            # 7. Price to Tangible Book (P/TBV)
+                            shares = info_data.get('sharesOutstanding', 1)
+                            ptbv = (curr_price * shares) / tce if tce > 0 else np.nan
+                            # 8. Asset Turnover (Efficienza Patrimoniale)
+                            asset_turnover = total_rev.iloc[0] / total_assets.iloc[0] if not total_assets.empty and total_assets.iloc[0] != 0 else np.nan
+                        
+                            # Raccolta Metriche Disponibili per Score
+                            fin_metrics = {
+                                "ROE": (roe, 12, 8), "ROTCE": (rotce, 15, 10), "ROA": (roa, 1.2, 0.8),
+                                "P/B": (pb_ratio, 1.2, 1.8, True), "Eff. Ratio": (eff_ratio, 60, 75, True),
+                                "Net Margin": (net_margin_fin, 20, 10), "P/TBV": (ptbv, 1.5, 2.0, True),
+                                "Asset Turn": (asset_turnover, 0.10, 0.05)
+                            }
+
                         # --- 3. CALCOLO SCORE INTEGRATO (Max 100 Punti) ---
                         score = 0
-                        # Vecchie Metriche (Max 64 Punti: 8 punti ciascuna)
-                        score += 8 if rev_growth > 10 else (4 if rev_growth > 0 else 0)
-                        score += 8 if ni_growth > 10 else (4 if ni_growth > 0 else 0)
-                        score += 8 if fcf_margin > 15 else (4 if fcf_margin > 5 else 0)
-                        score += 8 if capex_ocf < 40 else (4 if capex_ocf < 70 else 0)
-                        score += 8 if op_leverage > 1.5 else (4 if op_leverage > 1.0 else 0)
-                        score += 8 if int_coverage > 5 else (4 if int_coverage > 2 else 0)
-                        score += 8 if earn_quality > 1.0 else (4 if earn_quality > 0.7 else 0)
-                        score += 8 if fcf_growth > 10 else (4 if fcf_growth > 0 else 0)
+                        fwd_score = 0
                         # Nuove Metriche Macro/Forward (Max 36 Punti: 12 punti ciascuna, Pesi Maggiori)
-                        score += 12 if upside_pct > 15 else (6 if upside_pct > 0 else 0)
-                        score += 12 if wacc_spread > 5 else (6 if wacc_spread > 0 else 0)
-                        score += 12 if rel_outperf > 5 else (6 if rel_outperf > -5 else 0)
+                        fwd_score += 12 if upside_pct > 15 else (6 if upside_pct > 0 else 0)
+                        fwd_score += 12 if wacc_spread > 5 else (6 if wacc_spread > 0 else 0)
+                        fwd_score += 12 if rel_outperf > 5 else (6 if rel_outperf > -5 else 0)
+
+                        if is_financial:
+                            valid_fin_metrics = {k: v for k, v in fin_metrics.items() if not np.isnan(v[0])}
+                            fin_score_total = 0
+                            for k, v in valid_fin_metrics.items():
+                                val, g, y = v[0], v[1], v[2]
+                                rev_pol = v[3] if len(v) > 3 else False
+                                if not rev_pol:
+                                    fin_score_total += 8 if val >= g else (4 if val >= y else 0)
+                                else:
+                                    fin_score_total += 8 if val <= g else (4 if val <= y else 0)
+                            
+                            max_possible = len(valid_fin_metrics) * 8
+                            hist_score = (fin_score_total / max_possible * 64) if max_possible > 0 else 0
+                        else:
+                            hist_score = 0
+                            hist_score += 8 if rev_growth > 10 else (4 if rev_growth > 0 else 0)
+                            hist_score += 8 if ni_growth > 10 else (4 if ni_growth > 0 else 0)
+                            hist_score += 8 if fcf_margin > 15 else (4 if fcf_margin > 5 else 0)
+                            hist_score += 8 if capex_ocf < 40 else (4 if capex_ocf < 70 else 0)
+                            hist_score += 8 if op_leverage > 1.5 else (4 if op_leverage > 1.0 else 0)
+                            hist_score += 8 if int_coverage > 5 else (4 if int_coverage > 2 else 0)
+                            hist_score += 8 if earn_quality > 1.0 else (4 if earn_quality > 0.7 else 0)
+                            hist_score += 8 if fcf_growth > 10 else (4 if fcf_growth > 0 else 0)
+                            
+                        score = hist_score + fwd_score
 
                         if score >= 75: 
                             status_label, status_color = "ESPANSIONE / STRONG BUY 🚀", "#00FF00"
@@ -7602,51 +7661,91 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         # --- DASHBOARD VISIVA ---
                         st.write("**Historical Fundamentals (Passato)**")
                         
-                        # Riga 1 Storica
-                        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-                        with r1c1:
-                            msg, col = get_status(rev_growth, 10, 0)
-                            st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Misura l'espansione del fatturato. Fondamentale per capire se l'azienda guadagna quote di mercato.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
-                            render_sparkline(rev, "#00FFCC")
-                        with r1c2:
-                            msg, col = get_status(ni_growth, 10, 0)
-                            st.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Misura la crescita dell'utile netto. Deve idealmente crescere in linea o più dei ricavi.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
-                            render_sparkline(net_inc, "#00CCFF")
-                        with r1c3:
-                            msg, col = get_status(fcf_margin, 15, 5)
-                            st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Quanta cassa libera resta da ogni dollaro di fatturato. Indica la profittabilità reale (Cash Cow).\n\nSOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
-                            render_sparkline(fcf_series / rev.replace(0,1), "#FFCC00")
-                        with r1c4:
-                            msg, col = get_status(capex_ocf, 40, 70, True)
-                            st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Indica quanto flusso operativo viene assorbito dagli investimenti fissi. Più è basso, più l'azienda è leggera e flessibile.\n\nSOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
-                            render_sparkline(abs(capex)/ocf.replace(0,1), "#FF6600")
+                        if is_financial:
+                            st.info("🏛️ Modulo Analisi Istituti Finanziari Attivo")
+                            # Verifica dati mancanti
+                            missing_fin = [k for k, v in fin_metrics.items() if np.isnan(v[0])]
+                            if missing_fin:
+                                st.warning(f"⚠️ Dati parziali. Metriche non disponibili: {', '.join(missing_fin)}. Lo Score è pesato sui dati presenti.")
 
-                        # Riga 2 Storica
-                        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-                        with r2c1:
-                            msg, col = get_status(op_leverage, 1.5, 1.0)
-                            st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Capacità di generare più utile operativo a parità di crescita ricavi. Indica l'efficienza dei costi fissi e la scalabilità.\n\nSOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
-                            render_sparkline(ebit/rev.replace(0,1), "#AAFF00")
-                        with r2c2:
-                            msg, col = get_status(int_coverage, 5.0, 2.0)
-                            st.metric("Int Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Capacità di rimborsare gli interessi sul debito tramite l'utile operativo. Indica la protezione contro il rischio di default.\n\nSOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
-                            render_sparkline(ebit/int_expense.replace(0, 1), "#FF00FF")
-                        with r2c3:
-                            msg, col = get_status(earn_quality, 1.0, 0.7)
-                            st.metric("Earn Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: Rapporto tra Flusso di Cassa Operativo e Utile Netto. Se < 1, gli utili potrebbero essere solo 'contabili' e non monetari.\n\nSOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
-                            render_sparkline(ocf/net_inc.replace(0,1), "#BBBBBB")
-                        with r2c4:
-                            msg, col = get_status(fcf_growth, 10, 0)
-                            st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col, 
-                                      help="SIGNIFICATO: La crescita del denaro contante libero. È il vero motore dietro il pagamento di dividendi e il riacquisto di azioni proprie.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
-                            render_sparkline(fcf_series, "#00FF00")
+                            # Riga 1 Finanziaria
+                            r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+                            with r1c1:
+                                msg, col = get_status(roe, 12, 8)
+                                st.metric("ROE", f"{roe:.1f}%", delta=msg, delta_color=col, help="Return on Equity: Redditività del capitale proprio.")
+                                render_sparkline(net_inc_series / equity.replace(0,1), "#00FFCC")
+                            with r1c2:
+                                msg, col = get_status(rotce, 15, 10)
+                                st.metric("ROTCE", f"{rotce:.1f}%", delta=msg, delta_color=col, help="Return on Tangible Common Equity: La metrica più severa per la redditività bancaria.")
+                                render_sparkline(net_inc_series, "#00CCFF")
+                            with r1c3:
+                                msg, col = get_status(pb_ratio, 1.2, 1.8, True)
+                                st.metric("P/B Ratio", f"{pb_ratio:.2f}x", delta=msg, delta_color=col, help="Rapporto Prezzo/Valore di Libro. Sotto 1.0x è spesso segnale di sottovalutazione.")
+                            with r1c4:
+                                msg, col = get_status(eff_ratio, 60, 75, True)
+                                st.metric("Eff. Ratio", f"{eff_ratio:.1f}%", delta=msg, delta_color=col, help="Efficiency Ratio: Quanto costa generare ricavi. Più è basso, più la banca è efficiente.")
+
+                            # Riga 2 Finanziaria
+                            r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+                            with r2c1:
+                                msg, col = get_status(roa, 1.2, 0.8)
+                                st.metric("ROA", f"{roa:.2f}%", delta=msg, delta_color=col, help="Return on Assets: Redditività rispetto al totale attivo gestito.")
+                            with r2c2:
+                                msg, col = get_status(net_margin_fin, 20, 10)
+                                st.metric("Net Margin", f"{net_margin_fin:.1f}%", delta=msg, delta_color=col, help="Margine Netto: Percentuale di ricavi trasformata in utile.")
+                            with r2c3:
+                                msg, col = get_status(ptbv, 1.5, 2.0, True)
+                                st.metric("P/TBV", f"{ptbv:.2f}x", delta=msg, delta_color=col, help="Price to Tangible Book Value: Valuta la banca escludendo l'avviamento.")
+                            with r2c4:
+                                msg, col = get_status(asset_turnover, 0.10, 0.05)
+                                st.metric("Asset Turn.", f"{asset_turnover:.2f}", delta=msg, delta_color=col, help="Efficienza nell'uso degli asset per generare volumi di business.")
+                        
+                        else:
+                            # Riga 1 Storica
+                            r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+                            with r1c1:
+                                msg, col = get_status(rev_growth, 10, 0)
+                                st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Misura l'espansione del fatturato. Fondamentale per capire se l'azienda guadagna quote di mercato.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                                render_sparkline(rev, "#00FFCC")
+                            with r1c2:
+                                msg, col = get_status(ni_growth, 10, 0)
+                                st.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Misura la crescita dell'utile netto. Deve idealmente crescere in linea o più dei ricavi.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                                render_sparkline(net_inc, "#00CCFF")
+                            with r1c3:
+                                msg, col = get_status(fcf_margin, 15, 5)
+                                st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Quanta cassa libera resta da ogni dollaro di fatturato. Indica la profittabilità reale (Cash Cow).\n\nSOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
+                                render_sparkline(fcf_series / rev.replace(0,1), "#FFCC00")
+                            with r1c4:
+                                msg, col = get_status(capex_ocf, 40, 70, True)
+                                st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Indica quanto flusso operativo viene assorbito dagli investimenti fissi. Più è basso, più l'azienda è leggera e flessibile.\n\nSOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
+                                render_sparkline(abs(capex)/ocf.replace(0,1), "#FF6600")
+    
+                            # Riga 2 Storica
+                            r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+                            with r2c1:
+                                msg, col = get_status(op_leverage, 1.5, 1.0)
+                                st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Capacità di generare più utile operativo a parità di crescita ricavi. Indica l'efficienza dei costi fissi e la scalabilità.\n\nSOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
+                                render_sparkline(ebit/rev.replace(0,1), "#AAFF00")
+                            with r2c2:
+                                msg, col = get_status(int_coverage, 5.0, 2.0)
+                                st.metric("Int Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Capacità di rimborsare gli interessi sul debito tramite l'utile operativo. Indica la protezione contro il rischio di default.\n\nSOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
+                                render_sparkline(ebit/int_expense.replace(0, 1), "#FF00FF")
+                            with r2c3:
+                                msg, col = get_status(earn_quality, 1.0, 0.7)
+                                st.metric("Earn Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: Rapporto tra Flusso di Cassa Operativo e Utile Netto. Se < 1, gli utili potrebbero essere solo 'contabili' e non monetari.\n\nSOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
+                                render_sparkline(ocf/net_inc.replace(0,1), "#BBBBBB")
+                            with r2c4:
+                                msg, col = get_status(fcf_growth, 10, 0)
+                                st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col, 
+                                          help="SIGNIFICATO: La crescita del denaro contante libero. È il vero motore dietro il pagamento di dividendi e il riacquisto di azioni proprie.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                                render_sparkline(fcf_series, "#00FF00")
 
                         st.markdown("---")
                         st.write("**Institutional Consensus & Macro (Futuro e Contesto)**")
