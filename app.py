@@ -7491,24 +7491,20 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         total_debt = get_row(bs_data, ['Total Debt'])
                         total_equity = get_row(bs_data, ['Total Equity', 'Stockholders Equity'])
 
-                        # Calcoli (Ultimo periodo vs Precedente)
+                        # --- CALCOLI INTEGRATI (8 METRICHE) ---
+                        # 1. Growth Metrics (Rev & NI)
                         if len(rev) > 1 and rev.iloc[0] > 0 and rev.iloc[1] > 0:
                             rev_growth = ((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1]) * 100
                             ni_growth = ((net_inc.iloc[0] - net_inc.iloc[1]) / abs(net_inc.iloc[1])) * 100 if net_inc.iloc[1] != 0 else 0
                         else:
                             rev_growth, ni_growth = 0, 0
 
-                        # Calcolo Metriche Avanzate (Periodo Attuale)
-                        fcf = ocf.iloc[0] - abs(capex.iloc[0])
-                        fcf_margin = (fcf / rev.iloc[0]) * 100 if rev.iloc[0] > 0 else 0
-                        
+                        # 2. Capital & Cash Metrics
+                        fcf_val = ocf.iloc[0] - abs(capex.iloc[0])
+                        fcf_margin = (fcf_val / rev.iloc[0]) * 100 if rev.iloc[0] > 0 else 0
                         capex_ocf_ratio = (abs(capex.iloc[0]) / ocf.iloc[0]) * 100 if ocf.iloc[0] > 0 else 0
-                        
-                        invested_capital = total_debt.iloc[0] + total_equity.iloc[0]
-                        roic_proxy = (net_inc.iloc[0] / invested_capital) * 100 if invested_capital > 0 else 0
 
-                        # --- NUOVI CALCOLI DI EFFICIENZA (NON DOPPIONI) ---
-                        # 1. Operating Leverage (Leva Operativa)
+                        # 3. Efficiency Metrics
                         ebit = get_row(fin_data, ['EBIT', 'Operating Income'])
                         if len(ebit) > 1 and len(rev) > 1:
                             pct_change_ebit = (ebit.iloc[0] - ebit.iloc[1]) / abs(ebit.iloc[1]) if ebit.iloc[1] != 0 else 0
@@ -7516,49 +7512,66 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                             op_leverage = pct_change_ebit / pct_change_rev if pct_change_rev != 0 else 0
                         else:
                             op_leverage = 0
-
-                        # 2. Interest Coverage Ratio
+                        
                         int_expense = abs(get_row(fin_data, ['Interest Expense']))
                         int_coverage = ebit.iloc[0] / int_expense.iloc[0] if int_expense.iloc[0] > 0 else 999
-
-                        # 3. Earnings Quality (OCF / Net Income)
                         earnings_quality = ocf.iloc[0] / net_inc.iloc[0] if net_inc.iloc[0] != 0 else 0
+                        
+                        # Calcolo FCF Growth (8a metrica per simmetria)
+                        fcf_series = ocf - abs(capex)
+                        fcf_growth = ((fcf_series.iloc[0] - fcf_series.iloc[1]) / abs(fcf_series.iloc[1])) * 100 if len(fcf_series) > 1 and fcf_series.iloc[1] != 0 else 0
 
-                        # --- VISUALIZZAZIONE AGGIORNATA ---
-                        c1, c2, c3, c4 = st.columns(4)
-                        
-                        c1.metric("Rev Growth (YoY)", f"{rev_growth:+.1f}%")
-                        
-                        c2.metric(
-                            "Operating Leverage", 
-                            f"{op_leverage:.2f}x",
-                            help="Indica la scalabilità: quanto cresce l'EBIT rispetto ai Ricavi. >1.5x è ottimo."
-                        )
-                        
-                        c3.metric(
-                            "Interest Coverage", 
-                            f"{int_coverage:.1f}x",
-                            delta="Sicuro" if int_coverage > 3 else "Rischioso",
-                            help="Capacità di pagare gli interessi. Sotto 1.5x è segnale di allarme istituzionale."
-                        )
-                        
-                        c4.metric(
-                            "Earnings Quality", 
-                            f"{earnings_quality:.2f}",
-                            delta="Buona" if earnings_quality >= 1 else "Scarsa",
-                            help="Rapporto tra Cassa Operativa e Utile. Se < 1, gli utili potrebbero essere contabili ma non monetari."
-                        )
+                        # --- SISTEMA SEMAFORICO (Helper) ---
+                        def get_status(val, t_green, t_yellow, reverse=False):
+                            if not reverse:
+                                if val >= t_green: return "Eccellente 🟢", "normal"
+                                if val >= t_yellow: return "Stabile 🟡", "off"
+                                return "Debole 🔴", "inverse"
+                            else: # Per rapporti dove meno è meglio (es. CapEx ratio)
+                                if val <= t_green: return "Ottimale 🟢", "normal"
+                                if val <= t_yellow: return "Monitorare 🟡", "off"
+                                return "Critico 🔴", "inverse"
 
-                        # Aggiornamento Tabella Trend Storico con voci mancanti
+                        # --- DASHBOARD VISIVA (2 RIGHE DA 4 COLONNE) ---
+                        st.write("**Dashboard Salute Finanziaria (Institutional Health Score):**")
+                        
+                        # Riga 1: Growth & Cash
+                        r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
+                        s_rev, d_rev = get_status(rev_growth, 10, 0)
+                        r1_c1.metric("Rev Growth (YoY)", f"{rev_growth:.1f}%", delta=s_rev, delta_color=d_rev)
+                        
+                        s_ni, d_ni = get_status(ni_growth, 10, 0)
+                        r1_c2.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=s_ni, delta_color=d_ni)
+                        
+                        s_fcf_m, d_fcf_m = get_status(fcf_margin, 15, 5)
+                        r1_c3.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=s_fcf_m, delta_color=d_fcf_m)
+                        
+                        s_capx, d_capx = get_status(capex_ocf_ratio, 40, 70, reverse=True)
+                        r1_c4.metric("CapEx / OCF", f"{capex_ocf_ratio:.1f}%", delta=s_capx, delta_color=d_capx)
+
+                        # Riga 2: Efficiency & Coverage
+                        r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
+                        s_lev, d_lev = get_status(op_leverage, 1.5, 1.0)
+                        r2_c1.metric("Op Leverage", f"{op_leverage:.2f}x", delta=s_lev, delta_color=d_lev)
+                        
+                        s_cov, d_cov = get_status(int_coverage, 5.0, 2.0)
+                        r2_c2.metric("Int Coverage", f"{int_coverage:.1f}x", delta=s_cov, delta_color=d_cov)
+                        
+                        s_eq, d_eq = get_status(earnings_quality, 1.0, 0.7)
+                        r2_c3.metric("Earnings Quality", f"{earnings_quality:.2f}", delta=s_eq, delta_color=d_eq)
+                        
+                        s_fcfg, d_fcfg = get_status(fcf_growth, 10, 0)
+                        r2_c4.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=s_fcfg, delta_color=d_fcfg)
+
+                        # Tabella Trend Storica (Rimanente invariata ma aggiornata)
                         st.write(f"**Storico Analitico ({'Trimestrale' if period_choice else 'Annuale'}):**")
                         trend_df = pd.DataFrame({
                             'Ricavi': rev.apply(format_finance),
                             'EBIT (Op. Income)': ebit.apply(format_finance),
                             'Utile Netto': net_inc.apply(format_finance),
                             'Interest Coverage': (ebit / int_expense.replace(0, 1)).map('{:.2f}x'.format),
-                            'Free Cash Flow': (ocf - abs(capex)).apply(format_finance)
+                            'Free Cash Flow': fcf_series.apply(format_finance)
                         }).head(4)
-                        
                         st.dataframe(trend_df, use_container_width=True)
 
                     except Exception as e:
