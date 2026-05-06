@@ -7466,6 +7466,91 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 else:
                     st.warning("Dati non disponibili per questa selezione.")
                     
+                # --- START INSTITUTIONAL TREND ANALYSIS ---
+                st.markdown("---")
+                st.markdown("### 📈 Institutional Trend & Capital Analysis")
+                
+                fin_data = data.get(f"{prefix}fin")
+                bs_data = data.get(f"{prefix}bs")
+                cf_data = data.get(f"{prefix}cf")
+
+                if fin_data is not None and not fin_data.empty and cf_data is not None and not cf_data.empty and bs_data is not None and not bs_data.empty:
+                    try:
+                        # Funzione helper per trovare le chiavi corrette (yfinance cambia spesso i nomi)
+                        def get_row(df, keywords):
+                            for k in df.index:
+                                if any(word.lower() in str(k).lower() for word in keywords):
+                                    return df.loc[k]
+                            return pd.Series([0]*len(df.columns), index=df.columns)
+
+                        # Estrazione serie storiche
+                        rev = get_row(fin_data, ['Total Revenue', 'Operating Revenue', 'Revenue'])
+                        net_inc = get_row(fin_data, ['Net Income'])
+                        ocf = get_row(cf_data, ['Operating Cash Flow', 'Cash From Operating Activities'])
+                        capex = get_row(cf_data, ['Capital Expenditure', 'Investments In Property'])
+                        total_debt = get_row(bs_data, ['Total Debt'])
+                        total_equity = get_row(bs_data, ['Total Equity', 'Stockholders Equity'])
+
+                        # Calcoli (Ultimo periodo vs Precedente)
+                        if len(rev) > 1 and rev.iloc[0] > 0 and rev.iloc[1] > 0:
+                            rev_growth = ((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1]) * 100
+                            ni_growth = ((net_inc.iloc[0] - net_inc.iloc[1]) / abs(net_inc.iloc[1])) * 100 if net_inc.iloc[1] != 0 else 0
+                        else:
+                            rev_growth, ni_growth = 0, 0
+
+                        # Calcolo Metriche Avanzate (Periodo Attuale)
+                        fcf = ocf.iloc[0] - abs(capex.iloc[0])
+                        fcf_margin = (fcf / rev.iloc[0]) * 100 if rev.iloc[0] > 0 else 0
+                        
+                        capex_ocf_ratio = (abs(capex.iloc[0]) / ocf.iloc[0]) * 100 if ocf.iloc[0] > 0 else 0
+                        
+                        invested_capital = total_debt.iloc[0] + total_equity.iloc[0]
+                        roic_proxy = (net_inc.iloc[0] / invested_capital) * 100 if invested_capital > 0 else 0
+
+                        # Visualizzazione Dashboard Istituzionale
+                        c1, c2, c3, c4 = st.columns(4)
+                        
+                        c1.metric(
+                            "Revenue Growth (YoY)", 
+                            f"{rev_growth:+.1f}%",
+                            help="Crescita dei ricavi rispetto al periodo precedente. >0% è positivo."
+                        )
+                        c2.metric(
+                            "Net Income Growth", 
+                            f"{ni_growth:+.1f}%",
+                            help="Crescita degli utili netti. Se cresce meno dei ricavi, i margini si stanno contraendo."
+                        )
+                        c3.metric(
+                            "FCF Margin", 
+                            f"{fcf_margin:.1f}%",
+                            help="Free Cash Flow / Ricavi. Indica la percentuale di fatturato che si trasforma in vera liquidità. >10% è eccellente."
+                        )
+                        c4.metric(
+                            "CapEx / OCF Ratio", 
+                            f"{capex_ocf_ratio:.1f}%",
+                            delta="Elevato" if capex_ocf_ratio > 80 else "Sano",
+                            delta_color="inverse" if capex_ocf_ratio > 80 else "normal",
+                            help="Quanto flusso di cassa viene speso in investimenti strutturali (CapEx). Valori > 80-100% indicano forte assorbimento di cassa."
+                        )
+
+                        # Tabella Trend Storico
+                        st.write(f"**Storico Analitico ({'Trimestrale' if period_choice else 'Annuale'}):**")
+                        
+                        # Allineiamo gli indici per creare la tabella
+                        trend_df = pd.DataFrame({
+                            'Ricavi (Revenue)': rev.apply(format_finance),
+                            'Utile Netto (Net Income)': net_inc.apply(format_finance),
+                            'Flusso Cassa Op. (OCF)': ocf.apply(format_finance),
+                            'Investimenti (CapEx)': capex.apply(format_finance),
+                            'Free Cash Flow': (ocf - abs(capex)).apply(format_finance)
+                        }).head(4) # Mostra gli ultimi 4 periodi
+                        
+                        st.dataframe(trend_df, use_container_width=True)
+
+                    except Exception as e:
+                        st.info("⚠️ Non tutti i dati necessari per l'Analisi di Trend Istituzionale sono disponibili per questo Ticker.")
+                # --- END INSTITUTIONAL TREND ANALYSIS ---
+                    
             with t2:
                 fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
                 fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
