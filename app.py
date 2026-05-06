@@ -7507,43 +7507,57 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         invested_capital = total_debt.iloc[0] + total_equity.iloc[0]
                         roic_proxy = (net_inc.iloc[0] / invested_capital) * 100 if invested_capital > 0 else 0
 
-                        # Visualizzazione Dashboard Istituzionale
+                        # --- NUOVI CALCOLI DI EFFICIENZA (NON DOPPIONI) ---
+                        # 1. Operating Leverage (Leva Operativa)
+                        ebit = get_row(fin_data, ['EBIT', 'Operating Income'])
+                        if len(ebit) > 1 and len(rev) > 1:
+                            pct_change_ebit = (ebit.iloc[0] - ebit.iloc[1]) / abs(ebit.iloc[1]) if ebit.iloc[1] != 0 else 0
+                            pct_change_rev = (rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] if rev.iloc[1] != 0 else 0
+                            op_leverage = pct_change_ebit / pct_change_rev if pct_change_rev != 0 else 0
+                        else:
+                            op_leverage = 0
+
+                        # 2. Interest Coverage Ratio
+                        int_expense = abs(get_row(fin_data, ['Interest Expense']))
+                        int_coverage = ebit.iloc[0] / int_expense.iloc[0] if int_expense.iloc[0] > 0 else 999
+
+                        # 3. Earnings Quality (OCF / Net Income)
+                        earnings_quality = ocf.iloc[0] / net_inc.iloc[0] if net_inc.iloc[0] != 0 else 0
+
+                        # --- VISUALIZZAZIONE AGGIORNATA ---
                         c1, c2, c3, c4 = st.columns(4)
                         
-                        c1.metric(
-                            "Revenue Growth (YoY)", 
-                            f"{rev_growth:+.1f}%",
-                            help="Crescita dei ricavi rispetto al periodo precedente. >0% è positivo."
-                        )
+                        c1.metric("Rev Growth (YoY)", f"{rev_growth:+.1f}%")
+                        
                         c2.metric(
-                            "Net Income Growth", 
-                            f"{ni_growth:+.1f}%",
-                            help="Crescita degli utili netti. Se cresce meno dei ricavi, i margini si stanno contraendo."
+                            "Operating Leverage", 
+                            f"{op_leverage:.2f}x",
+                            help="Indica la scalabilità: quanto cresce l'EBIT rispetto ai Ricavi. >1.5x è ottimo."
                         )
+                        
                         c3.metric(
-                            "FCF Margin", 
-                            f"{fcf_margin:.1f}%",
-                            help="Free Cash Flow / Ricavi. Indica la percentuale di fatturato che si trasforma in vera liquidità. >10% è eccellente."
+                            "Interest Coverage", 
+                            f"{int_coverage:.1f}x",
+                            delta="Sicuro" if int_coverage > 3 else "Rischioso",
+                            help="Capacità di pagare gli interessi. Sotto 1.5x è segnale di allarme istituzionale."
                         )
+                        
                         c4.metric(
-                            "CapEx / OCF Ratio", 
-                            f"{capex_ocf_ratio:.1f}%",
-                            delta="Elevato" if capex_ocf_ratio > 80 else "Sano",
-                            delta_color="inverse" if capex_ocf_ratio > 80 else "normal",
-                            help="Quanto flusso di cassa viene speso in investimenti strutturali (CapEx). Valori > 80-100% indicano forte assorbimento di cassa."
+                            "Earnings Quality", 
+                            f"{earnings_quality:.2f}",
+                            delta="Buona" if earnings_quality >= 1 else "Scarsa",
+                            help="Rapporto tra Cassa Operativa e Utile. Se < 1, gli utili potrebbero essere contabili ma non monetari."
                         )
 
-                        # Tabella Trend Storico
+                        # Aggiornamento Tabella Trend Storico con voci mancanti
                         st.write(f"**Storico Analitico ({'Trimestrale' if period_choice else 'Annuale'}):**")
-                        
-                        # Allineiamo gli indici per creare la tabella
                         trend_df = pd.DataFrame({
-                            'Ricavi (Revenue)': rev.apply(format_finance),
-                            'Utile Netto (Net Income)': net_inc.apply(format_finance),
-                            'Flusso Cassa Op. (OCF)': ocf.apply(format_finance),
-                            'Investimenti (CapEx)': capex.apply(format_finance),
+                            'Ricavi': rev.apply(format_finance),
+                            'EBIT (Op. Income)': ebit.apply(format_finance),
+                            'Utile Netto': net_inc.apply(format_finance),
+                            'Interest Coverage': (ebit / int_expense.replace(0, 1)).map('{:.2f}x'.format),
                             'Free Cash Flow': (ocf - abs(capex)).apply(format_finance)
-                        }).head(4) # Mostra gli ultimi 4 periodi
+                        }).head(4)
                         
                         st.dataframe(trend_df, use_container_width=True)
 
