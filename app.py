@@ -7666,7 +7666,7 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                             # Verifica dati mancanti
                             missing_fin = [k for k, v in fin_metrics.items() if np.isnan(v[0])]
                             if missing_fin:
-                                st.warning(f"⚠️ Dati parziali. Metriche non disponibili: {', '.join(missing_fin)}. Lo Score è pesato sui dati presenti.")
+                                st.warning(f"⚠️ Dati parziali. Metriche non disponibili: {', '.join(missing_fin)}.")
 
                             # Riga 1 Finanziaria
                             r1c1, r1c2, r1c3, r1c4 = st.columns(4)
@@ -7676,29 +7676,36 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                                 render_sparkline(net_inc_series / equity.replace(0,1), "#00FFCC")
                             with r1c2:
                                 msg, col = get_status(rotce, 15, 10)
-                                st.metric("ROTCE", f"{rotce:.1f}%", delta=msg, delta_color=col, help="Return on Tangible Common Equity: La metrica più severa per la redditività bancaria.")
-                                render_sparkline(net_inc_series, "#00CCFF")
+                                st.metric("ROTCE", f"{rotce:.1f}%", delta=msg, delta_color=col, help="Return on Tangible Common Equity: Redditività sul capitale tangibile.")
+                                render_sparkline(net_inc_series / (equity - goodwill - intangibles).replace(0,1), "#00CCFF")
                             with r1c3:
                                 msg, col = get_status(pb_ratio, 1.2, 1.8, True)
-                                st.metric("P/B Ratio", f"{pb_ratio:.2f}x", delta=msg, delta_color=col, help="Rapporto Prezzo/Valore di Libro. Sotto 1.0x è spesso segnale di sottovalutazione.")
+                                st.metric("P/B Ratio", f"{pb_ratio:.2f}x", delta=msg, delta_color=col, help="Rapporto Prezzo/Valore di Libro.")
+                                # Trend P/B approssimato (Market Cap storica / Equity storica)
+                                render_sparkline((curr_price / info_data.get('previousClose', curr_price)) * (equity.iloc[0] / equity.replace(0,1)), "#FFCC00")
                             with r1c4:
                                 msg, col = get_status(eff_ratio, 60, 75, True)
-                                st.metric("Eff. Ratio", f"{eff_ratio:.1f}%", delta=msg, delta_color=col, help="Efficiency Ratio: Quanto costa generare ricavi. Più è basso, più la banca è efficiente.")
+                                st.metric("Eff. Ratio", f"{eff_ratio:.1f}%", delta=msg, delta_color=col, help="Efficiency Ratio: Costi operativi / Ricavi totali.")
+                                render_sparkline(op_exp / total_rev.replace(0,1), "#FF6600")
 
                             # Riga 2 Finanziaria
                             r2c1, r2c2, r2c3, r2c4 = st.columns(4)
                             with r2c1:
                                 msg, col = get_status(roa, 1.2, 0.8)
-                                st.metric("ROA", f"{roa:.2f}%", delta=msg, delta_color=col, help="Return on Assets: Redditività rispetto al totale attivo gestito.")
+                                st.metric("ROA", f"{roa:.2f}%", delta=msg, delta_color=col, help="Return on Assets: Utile Netto / Totale Attivo.")
+                                render_sparkline(net_inc_series / total_assets.replace(0,1), "#AAFF00")
                             with r2c2:
                                 msg, col = get_status(net_margin_fin, 20, 10)
-                                st.metric("Net Margin", f"{net_margin_fin:.1f}%", delta=msg, delta_color=col, help="Margine Netto: Percentuale di ricavi trasformata in utile.")
+                                st.metric("Net Margin", f"{net_margin_fin:.1f}%", delta=msg, delta_color=col, help="Margine Netto Bancario.")
+                                render_sparkline(net_inc_series / total_rev.replace(0,1), "#FF00FF")
                             with r2c3:
                                 msg, col = get_status(ptbv, 1.5, 2.0, True)
-                                st.metric("P/TBV", f"{ptbv:.2f}x", delta=msg, delta_color=col, help="Price to Tangible Book Value: Valuta la banca escludendo l'avviamento.")
+                                st.metric("P/TBV", f"{ptbv:.2f}x", delta=msg, delta_color=col, help="Price to Tangible Book Value.")
+                                render_sparkline((curr_price * info_data.get('sharesOutstanding', 1)) / (equity - goodwill - intangibles).replace(0,1), "#BBBBBB")
                             with r2c4:
                                 msg, col = get_status(asset_turnover, 0.10, 0.05)
-                                st.metric("Asset Turn.", f"{asset_turnover:.2f}", delta=msg, delta_color=col, help="Efficienza nell'uso degli asset per generare volumi di business.")
+                                st.metric("Asset Turn.", f"{asset_turnover:.2f}", delta=msg, delta_color=col, help="Asset Turnover: Efficienza nell'uso degli asset.")
+                                render_sparkline(total_rev / total_assets.replace(0,1), "#00FF00")
                         
                         else:
                             # Riga 1 Storica
