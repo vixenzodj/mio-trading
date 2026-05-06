@@ -7468,22 +7468,22 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                     
                 # --- START INSTITUTIONAL TREND ANALYSIS ---
                 st.markdown("---")
-                st.markdown("### 📈 Institutional Trend & Capital Analysis")
+                st.markdown("### 📈 Institutional Trend, Forward & Capital Analysis")
                 
                 fin_data = data.get(f"{prefix}fin")
                 bs_data = data.get(f"{prefix}bs")
                 cf_data = data.get(f"{prefix}cf")
+                info_data = data.get("info", {})
 
                 if all(d is not None and not d.empty for d in [fin_data, bs_data, cf_data]):
                     try:
-                        # Helper per l'estrazione righe (stabile contro cambi nomi yf)
                         def get_row(df, keywords):
                             for k in df.index:
                                 if any(word.lower() in str(k).lower() for word in keywords):
                                     return df.loc[k]
                             return pd.Series([0]*len(df.columns), index=df.columns)
 
-                        # Estrazione Serie Storiche per Grafici
+                        # --- 1. ESTRAZIONE DATI STORICI (8 Metriche) ---
                         rev = get_row(fin_data, ['Total Revenue', 'Operating Revenue', 'Revenue'])
                         net_inc = get_row(fin_data, ['Net Income'])
                         ebit = get_row(fin_data, ['EBIT', 'Operating Income'])
@@ -7492,13 +7492,11 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         int_expense = abs(get_row(fin_data, ['Interest Expense']))
                         fcf_series = ocf - abs(capex)
                         
-                        # Calcolo Metriche Istantanee (Ultimo Periodo)
                         rev_growth = ((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] * 100) if len(rev)>1 and rev.iloc[1]!=0 else 0
                         ni_growth = ((net_inc.iloc[0] - net_inc.iloc[1]) / abs(net_inc.iloc[1]) * 100) if len(net_inc)>1 and net_inc.iloc[1]!=0 else 0
                         fcf_margin = (fcf_series.iloc[0] / rev.iloc[0] * 100) if rev.iloc[0]!=0 else 0
                         capex_ocf = (abs(capex.iloc[0]) / ocf.iloc[0] * 100) if ocf.iloc[0]!=0 else 0
                         
-                        # Metriche Efficienza
                         pct_rev = rev.pct_change(periods=-1)
                         pct_ebit = ebit.pct_change(periods=-1)
                         op_leverage = (pct_ebit.iloc[0] / pct_rev.iloc[0]) if len(pct_rev)>0 and pct_rev.iloc[0]!=0 else 0
@@ -7506,24 +7504,91 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         earn_quality = (ocf.iloc[0] / net_inc.iloc[0]) if net_inc.iloc[0]!=0 else 0
                         fcf_growth = ((fcf_series.iloc[0] - fcf_series.iloc[1]) / abs(fcf_series.iloc[1]) * 100) if len(fcf_series)>1 and fcf_series.iloc[1]!=0 else 0
 
-                        # Funzione interna per Sparklines Plotly
+                        # --- 2. ESTRAZIONE NUOVI DATI FORWARD & MACRO (3 Metriche) ---
+                        # A. Forward Consensus (Target Price Upside)
+                        curr_price = info_data.get('currentPrice', info_data.get('previousClose', 1))
+                        target_price = info_data.get('targetMeanPrice', curr_price)
+                        upside_pct = ((target_price - curr_price) / curr_price * 100) if curr_price else 0
+                        # Sparkline fittizia per Consensus: Prezzo attuale -> Target
+                        cons_spark_data = pd.Series([curr_price * 0.9, curr_price, target_price])
+
+                        # B. Dynamic WACC vs ROIC Spread
+                        # Calcolo proxy WACC dinamico
+                        beta = info_data.get('beta', 1.0)
+                        rf_rate = 0.045 # Base assumption 4.5% 10Y yield
+                        cost_of_equity = rf_rate + beta * (0.10 - rf_rate)
+                        tot_debt = get_row(bs_data, ['Total Debt']).iloc[0]
+                        tot_eq = get_row(bs_data, ['Total Equity', 'Stockholders Equity']).iloc[0]
+                        cost_of_debt = (int_expense.iloc[0] / tot_debt) if tot_debt > 0 else 0
+                        tax_rate = 0.21
+                        tot_cap = tot_debt + tot_eq
+                        w_e = tot_eq / tot_cap if tot_cap > 0 else 1
+                        w_d = tot_debt / tot_cap if tot_cap > 0 else 0
+                        dyn_wacc = (w_e * cost_of_equity) + (w_d * cost_of_debt * (1 - tax_rate))
+                        # Calcolo ROIC e Spread
+                        roic_val = (net_inc.iloc[0] / tot_cap) if tot_cap > 0 else 0
+                        wacc_spread = (roic_val - dyn_wacc) * 100
+                        # Sparkline storico spread
+                        hist_cap = get_row(bs_data, ['Total Debt']) + get_row(bs_data, ['Total Equity'])
+                        wacc_spark_data = ((net_inc / hist_cap.replace(0, 1)) - dyn_wacc) * 100
+
+                        # C. Relative Benchmarking (vs S&P 500)
+                        stock_52w = info_data.get('52WeekChange', 0)
+                        spy_52w = info_data.get('SandP52WeekChange', 0)
+                        stock_52w = stock_52w * 100 if stock_52w else 0
+                        spy_52w = spy_52w * 100 if spy_52w else 0
+                        rel_outperf = stock_52w - spy_52w
+                        rel_spark_data = pd.Series([spy_52w, stock_52w])
+
+                        # --- 3. CALCOLO SCORE INTEGRATO (Max 100 Punti) ---
+                        score = 0
+                        # Vecchie Metriche (Max 64 Punti: 8 punti ciascuna)
+                        score += 8 if rev_growth > 10 else (4 if rev_growth > 0 else 0)
+                        score += 8 if ni_growth > 10 else (4 if ni_growth > 0 else 0)
+                        score += 8 if fcf_margin > 15 else (4 if fcf_margin > 5 else 0)
+                        score += 8 if capex_ocf < 40 else (4 if capex_ocf < 70 else 0)
+                        score += 8 if op_leverage > 1.5 else (4 if op_leverage > 1.0 else 0)
+                        score += 8 if int_coverage > 5 else (4 if int_coverage > 2 else 0)
+                        score += 8 if earn_quality > 1.0 else (4 if earn_quality > 0.7 else 0)
+                        score += 8 if fcf_growth > 10 else (4 if fcf_growth > 0 else 0)
+                        # Nuove Metriche Macro/Forward (Max 36 Punti: 12 punti ciascuna, Pesi Maggiori)
+                        score += 12 if upside_pct > 15 else (6 if upside_pct > 0 else 0)
+                        score += 12 if wacc_spread > 5 else (6 if wacc_spread > 0 else 0)
+                        score += 12 if rel_outperf > 5 else (6 if rel_outperf > -5 else 0)
+
+                        if score >= 75: 
+                            status_label, status_color = "ESPANSIONE / STRONG BUY 🚀", "#00FF00"
+                        elif score >= 45: 
+                            status_label, status_color = "EQUITY / HOLD ⚖️", "#FFFF00"
+                        else: 
+                            status_label, status_color = "SCARSITÀ / SELL ⚠️", "#FF0000"
+
+                        # --- RENDERING TACHIMETRO ---
+                        fig_gauge = go.Figure(go.Indicator(
+                            mode = "gauge+number", value = score,
+                            domain = {'x': [0, 1], 'y': [0, 1]},
+                            title = {'text': f"Total Health Score: {status_label}", 'font': {'size': 20, 'color': status_color}},
+                            gauge = {
+                                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                                'bar': {'color': status_color}, 'bgcolor': "rgba(0,0,0,0)",
+                                'borderwidth': 2, 'bordercolor': "gray",
+                                'steps': [{'range': [0, 45], 'color': 'rgba(255, 0, 0, 0.3)'},
+                                          {'range': [45, 75], 'color': 'rgba(255, 255, 0, 0.3)'},
+                                          {'range': [75, 100], 'color': 'rgba(0, 255, 0, 0.3)'}],
+                                'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': score}
+                            }
+                        ))
+                        fig_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
+
+                        # --- FUNZIONI HELPER GRAFICI E SEMAFORI ---
                         def render_sparkline(data_series, color):
-                            # Invertiamo per avere ordine cronologico sinistra -> destra
                             plot_data = data_series.fillna(0).iloc[::-1]
                             fig = go.Figure()
-                            fig.add_trace(go.Scatter(
-                                y=plot_data.values, mode='lines+markers',
-                                line=dict(color=color, width=3),
-                                marker=dict(size=6), hoverinfo='skip'
-                            ))
-                            fig.update_layout(
-                                height=60, margin=dict(l=0, r=0, t=5, b=5),
-                                xaxis=dict(visible=False), yaxis=dict(visible=False),
-                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False
-                            )
+                            fig.add_trace(go.Scatter(y=plot_data.values, mode='lines+markers', line=dict(color=color, width=3), marker=dict(size=6), hoverinfo='skip'))
+                            fig.update_layout(height=60, margin=dict(l=0, r=0, t=5, b=5), xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
                             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-                        # Helper Semaforico
                         def get_status(val, g, y, rev_pol=False):
                             if not rev_pol:
                                 if val >= g: return "Eccellente 🟢", "normal"
@@ -7534,109 +7599,68 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                                 if val <= y: return "Attenzione 🟡", "off"
                                 return "Critico 🔴", "inverse"
 
-                        # --- CALCOLO SCORE ISTITUZIONALE (0-100) ---
-                        score = 0
-                        score += 12.5 if rev_growth > 10 else (6 if rev_growth > 0 else 0)
-                        score += 12.5 if ni_growth > 10 else (6 if ni_growth > 0 else 0)
-                        score += 12.5 if fcf_margin > 15 else (6 if fcf_margin > 5 else 0)
-                        score += 12.5 if capex_ocf < 40 else (6 if capex_ocf < 70 else 0)
-                        score += 12.5 if op_leverage > 1.5 else (6 if op_leverage > 1.0 else 0)
-                        score += 12.5 if int_coverage > 5 else (6 if int_coverage > 2 else 0)
-                        score += 12.5 if earn_quality > 1.0 else (6 if earn_quality > 0.7 else 0)
-                        score += 12.5 if fcf_growth > 10 else (6 if fcf_growth > 0 else 0)
-
-                        # Determinazione fase aziendale
-                        if score >= 75: 
-                            status_label = "ESPANSIONE / ECCELLENZA 🚀"
-                            status_color = "#00FF00"
-                        elif score >= 45: 
-                            status_label = "EQUITY / STABILITÀ ⚖️"
-                            status_color = "#FFFF00"
-                        else: 
-                            status_label = "SCARSITÀ / RISCHIO ⚠️"
-                            status_color = "#FF0000"
-
-                        # --- RENDERING TACHIMETRO (GAUGE CHART) ---
-                        fig_gauge = go.Figure(go.Indicator(
-                            mode = "gauge+number",
-                            value = score,
-                            domain = {'x': [0, 1], 'y': [0, 1]},
-                            title = {'text': f"Health Score: {status_label}", 'font': {'size': 20, 'color': status_color}},
-                            gauge = {
-                                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
-                                'bar': {'color': status_color},
-                                'bgcolor': "rgba(0,0,0,0)",
-                                'borderwidth': 2,
-                                'bordercolor': "gray",
-                                'steps': [
-                                    {'range': [0, 45], 'color': 'rgba(255, 0, 0, 0.3)'},
-                                    {'range': [45, 75], 'color': 'rgba(255, 255, 0, 0.3)'},
-                                    {'range': [75, 100], 'color': 'rgba(0, 255, 0, 0.3)'}
-                                ],
-                                'threshold': {
-                                    'line': {'color': "white", 'width': 4},
-                                    'thickness': 0.75,
-                                    'value': score
-                                }
-                            }
-                        ))
-                        fig_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
-
-                        # --- RENDERING DASHBOARD 4x2 ---
-                        st.write("**Institutional Health Score Card**")
-                        
-                        # RIGA 1
+                        # --- DASHBOARD VISIVA ---
+                        st.write("**Historical Fundamentals (Passato)**")
+                        # Riga 1 Storica
                         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
                         with r1c1:
                             msg, col = get_status(rev_growth, 10, 0)
-                            st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Misura l'espansione del fatturato. Fondamentale per capire se l'azienda guadagna quote di mercato.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
                             render_sparkline(rev, "#00FFCC")
-                        
                         with r1c2:
                             msg, col = get_status(ni_growth, 10, 0)
-                            st.metric("Net Income Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Misura la crescita dell'utile netto. Deve idealmente crescere più dei ricavi (Operating Leverage).\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            st.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
                             render_sparkline(net_inc, "#00CCFF")
-                            
                         with r1c3:
                             msg, col = get_status(fcf_margin, 15, 5)
-                            st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Quanta cassa libera resta da ogni dollaro di fatturato. Indica la profittabilità reale (Cash Cow).\n\nSOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
-                            render_sparkline(fcf_series / rev, "#FFCC00")
-
+                            st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
+                            render_sparkline(fcf_series / rev.replace(0,1), "#FFCC00")
                         with r1c4:
                             msg, col = get_status(capex_ocf, 40, 70, True)
-                            st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Indica quanto flusso operativo viene assorbito dagli investimenti fissi. Più è basso, più l'azienda è leggera (Asset Light).\n\nSOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
-                            render_sparkline(abs(capex)/ocf, "#FF6600")
+                            st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col, help="SOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
+                            render_sparkline(abs(capex)/ocf.replace(0,1), "#FF6600")
 
-                        # RIGA 2
+                        # Riga 2 Storica
                         r2c1, r2c2, r2c3, r2c4 = st.columns(4)
                         with r2c1:
                             msg, col = get_status(op_leverage, 1.5, 1.0)
-                            st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Capacità di generare più utile operativo a parità di crescita ricavi. Indica efficienza dei costi fissi.\n\nSOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
-                            render_sparkline(ebit/rev, "#AAFF00")
-
+                            st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col, help="SOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
+                            render_sparkline(ebit/rev.replace(0,1), "#AAFF00")
                         with r2c2:
                             msg, col = get_status(int_coverage, 5.0, 2.0)
-                            st.metric("Interest Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Capacità di rimborsare gli interessi sul debito tramite l'utile operativo. Protezione contro il default.\n\nSOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
+                            st.metric("Int Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col, help="SOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
                             render_sparkline(ebit/int_expense.replace(0, 1), "#FF00FF")
-
                         with r2c3:
                             msg, col = get_status(earn_quality, 1.0, 0.7)
-                            st.metric("Earnings Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: Rapporto tra Flusso di Cassa e Utile Netto. Se < 1, gli utili potrebbero essere solo 'contabili'.\n\nSOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
-                            render_sparkline(ocf/net_inc, "#BBBBBB")
-
+                            st.metric("Earn Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col, help="SOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
+                            render_sparkline(ocf/net_inc.replace(0,1), "#BBBBBB")
                         with r2c4:
                             msg, col = get_status(fcf_growth, 10, 0)
-                            st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col,
-                                      help="SIGNIFICATO: La crescita del denaro contante disponibile. È il vero motore dietro dividendi e riacquisto azioni.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col, help="SOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
                             render_sparkline(fcf_series, "#00FF00")
+
+                        st.markdown("---")
+                        st.write("**Institutional Consensus & Macro (Futuro e Contesto)**")
+                        
+                        # Riga 3 Nuove Metriche (Consensus, WACC, Benchmarking)
+                        r3c1, r3c2, r3c3 = st.columns(3)
+                        with r3c1:
+                            msg, col = get_status(upside_pct, 15, 0)
+                            st.metric("Analyst Consensus Upside", f"{upside_pct:+.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Differenza percentuale tra il prezzo attuale e il Target Price Medio degli analisti per i prossimi 12 mesi.\n\nSOGLIE: >15% 🟢 (Ottimistico) | >0% 🟡 (Neutro) | <0% 🔴 (Pessimistico)")
+                            render_sparkline(cons_spark_data, "#00BFFF")
+                            
+                        with r3c2:
+                            msg, col = get_status(wacc_spread, 5, 0)
+                            st.metric("ROIC vs Dynamic WACC Spread", f"{wacc_spread:+.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Calcola in tempo reale il Costo del Capitale (WACC) basato sul Beta attuale. Se lo spread col ROIC è positivo, l'azienda crea valore netto reale.\n\nSOGLIE: >5% 🟢 (Value Creator) | >0% 🟡 (Stabile) | <0% 🔴 (Value Destroyer)")
+                            render_sparkline(wacc_spark_data, "#FF1493")
+                            
+                        with r3c3:
+                            msg, col = get_status(rel_outperf, 5, -5)
+                            st.metric("Relative Strength (vs S&P500)", f"{rel_outperf:+.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Confronta la performance aziendale a 1 anno rispetto a quella dell'indice di mercato (S&P 500). Misura l'Alpha istituzionale.\n\nSOGLIE: >+5% 🟢 (Outperformer) | >-5% 🟡 (Market Perform) | <-5% 🔴 (Underperformer)")
+                            render_sparkline(rel_spark_data, "#FFD700")
 
                         # Tabella Storica Puntuale
                         st.write(f"**Storico Analitico ({'Trimestrale' if period_choice else 'Annuale'}):**")
