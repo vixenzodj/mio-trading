@@ -7474,108 +7474,134 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 bs_data = data.get(f"{prefix}bs")
                 cf_data = data.get(f"{prefix}cf")
 
-                if fin_data is not None and not fin_data.empty and cf_data is not None and not cf_data.empty and bs_data is not None and not bs_data.empty:
+                if all(d is not None and not d.empty for d in [fin_data, bs_data, cf_data]):
                     try:
-                        # Funzione helper per trovare le chiavi corrette (yfinance cambia spesso i nomi)
+                        # Helper per l'estrazione righe (stabile contro cambi nomi yf)
                         def get_row(df, keywords):
                             for k in df.index:
                                 if any(word.lower() in str(k).lower() for word in keywords):
                                     return df.loc[k]
                             return pd.Series([0]*len(df.columns), index=df.columns)
 
-                        # Estrazione serie storiche
+                        # Estrazione Serie Storiche per Grafici
                         rev = get_row(fin_data, ['Total Revenue', 'Operating Revenue', 'Revenue'])
                         net_inc = get_row(fin_data, ['Net Income'])
-                        ocf = get_row(cf_data, ['Operating Cash Flow', 'Cash From Operating Activities'])
-                        capex = get_row(cf_data, ['Capital Expenditure', 'Investments In Property'])
-                        total_debt = get_row(bs_data, ['Total Debt'])
-                        total_equity = get_row(bs_data, ['Total Equity', 'Stockholders Equity'])
-
-                        # --- CALCOLI INTEGRATI (8 METRICHE) ---
-                        # 1. Growth Metrics (Rev & NI)
-                        if len(rev) > 1 and rev.iloc[0] > 0 and rev.iloc[1] > 0:
-                            rev_growth = ((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1]) * 100
-                            ni_growth = ((net_inc.iloc[0] - net_inc.iloc[1]) / abs(net_inc.iloc[1])) * 100 if net_inc.iloc[1] != 0 else 0
-                        else:
-                            rev_growth, ni_growth = 0, 0
-
-                        # 2. Capital & Cash Metrics
-                        fcf_val = ocf.iloc[0] - abs(capex.iloc[0])
-                        fcf_margin = (fcf_val / rev.iloc[0]) * 100 if rev.iloc[0] > 0 else 0
-                        capex_ocf_ratio = (abs(capex.iloc[0]) / ocf.iloc[0]) * 100 if ocf.iloc[0] > 0 else 0
-
-                        # 3. Efficiency Metrics
                         ebit = get_row(fin_data, ['EBIT', 'Operating Income'])
-                        if len(ebit) > 1 and len(rev) > 1:
-                            pct_change_ebit = (ebit.iloc[0] - ebit.iloc[1]) / abs(ebit.iloc[1]) if ebit.iloc[1] != 0 else 0
-                            pct_change_rev = (rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] if rev.iloc[1] != 0 else 0
-                            op_leverage = pct_change_ebit / pct_change_rev if pct_change_rev != 0 else 0
-                        else:
-                            op_leverage = 0
-                        
+                        ocf = get_row(cf_data, ['Operating Cash Flow'])
+                        capex = get_row(cf_data, ['Capital Expenditure'])
                         int_expense = abs(get_row(fin_data, ['Interest Expense']))
-                        int_coverage = ebit.iloc[0] / int_expense.iloc[0] if int_expense.iloc[0] > 0 else 999
-                        earnings_quality = ocf.iloc[0] / net_inc.iloc[0] if net_inc.iloc[0] != 0 else 0
-                        
-                        # Calcolo FCF Growth (8a metrica per simmetria)
                         fcf_series = ocf - abs(capex)
-                        fcf_growth = ((fcf_series.iloc[0] - fcf_series.iloc[1]) / abs(fcf_series.iloc[1])) * 100 if len(fcf_series) > 1 and fcf_series.iloc[1] != 0 else 0
+                        
+                        # Calcolo Metriche Istantanee (Ultimo Periodo)
+                        rev_growth = ((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] * 100) if len(rev)>1 and rev.iloc[1]!=0 else 0
+                        ni_growth = ((net_inc.iloc[0] - net_inc.iloc[1]) / abs(net_inc.iloc[1]) * 100) if len(net_inc)>1 and net_inc.iloc[1]!=0 else 0
+                        fcf_margin = (fcf_series.iloc[0] / rev.iloc[0] * 100) if rev.iloc[0]!=0 else 0
+                        capex_ocf = (abs(capex.iloc[0]) / ocf.iloc[0] * 100) if ocf.iloc[0]!=0 else 0
+                        
+                        # Metriche Efficienza
+                        pct_rev = rev.pct_change(periods=-1)
+                        pct_ebit = ebit.pct_change(periods=-1)
+                        op_leverage = (pct_ebit.iloc[0] / pct_rev.iloc[0]) if len(pct_rev)>0 and pct_rev.iloc[0]!=0 else 0
+                        int_coverage = (ebit.iloc[0] / int_expense.iloc[0]) if int_expense.iloc[0]>0 else 999
+                        earn_quality = (ocf.iloc[0] / net_inc.iloc[0]) if net_inc.iloc[0]!=0 else 0
+                        fcf_growth = ((fcf_series.iloc[0] - fcf_series.iloc[1]) / abs(fcf_series.iloc[1]) * 100) if len(fcf_series)>1 and fcf_series.iloc[1]!=0 else 0
 
-                        # --- SISTEMA SEMAFORICO (Helper) ---
-                        def get_status(val, t_green, t_yellow, reverse=False):
-                            if not reverse:
-                                if val >= t_green: return "Eccellente 🟢", "normal"
-                                if val >= t_yellow: return "Stabile 🟡", "off"
+                        # Funzione interna per Sparklines Plotly
+                        def render_sparkline(data_series, color):
+                            # Invertiamo per avere ordine cronologico sinistra -> destra
+                            plot_data = data_series.fillna(0).iloc[::-1]
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                y=plot_data.values, mode='lines+markers',
+                                line=dict(color=color, width=3),
+                                marker=dict(size=6), hoverinfo='skip'
+                            ))
+                            fig.update_layout(
+                                height=60, margin=dict(l=0, r=0, t=5, b=5),
+                                xaxis=dict(visible=False), yaxis=dict(visible=False),
+                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False
+                            )
+                            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+                        # Helper Semaforico
+                        def get_status(val, g, y, rev_pol=False):
+                            if not rev_pol:
+                                if val >= g: return "Eccellente 🟢", "normal"
+                                if val >= y: return "Stabile 🟡", "off"
                                 return "Debole 🔴", "inverse"
-                            else: # Per rapporti dove meno è meglio (es. CapEx ratio)
-                                if val <= t_green: return "Ottimale 🟢", "normal"
-                                if val <= t_yellow: return "Monitorare 🟡", "off"
+                            else:
+                                if val <= g: return "Ottimale 🟢", "normal"
+                                if val <= y: return "Attenzione 🟡", "off"
                                 return "Critico 🔴", "inverse"
 
-                        # --- DASHBOARD VISIVA (2 RIGHE DA 4 COLONNE) ---
-                        st.write("**Dashboard Salute Finanziaria (Institutional Health Score):**")
+                        # --- RENDERING DASHBOARD 4x2 ---
+                        st.write("**Institutional Health Score Card**")
                         
-                        # Riga 1: Growth & Cash
-                        r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
-                        s_rev, d_rev = get_status(rev_growth, 10, 0)
-                        r1_c1.metric("Rev Growth (YoY)", f"{rev_growth:.1f}%", delta=s_rev, delta_color=d_rev)
+                        # RIGA 1
+                        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+                        with r1c1:
+                            msg, col = get_status(rev_growth, 10, 0)
+                            st.metric("Revenue Growth", f"{rev_growth:.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Misura l'espansione del fatturato. Fondamentale per capire se l'azienda guadagna quote di mercato.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            render_sparkline(rev, "#00FFCC")
                         
-                        s_ni, d_ni = get_status(ni_growth, 10, 0)
-                        r1_c2.metric("Net Inc Growth", f"{ni_growth:.1f}%", delta=s_ni, delta_color=d_ni)
-                        
-                        s_fcf_m, d_fcf_m = get_status(fcf_margin, 15, 5)
-                        r1_c3.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=s_fcf_m, delta_color=d_fcf_m)
-                        
-                        s_capx, d_capx = get_status(capex_ocf_ratio, 40, 70, reverse=True)
-                        r1_c4.metric("CapEx / OCF", f"{capex_ocf_ratio:.1f}%", delta=s_capx, delta_color=d_capx)
+                        with r1c2:
+                            msg, col = get_status(ni_growth, 10, 0)
+                            st.metric("Net Income Growth", f"{ni_growth:.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Misura la crescita dell'utile netto. Deve idealmente crescere più dei ricavi (Operating Leverage).\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            render_sparkline(net_inc, "#00CCFF")
+                            
+                        with r1c3:
+                            msg, col = get_status(fcf_margin, 15, 5)
+                            st.metric("FCF Margin", f"{fcf_margin:.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Quanta cassa libera resta da ogni dollaro di fatturato. Indica la profittabilità reale (Cash Cow).\n\nSOGLIE: >15% 🟢 | >5% 🟡 | <5% 🔴")
+                            render_sparkline(fcf_series / rev, "#FFCC00")
 
-                        # Riga 2: Efficiency & Coverage
-                        r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
-                        s_lev, d_lev = get_status(op_leverage, 1.5, 1.0)
-                        r2_c1.metric("Op Leverage", f"{op_leverage:.2f}x", delta=s_lev, delta_color=d_lev)
-                        
-                        s_cov, d_cov = get_status(int_coverage, 5.0, 2.0)
-                        r2_c2.metric("Int Coverage", f"{int_coverage:.1f}x", delta=s_cov, delta_color=d_cov)
-                        
-                        s_eq, d_eq = get_status(earnings_quality, 1.0, 0.7)
-                        r2_c3.metric("Earnings Quality", f"{earnings_quality:.2f}", delta=s_eq, delta_color=d_eq)
-                        
-                        s_fcfg, d_fcfg = get_status(fcf_growth, 10, 0)
-                        r2_c4.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=s_fcfg, delta_color=d_fcfg)
+                        with r1c4:
+                            msg, col = get_status(capex_ocf, 40, 70, True)
+                            st.metric("CapEx / OCF", f"{capex_ocf:.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Indica quanto flusso operativo viene assorbito dagli investimenti fissi. Più è basso, più l'azienda è leggera (Asset Light).\n\nSOGLIE: <40% 🟢 | <70% 🟡 | >70% 🔴")
+                            render_sparkline(abs(capex)/ocf, "#FF6600")
 
-                        # Tabella Trend Storica (Rimanente invariata ma aggiornata)
+                        # RIGA 2
+                        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+                        with r2c1:
+                            msg, col = get_status(op_leverage, 1.5, 1.0)
+                            st.metric("Op. Leverage", f"{op_leverage:.2f}x", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Capacità di generare più utile operativo a parità di crescita ricavi. Indica efficienza dei costi fissi.\n\nSOGLIE: >1.5x 🟢 | >1.0x 🟡 | <1.0x 🔴")
+                            render_sparkline(ebit/rev, "#AAFF00")
+
+                        with r2c2:
+                            msg, col = get_status(int_coverage, 5.0, 2.0)
+                            st.metric("Interest Coverage", f"{int_coverage:.1f}x", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Capacità di rimborsare gli interessi sul debito tramite l'utile operativo. Protezione contro il default.\n\nSOGLIE: >5x 🟢 | >2x 🟡 | <2x 🔴")
+                            render_sparkline(ebit/int_expense.replace(0, 1), "#FF00FF")
+
+                        with r2c3:
+                            msg, col = get_status(earn_quality, 1.0, 0.7)
+                            st.metric("Earnings Quality", f"{earn_quality:.2f}", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: Rapporto tra Flusso di Cassa e Utile Netto. Se < 1, gli utili potrebbero essere solo 'contabili'.\n\nSOGLIE: >1.0 🟢 | >0.7 🟡 | <0.7 🔴")
+                            render_sparkline(ocf/net_inc, "#BBBBBB")
+
+                        with r2c4:
+                            msg, col = get_status(fcf_growth, 10, 0)
+                            st.metric("FCF Growth", f"{fcf_growth:.1f}%", delta=msg, delta_color=col,
+                                      help="SIGNIFICATO: La crescita del denaro contante disponibile. È il vero motore dietro dividendi e riacquisto azioni.\n\nSOGLIE: >10% 🟢 | >0% 🟡 | <0% 🔴")
+                            render_sparkline(fcf_series, "#00FF00")
+
+                        # Tabella Storica Puntuale
                         st.write(f"**Storico Analitico ({'Trimestrale' if period_choice else 'Annuale'}):**")
                         trend_df = pd.DataFrame({
                             'Ricavi': rev.apply(format_finance),
-                            'EBIT (Op. Income)': ebit.apply(format_finance),
+                            'EBIT': ebit.apply(format_finance),
                             'Utile Netto': net_inc.apply(format_finance),
-                            'Interest Coverage': (ebit / int_expense.replace(0, 1)).map('{:.2f}x'.format),
-                            'Free Cash Flow': fcf_series.apply(format_finance)
+                            'Free Cash Flow': fcf_series.apply(format_finance),
+                            'CapEx': capex.apply(format_finance)
                         }).head(4)
                         st.dataframe(trend_df, use_container_width=True)
 
                     except Exception as e:
-                        st.info("⚠️ Non tutti i dati necessari per l'Analisi di Trend Istituzionale sono disponibili per questo Ticker.")
+                        st.error(f"Errore nell'analisi istituzionale: {e}")
                 # --- END INSTITUTIONAL TREND ANALYSIS ---
                     
             with t2:
