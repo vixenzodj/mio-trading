@@ -23,6 +23,29 @@ import os, zipfile, shutil, glob
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
+# --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
+def get_precise_dte(exp_str):
+    try:
+        now_dt = datetime.now()
+        expiry_date = datetime.strptime(exp_str, '%Y-%m-%d').replace(hour=16, minute=0)
+        diff = (expiry_date - now_dt).total_seconds() / (365.25 * 24 * 3600)
+        return max(diff, 0.00001) # Minimo 5 minuti per evitare divisioni per zero
+    except:
+        return 0.00001
+
+@st.cache_data(ttl=3600)
+def get_dynamic_risk_free_rate():
+    try:
+        irx_info = yf.Ticker("^IRX").fast_info
+        if irx_info and hasattr(irx_info, 'last_price'):
+            return irx_info.last_price / 100.0
+    except:
+        pass
+    return 0.053
+
+DYNAMIC_R = get_dynamic_risk_free_rate()
+# -----------------------------------------------
+
 # Mappatura Ticker -> Nome per una leggibilità professionale
 TICKER_NAMES = {
     # Metalli & Energia
@@ -995,7 +1018,7 @@ def display_macro_war_room():
             for s in sells: st.write(f"- {s}")
 
 # --- CORE QUANT ENGINE ---
-def calculate_gex_at_price(price, df, r=0.045, q=0.0):
+def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
@@ -1005,7 +1028,7 @@ def calculate_gex_at_price(price, df, r=0.045, q=0.0):
     side = np.where(df['type'] == 'call', 1, -1)
     return np.sum(gamma * exposure_size * 100 * price * side)
 
-def calculate_0g_dynamic(price, df, r=0.045, q=0.0):
+def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
@@ -1031,7 +1054,7 @@ def find_iv(target_price, S, K, T, r, q, option_type):
         return np.nan
 
 @st.cache_data(ttl=60)
-def get_greeks_pro(df, S, r=0.045, q=0.0):
+def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     if df.empty: return df
     
     # Pre-processing anti-crash
@@ -1048,6 +1071,11 @@ def get_greeks_pro(df, S, r=0.045, q=0.0):
     # 3. Pulizia e Filtro
     df = df.dropna(subset=['impliedVolatility'])
     df = df[df['impliedVolatility'] > 0.001].copy()
+
+    # --- Calcolo Skew Slope (Pendenza IV rispetto allo Strike) ---
+    df = df.sort_values('strike')
+    df['skew_slope'] = df['impliedVolatility'].diff() / df['strike'].diff()
+    df['skew_slope'] = df['skew_slope'].fillna(method='bfill').fillna(0)
     
     # Parametri Base
     K = df['strike'].values
@@ -1062,19 +1090,30 @@ def get_greeks_pro(df, S, r=0.045, q=0.0):
     pdf = norm.pdf(d1)
     side = np.where(df['type'] == 'call', 1, -1)
     
-    # --- CORE MATH: STANDARD GREEKS (CASH WEIGHTED) ---
-    # Gamma: 2nd Order Spot
-    df['Gamma'] = (pdf * np.exp(-q * T) / (S * iv * np.sqrt(T))) * (S**2) * 0.01 * oi_vol_weighted * 100 * side
+    # --- CORE MATH: INSTITUTIONAL SKEW-ADJUSTED GREEKS ---
+    gamma_bs = (pdf * np.exp(-q * T)) / (S * iv * np.sqrt(T))
+    vega_bs = S * np.exp(-q * T) * pdf * np.sqrt(T)
+    delta_bs = side * np.exp(-q * T) * norm.cdf(d1 * side)
     
-    # Vega: 1st Order Vol
-    df['Vega'] = S * np.exp(-q * T) * pdf * np.sqrt(T) * 0.01 * oi_vol_weighted * 100
+    # Vanna Istituzionale & Vomma
+    df['Vanna'] = (vega_bs / S) * (1 - d1 / (iv * np.sqrt(T)))
+    df['Vomma'] = vega_bs * (d1 * d2 / iv)
     
-    # Vanna (Institutional): dDelta/dVol - Utilizza d2 per precisione di skew
-    df['Vanna'] = -S * np.exp(-q * T) * pdf * (d2 / iv) * 0.01 * oi_vol_weighted * 100 * side
+    # Gamma Adjusted (Shadow Gamma) & Delta Adjusted
+    df['Gamma'] = gamma_bs + (2 * df['Vanna'] * df['skew_slope']) + (df['Vomma'] * (df['skew_slope']**2))
+    df['Delta'] = delta_bs + vega_bs * df['skew_slope']
     
-    # Charm (Institutional): dDelta/dTime - Dollar Decay per trading day (1/252)
-    charm_raw = (q * np.exp(-q * T) * norm.cdf(d1 * side) - np.exp(-q * T) * pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)))
-    df['Charm'] = S * charm_raw * (1/252.0) * oi_vol_weighted * 100 * side
+    # Charm (Institutional): dDelta/dTime espresso come decay 
+    df['Charm'] = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
+    
+    # Speed: dGamma/dSpot (Normalizzato)
+    df['Speed'] = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
+    
+    # Normalizzazione Cash-Weighted / esposizione
+    df['Gamma'] = df['Gamma'] * (S**2) * 0.01 * oi_vol_weighted * 100 * side
+    df['Vega'] = vega_bs * 0.01 * oi_vol_weighted * 100
+    df['Vanna'] = df['Vanna'] * 0.01 * oi_vol_weighted * 100 * side
+    df['Charm'] = S * df['Charm'] * (1/252.0) * oi_vol_weighted * 100 * side
     
     # Theta: 1st Order Time (1/252)
     term1 = -(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))
@@ -1082,15 +1121,9 @@ def get_greeks_pro(df, S, r=0.045, q=0.0):
     term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
     df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol_weighted * 100
     
-    # --- CORE MATH: 3rd ORDER GREEKS (SQUEEZE RADAR - RAW SCALING) ---
-    gamma_raw = (pdf * np.exp(-q * T)) / (S * iv * np.sqrt(T))
-    vega_raw = S * np.exp(-q * T) * pdf * np.sqrt(T)
-    
-    # Vomma: dVega/dVol
-    df['Vomma'] = (vega_raw * (d1 * d2 / iv)) * volume_arr * 100 * S
-    
-    # Speed: dGamma/dSpot
-    df['Speed'] = (-gamma_raw / S * (d1 / (iv * np.sqrt(T)) + 1)) * volume_arr * 100 * (S**2)
+    # Vomma e Speed normalizzati per esposizione ai volume array 
+    df['Vomma'] = df['Vomma'] * volume_arr * 100 * S
+    df['Speed'] = df['Speed'] * volume_arr * 100 * (S**2)
     
     return df
 
@@ -1121,7 +1154,7 @@ def fetch_scanner_ticker(t_name, expiry_mode_str, today_str):
         
         # Conversione stringa a datetime
         today_obj = datetime.strptime(today_str, '%Y-%m-%d')
-        dte_years = max((datetime.strptime(target_opt, '%Y-%m-%d') - today_obj).days + 1, 0.5) / 252.0
+        dte_years = get_precise_dte(target_opt)
         df_scan['dte_years'] = dte_years
         df_scan = df_scan[(df_scan['strike'] > px*0.7) & (df_scan['strike'] < px*1.3)]
         
@@ -2423,7 +2456,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         
         if not raw_data.empty:
             raw_data = raw_data[(raw_data['volume'] > 0) | (raw_data['openInterest'] > 0)].copy()
-            raw_data['dte_years'] = raw_data['exp'].apply(lambda x: max((datetime.strptime(x, '%Y-%m-%d') - today).days, 0.5)) / 252.0
+            raw_data['dte_years'] = raw_data['exp'].apply(get_precise_dte)
             
             # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
             try:
@@ -2440,12 +2473,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         mid = (b + a) / 2
                         K_val, T_val, opt_type = row['strike'], max(row['dte_years'], 0.0001), row['type']
                         def bs_price(x_iv):
-                            d1_tmp = (np.log(spot/K_val) + (0.045 - div_yield + 0.5 * x_iv**2) * T_val) / (x_iv * np.sqrt(T_val))
+                            d1_tmp = (np.log(spot/K_val) + (DYNAMIC_R - div_yield + 0.5 * x_iv**2) * T_val) / (x_iv * np.sqrt(T_val))
                             d2_tmp = d1_tmp - x_iv * np.sqrt(T_val)
                             if opt_type == 'call': 
-                                return spot * np.exp(-div_yield*T_val) * norm.cdf(d1_tmp) - K_val * np.exp(-0.045*T_val) * norm.cdf(d2_tmp)
+                                return spot * np.exp(-div_yield*T_val) * norm.cdf(d1_tmp) - K_val * np.exp(-DYNAMIC_R*T_val) * norm.cdf(d2_tmp)
                             else: 
-                                return K_val * np.exp(-0.045*T_val) * norm.cdf(-d2_tmp) - spot * np.exp(-div_yield*T_val) * norm.cdf(-d1_tmp)
+                                return K_val * np.exp(-DYNAMIC_R*T_val) * norm.cdf(-d2_tmp) - spot * np.exp(-div_yield*T_val) * norm.cdf(-d1_tmp)
                         return brentq(lambda x: bs_price(x) - mid, 0.001, 5.0)
                 except: pass
                 return row['impliedVolatility']
@@ -2495,14 +2528,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             # ---------------------------------------------
 
             # CALCOLO 0-GAMMA ORIGINALE
-            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data, 0.045, div_yield))
+            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data, DYNAMIC_R, div_yield))
             except: z_gamma = spot 
 
             # CALCOLO 0-GAMMA DINAMICO (SOLO VOLUMI)
-            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.85, spot * 1.15, args=(raw_data, 0.045, div_yield))
+            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.85, spot * 1.15, args=(raw_data, DYNAMIC_R, div_yield))
             except: z_gamma_dyn = spot
 
-            df = get_greeks_pro(raw_data, spot, r=0.045, q=div_yield)
+            df = get_greeks_pro(raw_data, spot, r=DYNAMIC_R, q=div_yield)
             
             # --- LOGICA DI AGGREGAZIONE MATEMATICA (Binning Dinamico) ---
             # Usiamo floor division per forzare ogni contratto nel proprio bin matematico
@@ -7515,7 +7548,7 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                         # B. Dynamic WACC vs ROIC Spread
                         # Calcolo proxy WACC dinamico
                         beta = info_data.get('beta', 1.0)
-                        rf_rate = 0.045 # Base assumption 4.5% 10Y yield
+                        rf_rate = DYNAMIC_R # Base assumption 4.5% 10Y yield -> Using dynamic IRX
                         cost_of_equity = rf_rate + beta * (0.10 - rf_rate)
                         tot_debt = get_row(bs_data, ['Total Debt']).iloc[0]
                         tot_eq = get_row(bs_data, ['Total Equity', 'Stockholders Equity']).iloc[0]
