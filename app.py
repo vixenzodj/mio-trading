@@ -2444,17 +2444,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     selected_dte_labels = st.sidebar.multiselect("SCADENZE", date_labels, default=date_labels[:1])
     metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
     gran = st.sidebar.select_slider("GRANULARITÀ", options=[0.5, 1, 2.5, 5, 10, 25, 50, 100], value=default_gran)
-    spot_price = float(spot)
-    is_high_nominal = spot_price > 2000
-
-    if is_high_nominal:
-        default_zoom = 5.0
-        max_strikes = 150
-    else:
-        default_zoom = 15.0
-        max_strikes = 100
-
-    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 30.0, default_zoom)
+    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 50.0, 20.0)
 
     if selected_dte_labels:
         target_dates = [label.split('| ')[1] for label in selected_dte_labels]
@@ -2462,12 +2452,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         
         if not raw_data.empty:
             raw_data = raw_data[(raw_data['volume'] > 0) | (raw_data['openInterest'] > 0)].copy()
-            
-            # --- LOGICA DI FILTRAGGIO INTELLIGENTE ---
-            raw_data['dist_pct'] = abs(raw_data['strike'] - spot_price) / spot_price
-            raw_data = raw_data.sort_values('dist_pct').head(max_strikes)
-            raw_data = raw_data.sort_values('strike').drop('dist_pct', axis=1)
-            
             raw_data['dte_years'] = raw_data['exp'].apply(get_precise_dte)
             
             # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
@@ -2816,6 +2800,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 )
                 xaxis_title = "Vanna vs Gamma Overlay (Dual Axis)"
 
+            for strike in visible_agg['strike']:
+                fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
+
             fig.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
             fig.add_hline(y=z_gamma, line_color="#FFD700", line_width=2, line_dash="dash", annotation_text="0-G STATIC")
             fig.add_hline(y=z_gamma_dyn, line_color="#00BFFF", line_width=2, line_dash="dot", annotation_text="0-G DYNAMIC (VOL)")
@@ -3148,8 +3135,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     fig_price.layout.shapes = tuple()
                     
                     if gamma_mode and 'df' in locals() and not df.empty:
-                        # Rimosso il loop delle shapes per evitare rallentamenti.
-                        pass
+                        xray_agg = df.groupby('strike')['Gamma'].sum().reset_index()
+                        max_gex = xray_agg['Gamma'].abs().max()
+                        if max_gex > 0:
+                            for _, row in xray_agg.iterrows():
+                                s_val, g_val = row['strike'], row['Gamma']
+                                if s_val < df_price['Low'].min() * 0.8 or s_val > df_price['High'].max() * 1.2: continue
+                                intensita = min(1.0, abs(g_val) / max_gex)
+                                if intensita > 0.01:
+                                    colorscale = px.colors.sequential.Viridis
+                                    base_color = colorscale[int(intensita * (len(colorscale) - 1))]
+                                    rgba_color = base_color.replace('rgb', 'rgba').replace(')', f', {0.1 + intensita*0.5})')
+                                    # Usa il metodo nativo sicuro per non interferire con le traces
+                                    fig_price.add_shape(type="rect", xref="paper", yref="y", x0=0, x1=1, y0=s_val * 0.9998, y1=s_val * 1.0002, fillcolor=rgba_color, line_width=0, layer="below")
 
                     st.plotly_chart(
                         fig_price, 
