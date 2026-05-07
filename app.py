@@ -1059,6 +1059,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     
     # Pre-processing anti-crash
     df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
+    df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
     
     # 1. Calcolo Mid Price e IV Locale
     df['mid_price'] = (df['bid'] + df['ask']) / 2
@@ -1072,10 +1073,11 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df = df.dropna(subset=['impliedVolatility'])
     df = df[df['impliedVolatility'] > 0.001].copy()
 
-    # --- Calcolo Skew Slope (Pendenza IV rispetto allo Strike) ---
+    # --- Calcolo Skew Slope (Fixing the TypeError & Zero Division) ---
     df = df.sort_values('strike')
-    df['skew_slope'] = df['impliedVolatility'].diff() / df['strike'].diff()
-    df['skew_slope'] = df['skew_slope'].fillna(method='bfill').fillna(0)
+    strike_diff = df['strike'].diff()
+    df['skew_slope'] = df['impliedVolatility'].diff() / strike_diff.replace(0, np.nan)
+    df['skew_slope'] = df['skew_slope'].bfill().fillna(0)
     
     # Parametri Base
     K = df['strike'].values
