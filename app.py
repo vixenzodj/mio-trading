@@ -1022,7 +1022,8 @@ def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.0001)
-    exposure_size = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
+    # Calibrazione Istituzionale: 80% OI + 20% Volume per matchare get_greeks_pro
+    exposure_size = (df['openInterest'].fillna(0).values * 0.8) + (df['volume'].fillna(0).values * 0.2)
     d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     gamma = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
     side = np.where(df['type'] == 'call', 1, -1)
@@ -1115,8 +1116,9 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
     df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol * 100
     
-    df['Vomma'] = vomma * df['volume'] * 100 * S
-    df['Speed'] = speed_raw * df['volume'] * 100 * (S**2)
+    # Calibrazione Istituzionale: Vomma e Speed scalati sull'Esposizione Totale (oi_vol)
+    df['Vomma'] = vomma * oi_vol * 100 * S
+    df['Speed'] = speed_raw * oi_vol * 100 * (S**2)
     
     # Rendo il GEX trasparente al resto della Dashboard che usa 'Gamma'
     df['Gamma'] = df['GEX_Total']
