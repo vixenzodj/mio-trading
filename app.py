@@ -1055,77 +1055,71 @@ def find_iv(target_price, S, K, T, r, q, option_type):
 
 @st.cache_data(ttl=60)
 def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
+    df = df.copy()
     if df.empty: return df
     
-    # Pre-processing anti-crash
-    df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
+    # 1. Pre-processing Istituzionale
     df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
-    
-    # 1. Calcolo Mid Price e IV Locale
-    df['mid_price'] = (df['bid'] + df['ask']) / 2
-    df['local_iv'] = df.apply(lambda row: find_iv(row['mid_price'], S, row['strike'], 
-                                                 max(row['dte_years'], 0.0001), r, q, row['type']), axis=1)
-    
-    # 2. Fallback su Yahoo IV se il ricalcolo locale fallisce o è NaN
-    df['impliedVolatility'] = df['local_iv'].fillna(df['impliedVolatility'])
-    
-    # 3. Pulizia e Filtro
-    df = df.dropna(subset=['impliedVolatility'])
-    df = df[df['impliedVolatility'] > 0.001].copy()
+    df['openInterest'] = df['openInterest'].fillna(0)
+    df['volume'] = df['volume'].fillna(0)
+    df = df.sort_values('strike').reset_index(drop=True)
 
-    # --- Calcolo Skew Slope (Fixing the TypeError & Zero Division) ---
-    df = df.sort_values('strike')
-    strike_diff = df['strike'].diff()
-    df['skew_slope'] = df['impliedVolatility'].diff() / strike_diff.replace(0, np.nan)
-    df['skew_slope'] = df['skew_slope'].bfill().fillna(0)
+    # 2. Curva di Volatilità Pulita
+    df['iv_working'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
+    df['iv_working'] = df['iv_working'].replace(0, np.nan).interpolate().bfill().ffill()
     
-    # Parametri Base
+    # 3. Calcolo Pendenza (Skew) con Protezione Outlier
+    df['skew_slope'] = df['iv_working'].diff() / df['strike'].diff().replace(0, np.nan)
+    df['skew_slope'] = df['skew_slope'].bfill().ffill().clip(-0.005, 0.005)
+
+    # 4. Motore Greco Vettorializzato
+    T = np.maximum(df['dte_years'].values, 0.00001) if 'dte_years' in df.columns else 0.00001
+    iv = df['iv_working'].values
     K = df['strike'].values
-    iv = df['impliedVolatility'].values
-    T = np.maximum(df['dte_years'].values, 0.0001)
-    oi_vol_weighted = df['openInterest'].fillna(0).values + (df['volume'].fillna(0).values * 0.5)
-    volume_arr = df['volume'].fillna(0).values
-    
-    # Calcolo d1 e d2
-    d1 = (np.log(S/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    d1 = (np.log(S / K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     d2 = d1 - iv * np.sqrt(T)
     pdf = norm.pdf(d1)
-    side = np.where(df['type'] == 'call', 1, -1)
-    
-    # --- CORE MATH: INSTITUTIONAL SKEW-ADJUSTED GREEKS ---
-    gamma_bs = (pdf * np.exp(-q * T)) / (S * iv * np.sqrt(T))
+    cdf = norm.cdf(d1)
+
+    # Formule Standard BS
+    gamma_bs = np.exp(-q * T) * pdf / (S * iv * np.sqrt(T))
     vega_bs = S * np.exp(-q * T) * pdf * np.sqrt(T)
-    delta_bs = side * np.exp(-q * T) * norm.cdf(d1 * side)
+    vanna = (vega_bs / S) * (1 - d1 / (iv * np.sqrt(T)))
+    vomma = vega_bs * (d1 * d2 / iv)
+
+    # 5. Calcolo Shadow Gamma (Corretto per la pendenza IV)
+    # Questa è la formula "maniacale" per l'esposizione reale
+    df['Gamma_Adj'] = gamma_bs + (2 * vanna * df['skew_slope']) + (vomma * (df['skew_slope']**2))
     
-    # Vanna Istituzionale & Vomma
-    df['Vanna'] = (vega_bs / S) * (1 - d1 / (iv * np.sqrt(T)))
-    df['Vomma'] = vega_bs * (d1 * d2 / iv)
+    # 6. Conversione in Esposizione Monetaria (Notional GEX)
+    # Moltiplichiamo per 100 (contratti) e per S^2 * 0.01 (mossa 1%)
+    oi_vol = (df['openInterest'] * 0.8) + (df['volume'] * 0.2)
+    df['type_sign'] = df['type'].map({'call': 1, 'put': -1})
     
-    # Gamma Adjusted (Shadow Gamma) & Delta Adjusted
-    df['Gamma'] = gamma_bs + (2 * df['Vanna'] * df['skew_slope']) + (df['Vomma'] * (df['skew_slope']**2))
-    df['Delta'] = delta_bs + vega_bs * df['skew_slope']
+    df['GEX_Total'] = df['Gamma_Adj'] * (S**2) * 0.01 * oi_vol * 100 * df['type_sign']
     
-    # Charm (Institutional): dDelta/dTime espresso come decay 
-    df['Charm'] = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
+    # Rimuovi eventuali inf/nan rimasti per non rompere i grafici Plotly
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['GEX_Total'])
     
-    # Speed: dGamma/dSpot (Normalizzato)
-    df['Speed'] = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
+    # --- Ricalcolo di supporto per mantenere l'interfaccia e gli aggregatori intatti ---
+    side = np.where(df['type'] == 'call', 1, -1)
+    charm_raw = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
+    speed_raw = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
     
-    # Normalizzazione Cash-Weighted / esposizione
-    df['Gamma'] = df['Gamma'] * (S**2) * 0.01 * oi_vol_weighted * 100 * side
-    df['Vega'] = vega_bs * 0.01 * oi_vol_weighted * 100
-    df['Vanna'] = df['Vanna'] * 0.01 * oi_vol_weighted * 100 * side
-    df['Charm'] = S * df['Charm'] * (1/252.0) * oi_vol_weighted * 100 * side
+    df['Vanna'] = vanna * 0.01 * oi_vol * 100 * df['type_sign']
+    df['Charm'] = S * charm_raw * (1/252.0) * oi_vol * 100 * df['type_sign']
+    df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     
-    # Theta: 1st Order Time (1/252)
     term1 = -(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))
     term2 = side * r * K * np.exp(-r * T) * norm.cdf(d2 * side)
     term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
-    df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol_weighted * 100
+    df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol * 100
     
-    # Vomma e Speed normalizzati per esposizione ai volume array 
-    df['Vomma'] = df['Vomma'] * volume_arr * 100 * S
-    df['Speed'] = df['Speed'] * volume_arr * 100 * (S**2)
+    df['Vomma'] = vomma * df['volume'] * 100 * S
+    df['Speed'] = speed_raw * df['volume'] * 100 * (S**2)
+    
+    # Rendo il GEX trasparente al resto della Dashboard che usa 'Gamma'
+    df['Gamma'] = df['GEX_Total']
     
     return df
 
@@ -2450,7 +2444,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     selected_dte_labels = st.sidebar.multiselect("SCADENZE", date_labels, default=date_labels[:1])
     metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
     gran = st.sidebar.select_slider("GRANULARITÀ", options=[0.5, 1, 2.5, 5, 10, 25, 50, 100], value=default_gran)
-    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 20.0, 5.0)
+    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 50.0, 20.0)
 
     if selected_dte_labels:
         target_dates = [label.split('| ')[1] for label in selected_dte_labels]
