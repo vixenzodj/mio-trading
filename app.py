@@ -2444,7 +2444,16 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     selected_dte_labels = st.sidebar.multiselect("SCADENZE", date_labels, default=date_labels[:1])
     metric = st.sidebar.radio("METRICA", ["Gamma", "Vanna", "Charm", "Vega", "Theta"])
     gran = st.sidebar.select_slider("GRANULARITÀ", options=[0.5, 1, 2.5, 5, 10, 25, 50, 100], value=default_gran)
-    zoom_val = st.sidebar.slider("ZOOM %", 1.0, 50.0, 20.0)
+    
+    # Determina lo zoom predefinito in base all'asset
+    ticker_up = current_ticker.upper().strip()
+    is_index_or_etf = ticker_up.startswith('^') or ticker_up in ['SPY', 'QQQ', 'IWM', 'DIA', 'GLD', 'SLV']
+    
+    # Pesatura dello zoom: 3% per indici/etf, 10% per azioni
+    default_zoom_level = 3.0 if is_index_or_etf else 10.0
+    
+    # Configurazione Slider: Min 1.0, Max 20.0, Default dinamico
+    zoom_val = st.sidebar.slider("Zoom Predefinito (%)", 1.0, 20.0, default_zoom_level)
 
     if selected_dte_labels:
         target_dates = [label.split('| ')[1] for label in selected_dte_labels]
