@@ -1123,6 +1123,10 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # Rendo il GEX trasparente al resto della Dashboard che usa 'Gamma'
     df['Gamma'] = df['GEX_Total']
     
+    # Nuova Metrica: DEX (Delta Exposure Monetaria per mossa 1%)
+    df['Delta'] = np.exp(-q * T) * np.where(df['type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
+    df['DEX'] = df['Delta'] * S * 0.01 * oi_vol * 100
+    
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -2557,7 +2561,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 'Theta': 'sum',
                 'Vomma': 'sum',
                 'Speed': 'sum',
-                'volume': 'sum'
+                'volume': 'sum',
+                'DEX': 'sum' # Aggiunto DEX
             }).reset_index()
             
             # Rinomina la colonna pivot
@@ -2764,11 +2769,50 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 """, unsafe_allow_html=True)
             # --- FINE NUOVO HUD ---
 
-            col_view, col_vol = st.columns([2, 1])
+            # --- CALCOLO STORICO E CURTOSI ---
+            try:
+                hist_1m = ticker_obj.history(period='1mo')
+                hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
+                
+                iv_atm = raw_data.iloc[(raw_data['strike'] - spot).abs().argsort()[:1]]['impliedVolatility'].values[0]
+                iv_put_tail = raw_data[raw_data['strike'] <= spot * 0.9]['impliedVolatility'].mean()
+                iv_call_tail = raw_data[raw_data['strike'] >= spot * 1.1]['impliedVolatility'].mean()
+                # Se mancano code, fallback su ATM
+                iv_put_tail = iv_put_tail if pd.notna(iv_put_tail) else iv_atm
+                iv_call_tail = iv_call_tail if pd.notna(iv_call_tail) else iv_atm
+                
+                kurtosis_ratio = (iv_put_tail + iv_call_tail) / (2 * iv_atm)
+                kurt_pct = min(max((kurtosis_ratio - 1.0) * 200, 0), 100) # Normalizza 0-100%
+                
+                kurt_color = "#2ecc71" if kurt_pct < 30 else ("#f1c40f" if kurt_pct < 60 else "#e74c3c")
+            except:
+                hv_20d, kurt_pct, kurt_color = 0.0, 0, "gray"
+
+            # --- UI LAYOUT AGGIORNATO ---
+            col_view, col_vol = st.columns([1.8, 1.2])
             with col_view:
-                view_mode = st.radio("👁️ VISTA GRAFICO:", ["📊 Vista Standard (Metrica Singola)", "🌪️ Vanna View (Overlay Gamma + Vanna)"], horizontal=True)
+                view_mode = st.radio("👁️ VISTA GRAFICO:", [
+                    "📊 Standard", 
+                    "🌪️ Vanna Overlay", 
+                    "⚡ DEX Overlay", 
+                    "📉 Puro DEX"
+                ], horizontal=True)
+                
             with col_vol:
-                st.metric("📈 VOLATILITÀ CHAIN IV (Dinamica)", f"{mean_iv*100:.2f}%", delta=f"{iv_change*100:.2f}%", delta_color="inverse")
+                v1, v2, v3 = st.columns([1.2, 1.2, 1])
+                with v1:
+                    st.metric("📈 DYN IV", f"{mean_iv*100:.1f}%", delta=f"{iv_change*100:.1f}%", delta_color="inverse")
+                with v2:
+                    st.metric("🏛️ HIST VOL", f"{hv_20d:.1f}%", help="Volatilità Storica 20gg")
+                with v3:
+                    st.markdown(f"""
+                        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; margin-top:-5px;">
+                            <span style="font-size:10px; color:#aaa;">TAIL RISK</span>
+                            <div style="width: 45px; height: 45px; border-radius: 50%; border: 4px solid {kurt_color}; display:flex; align-items:center; justify-content:center; background-color:rgba(0,0,0,0.2);">
+                                <span style="font-size:12px; font-weight:bold; color:{kurt_color};">{int(kurt_pct)}%</span>
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
 
             fig = go.Figure()
 
@@ -2809,7 +2853,33 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     xaxis2=dict(title="Vanna Exposure (Scaled)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
                     barmode='overlay'
                 )
-                xaxis_title = "Vanna vs Gamma Overlay (Dual Axis)"
+                xaxis_title = "Vanna vs Gamma Overlay"
+                
+            elif view_mode == "⚡ DEX Overlay":
+                fig.add_trace(go.Bar(
+                    y=visible_agg['strike'], x=visible_agg['Gamma'], orientation='h', 
+                    marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), 
+                    name="Gamma (Background)", xaxis="x1"
+                ))
+                fig.add_trace(go.Bar(
+                    y=visible_agg['strike'], x=visible_agg['DEX'], orientation='h', 
+                    marker=dict(color=['#00FFCC' if x >= 0 else '#FF3366' for x in visible_agg['DEX']], line=dict(color='white', width=1)),
+                    width=gran * 0.4, name="Delta Exposure (DEX)", xaxis="x2"
+                ))
+                fig.update_layout(
+                    xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
+                    xaxis2=dict(title="Delta Exposure (DEX)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
+                    barmode='overlay'
+                )
+                xaxis_title = "Gamma vs DEX Overlay"
+                
+            elif view_mode == "📉 Puro DEX":
+                fig.add_trace(go.Bar(
+                    y=visible_agg['strike'], x=visible_agg['DEX'], orientation='h', 
+                    marker=dict(color=['#00FFCC' if x >= 0 else '#FF3366' for x in visible_agg['DEX']]),
+                    name="DEX Netto"
+                ))
+                xaxis_title = "Pure Delta Exposure (DEX)"
 
             for strike in visible_agg['strike']:
                 fig.add_hline(y=strike, line_width=0.3, line_dash="dot", line_color="rgba(255,255,255,0.2)")
