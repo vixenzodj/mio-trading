@@ -26,12 +26,15 @@ os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
 def get_precise_dte(exp_str):
     try:
-        now_dt = datetime.now()
-        expiry_date = datetime.strptime(exp_str, '%Y-%m-%d').replace(hour=16, minute=0)
-        diff = (expiry_date - now_dt).total_seconds() / (365.25 * 24 * 3600)
-        return max(diff, 0.00001) # Minimo 5 minuti per evitare divisioni per zero
+        # Standardizzazione UTC (NY Close è circa alle 20:00/21:00 UTC)
+        now_utc = datetime.utcnow()
+        # Impostiamo la fine giornata alle 20:15 UTC per allinearci a Wall Street
+        expiry_date = datetime.strptime(exp_str, '%Y-%m-%d').replace(hour=20, minute=15)
+        diff = (expiry_date - now_utc).total_seconds() / (365.25 * 24 * 3600)
+        # Floor a 0.00005 (circa 26 minuti). Salva la precisione 0DTE estrema ma impedisce la Singolarità del Gamma
+        return max(diff, 0.00005) 
     except:
-        return 0.00001
+        return 0.00005
 
 @st.cache_data(ttl=3600)
 def get_dynamic_risk_free_rate():
@@ -1021,7 +1024,7 @@ def display_macro_war_room():
 def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
-    T = np.maximum(df['dte_years'].values, 0.0001)
+    T = np.maximum(df['dte_years'].values, 0.00005) # Allineato al Floor 0DTE
     # Calibrazione Istituzionale: 80% OI + 20% Volume per matchare get_greeks_pro
     exposure_size = (df['openInterest'].fillna(0).values * 0.8) + (df['volume'].fillna(0).values * 0.2)
     d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
@@ -1032,7 +1035,7 @@ def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
 def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['impliedVolatility'].values
-    T = np.maximum(df['dte_years'].values, 0.0001)
+    T = np.maximum(df['dte_years'].values, 0.00005) # Allineato al Floor 0DTE
     exposure_size = df['volume'].fillna(0).values 
     d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     gamma = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
@@ -1063,18 +1066,24 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
     df['openInterest'] = df['openInterest'].fillna(0)
     df['volume'] = df['volume'].fillna(0)
-    df = df.sort_values('strike').reset_index(drop=True)
-
-    # 2. Curva di Volatilità Pulita
-    df['iv_working'] = pd.to_numeric(df['impliedVolatility'], errors='coerce')
-    df['iv_working'] = df['iv_working'].replace(0, np.nan).interpolate().bfill().ffill()
     
-    # 3. Calcolo Pendenza (Skew) con Protezione Outlier
-    df['skew_slope'] = df['iv_working'].diff() / df['strike'].diff().replace(0, np.nan)
-    df['skew_slope'] = df['skew_slope'].bfill().ffill().clip(-0.005, 0.005)
+    # 2. Separazione Vettoriale per Calcolo Skew Puro (Evita derivate nulle su strike identici C/P)
+    df_c = df[df['type'] == 'call'].sort_values('strike').copy()
+    df_p = df[df['type'] == 'put'].sort_values('strike').copy()
+    
+    # 3. Curva di Volatilità e Pendenza Indipendenti
+    for d in [df_c, df_p]:
+        if not d.empty:
+            d['iv_working'] = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, np.nan).interpolate().bfill().ffill()
+            d['iv_working'] = np.maximum(d['iv_working'], 0.01) # Protezione anti-zero
+            d['skew_slope'] = d['iv_working'].diff() / d['strike'].diff().replace(0, np.nan)
+            d['skew_slope'] = d['skew_slope'].bfill().ffill().clip(-0.005, 0.005)
+        
+    # Ricostruzione Ordine
+    df = pd.concat([df_c, df_p]).sort_values('strike').reset_index(drop=True)
 
-    # 4. Motore Greco Vettorializzato
-    T = np.maximum(df['dte_years'].values, 0.00001) if 'dte_years' in df.columns else 0.00001
+    # 4. Motore Greco Vettorializzato (Con Sweet Spot 0DTE)
+    T = np.maximum(df['dte_years'].values, 0.00005) if 'dte_years' in df.columns else 0.00005
     iv = df['iv_working'].values
     K = df['strike'].values
     d1 = (np.log(S / K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
