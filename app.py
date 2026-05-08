@@ -2816,7 +2816,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             fig = go.Figure()
 
-            if view_mode == "📊 Vista Standard (Metrica Singola)":
+            if view_mode == "📊 Standard":
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg[metric], 
@@ -2825,7 +2825,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     name=metric
                 ))
                 xaxis_title = f"Net {metric} Exposure"
-            else:
+                
+            elif view_mode == "🌪️ Vanna Overlay":
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg['Gamma'], 
@@ -2834,7 +2835,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     name="Gamma (Background)",
                     xaxis="x1"
                 ))
-                
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
                     x=visible_agg['Vanna'], 
@@ -2847,7 +2847,6 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     name="Vanna (Focus)",
                     xaxis="x2"
                 ))
-
                 fig.update_layout(
                     xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
                     xaxis2=dict(title="Vanna Exposure (Scaled)", side="top", overlaying="x", showgrid=False, zerolinecolor="white"),
