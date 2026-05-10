@@ -1101,23 +1101,28 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # Questa è la formula "maniacale" per l'esposizione reale
     df['Gamma_Adj'] = gamma_bs + (2 * vanna * df['skew_slope']) + (vomma * (df['skew_slope']**2))
     
-    # 6. Conversione in Esposizione Monetaria (Notional GEX)
-    # Moltiplichiamo per 100 (contratti) e per S^2 * 0.01 (mossa 1%)
+    # 6. Conversione in Esposizione Monetaria (Notional GEX & Cross-Greeks)
+    # Calcolo base dell'esposizione volumetrica
     oi_vol = (df['openInterest'] * 0.8) + (df['volume'] * 0.2)
     df['type_sign'] = df['type'].map({'call': 1, 'put': -1})
     
+    # GEX: Dollari di esposizione per 1% mossa del sottostante
     df['GEX_Total'] = df['Gamma_Adj'] * (S**2) * 0.01 * oi_vol * 100 * df['type_sign']
     
-    # Rimuovi eventuali inf/nan rimasti per non rompere i grafici Plotly
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['GEX_Total'])
     
-    # --- Ricalcolo di supporto per mantenere l'interfaccia e gli aggregatori intatti ---
+    # Cross-Greeks Scaling Istituzionale
     side = np.where(df['type'] == 'call', 1, -1)
     charm_raw = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
     speed_raw = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
     
-    df['Vanna'] = vanna * 0.01 * oi_vol * 100 * df['type_sign']
+    # Vanna: Delta monetario (aggiunto * S) per 1% shift di IV
+    df['Vanna'] = vanna * 0.01 * S * oi_vol * 100 * df['type_sign'] 
+    
+    # Charm: Variazione Delta monetario al giorno
     df['Charm'] = S * charm_raw * (1/252.0) * oi_vol * 100 * df['type_sign']
+    
+    # Vega: Esposizione in dollari per 1% shift di IV
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     
     term1 = -(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))
@@ -1125,14 +1130,14 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
     df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol * 100
     
-    # Calibrazione Istituzionale: Vomma e Speed scalati sull'Esposizione Totale (oi_vol)
-    df['Vomma'] = vomma * oi_vol * 100 * S
-    df['Speed'] = speed_raw * oi_vol * 100 * (S**2)
+    # Vomma: Variazione Vega (già in dollari) per 1% shift di IV. Tolto "* S"
+    df['Vomma'] = vomma * 0.0001 * oi_vol * 100 
     
-    # Rendo il GEX trasparente al resto della Dashboard che usa 'Gamma'
+    # Speed: Variazione Gamma normalizzata
+    df['Speed'] = speed_raw * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
+    
     df['Gamma'] = df['GEX_Total']
     
-    # Nuova Metrica: DEX (Delta Exposure Monetaria per mossa 1%)
     df['Delta'] = np.exp(-q * T) * np.where(df['type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
     df['DEX'] = df['Delta'] * S * 0.01 * oi_vol * 100
     
@@ -2491,7 +2496,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     b, a = row.get('bid', 0), row.get('ask', 0)
                     if b > 0 and a > 0:
                         mid = (b + a) / 2
-                        K_val, T_val, opt_type = row['strike'], max(row['dte_years'], 0.0001), row['type']
+                        K_val, T_val, opt_type = row['strike'], max(row['dte_years'], 0.00005), row['type']
                         def bs_price(x_iv):
                             d1_tmp = (np.log(spot/K_val) + (DYNAMIC_R - div_yield + 0.5 * x_iv**2) * T_val) / (x_iv * np.sqrt(T_val))
                             d2_tmp = d1_tmp - x_iv * np.sqrt(T_val)
