@@ -2567,10 +2567,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             pivot_series = (df['strike'] // gran) * gran
             
             # Aggregazione Totale su Pivot
-            # --- PROTEZIONE AGGREGAZIONE FAIL-SAFE ---
+            # --- PROTEZIONE AGGREGAZIONE FAIL-SAFE (CON VOLUMI) ---
             if not df.empty:
-                # Costruzione dinamica del dizionario di aggregazione per evitare KeyError
-                target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX']
+                # Includiamo anche volume e openInterest per permettere il filtraggio dei grafici
+                target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
                 actual_agg = {col: 'sum' for col in target_cols if col in df.columns}
                 
                 if actual_agg:
@@ -2579,7 +2579,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     agg = pd.DataFrame(columns=[pivot_series] + target_cols)
             else:
                 st.warning("⚠️ Dati insufficienti per questa scadenza (Dati sporchi o assenti su Yahoo Finance).")
-                agg = pd.DataFrame(columns=[pivot_series, 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX'])
+                # Creiamo un DataFrame vuoto con tutte le colonne necessarie per i grafici
+                agg = pd.DataFrame(columns=[pivot_series, 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest'])
             
             # Rinomina la colonna pivot
             if 'strike' not in agg.columns:
