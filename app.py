@@ -2567,20 +2567,28 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             pivot_series = (df['strike'] // gran) * gran
             
             # Aggregazione Totale su Pivot
-            # --- PROTEZIONE AGGREGAZIONE FAIL-SAFE (CON VOLUMI) ---
+            # --- PROTEZIONE AGGREGAZIONE FAIL-SAFE (ULTRA-ROBUSTA) ---
+            target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
+            
             if not df.empty:
-                # Includiamo anche volume e openInterest per permettere il filtraggio dei grafici
-                target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
+                # Includiamo volume e openInterest per i grafici
                 actual_agg = {col: 'sum' for col in target_cols if col in df.columns}
                 
+                # Assicuriamoci che pivot_series sia una stringa pulita
+                group_by_col = pivot_series if isinstance(pivot_series, str) else 'strike'
+                
                 if actual_agg:
-                    agg = df.groupby(pivot_series).agg(actual_agg).reset_index()
+                    agg = df.groupby(group_by_col).agg(actual_agg).reset_index()
                 else:
-                    agg = pd.DataFrame(columns=[pivot_series] + target_cols)
+                    agg = pd.DataFrame(columns=[group_by_col] + target_cols)
             else:
-                st.warning("⚠️ Dati insufficienti per questa scadenza (Dati sporchi o assenti su Yahoo Finance).")
-                # Creiamo un DataFrame vuoto con tutte le colonne necessarie per i grafici
-                agg = pd.DataFrame(columns=[pivot_series, 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest'])
+                st.warning("⚠️ Dati insufficienti per questa scadenza su Yahoo Finance (NDX/Ticker illiquido).")
+                # Creazione 'Hardcoded' per evitare InvalidIndexError su Python 3.13
+                fallback_columns = ['strike', 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
+                agg = pd.DataFrame(columns=fallback_columns)
+                # Se il pivot non era 'strike', rinominiamo la colonna per coerenza
+                if isinstance(pivot_series, str) and pivot_series != 'strike':
+                    agg = agg.rename(columns={'strike': pivot_series})
             
             # Rinomina la colonna pivot
             if 'strike' not in agg.columns:
