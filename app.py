@@ -1109,20 +1109,16 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # GEX: Dollari di esposizione per 1% mossa del sottostante
     df['GEX_Total'] = df['Gamma_Adj'] * (S**2) * 0.01 * oi_vol * 100 * df['type_sign']
     
-    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['GEX_Total'])
-    
+    # --- IL DROPNA È STATO SPOSTATO ALLA FINE PER EVITARE VALUEERROR ---
+
     # Cross-Greeks Scaling Istituzionale
     side = np.where(df['type'] == 'call', 1, -1)
     charm_raw = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
     speed_raw = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
     
-    # Vanna: Delta monetario (aggiunto * S) per 1% shift di IV
+    # Calcolo Greche (Scaling puro, nessuna alterazione formule)
     df['Vanna'] = vanna * 0.01 * S * oi_vol * 100 * df['type_sign'] 
-    
-    # Charm: Variazione Delta monetario al giorno
     df['Charm'] = S * charm_raw * (1/252.0) * oi_vol * 100 * df['type_sign']
-    
-    # Vega: Esposizione in dollari per 1% shift di IV
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     
     term1 = -(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))
@@ -1130,16 +1126,20 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
     df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol * 100
     
-    # Vomma: Variazione Vega (già in dollari) per 1% shift di IV. Tolto "* S"
     df['Vomma'] = vomma * 0.0001 * oi_vol * 100 
-    
-    # Speed: Variazione Gamma normalizzata
     df['Speed'] = speed_raw * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
-    
     df['Gamma'] = df['GEX_Total']
     
     df['Delta'] = np.exp(-q * T) * np.where(df['type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
     df['DEX'] = df['Delta'] * S * 0.01 * oi_vol * 100
+    
+    # Garantisce che tutte le colonne esistano prima del ritorno
+    for col in ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX']:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    # 7. PULIZIA FINALE (Spostata qui per proteggere l'integrità dei vettori)
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['GEX_Total'])
     
     return df
 
@@ -2567,17 +2567,19 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             pivot_series = (df['strike'] // gran) * gran
             
             # Aggregazione Totale su Pivot
-            agg = df.groupby(pivot_series).agg({
-                'Gamma': 'sum', 
-                'Vanna': 'sum', 
-                'Charm': 'sum', 
-                'Vega': 'sum', 
-                'Theta': 'sum',
-                'Vomma': 'sum',
-                'Speed': 'sum',
-                'volume': 'sum',
-                'DEX': 'sum' # Aggiunto DEX
-            }).reset_index()
+            # --- PROTEZIONE AGGREGAZIONE FAIL-SAFE ---
+            if not df.empty:
+                # Costruzione dinamica del dizionario di aggregazione per evitare KeyError
+                target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX']
+                actual_agg = {col: 'sum' for col in target_cols if col in df.columns}
+                
+                if actual_agg:
+                    agg = df.groupby(pivot_series).agg(actual_agg).reset_index()
+                else:
+                    agg = pd.DataFrame(columns=[pivot_series] + target_cols)
+            else:
+                st.warning("⚠️ Dati insufficienti per questa scadenza (Dati sporchi o assenti su Yahoo Finance).")
+                agg = pd.DataFrame(columns=[pivot_series, 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX'])
             
             # Rinomina la colonna pivot
             if 'strike' not in agg.columns:
