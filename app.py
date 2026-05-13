@@ -1115,8 +1115,10 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     side = np.where(df['type'] == 'call', 1, -1)
     charm_raw = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
     speed_raw = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
+    zomma_raw = gamma_bs * ((d1 * d2 - 1) / iv)
+    color_raw = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1 - d1 * d2) / (2 * T))
     
-    # Calcolo Greche (Scaling puro, nessuna alterazione formule)
+    # Calcolo Greche (Scaling puro, nessuna alterazione formule base)
     df['Vanna'] = vanna * 0.01 * S * oi_vol * 100 * df['type_sign'] 
     df['Charm'] = S * charm_raw * (1/252.0) * oi_vol * 100 * df['type_sign']
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
@@ -1128,13 +1130,19 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     
     df['Vomma'] = vomma * 0.0001 * oi_vol * 100 
     df['Speed'] = speed_raw * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
+    
+    # Integrazione Nuove 3rd Order Greeks
+    # Zomma: Variazione monetaria del Gamma per 1% change IV
+    df['Zomma'] = zomma_raw * (S**2) * 0.0001 * oi_vol * 100 * df['type_sign']
+    # Color: Variazione monetaria del Gamma per 1 Giorno di decadimento (1/252)
+    df['Color'] = color_raw * (S**2) * 0.01 * (1/252.0) * oi_vol * 100 * df['type_sign']
     df['Gamma'] = df['GEX_Total']
     
     df['Delta'] = np.exp(-q * T) * np.where(df['type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
     df['DEX'] = df['Delta'] * S * 0.01 * oi_vol * 100
     
     # Garantisce che tutte le colonne esistano prima del ritorno
-    for col in ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX']:
+    for col in ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Zomma', 'Color', 'Vega', 'Theta', 'DEX']:
         if col not in df.columns:
             df[col] = 0.0
 
@@ -2568,7 +2576,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             
             # Aggregazione Totale su Pivot
             # --- PROTEZIONE AGGREGAZIONE FAIL-SAFE (ULTRA-ROBUSTA) ---
-            target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
+            target_cols = ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Zomma', 'Color', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
             
             if not df.empty:
                 # Includiamo volume e openInterest per i grafici
@@ -2584,7 +2592,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             else:
                 st.warning("⚠️ Dati insufficienti per questa scadenza su Yahoo Finance (NDX/Ticker illiquido).")
                 # Creazione 'Hardcoded' per evitare InvalidIndexError su Python 3.13
-                fallback_columns = ['strike', 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
+                fallback_columns = ['strike', 'Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Zomma', 'Color', 'Vega', 'Theta', 'DEX', 'volume', 'openInterest']
                 agg = pd.DataFrame(columns=fallback_columns)
                 # Se il pivot non era 'strike', rinominiamo la colonna per coerenza
                 if isinstance(pivot_series, str) and pivot_series != 'strike':
@@ -3316,6 +3324,40 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         yaxis=dict(range=[lo, hi], dtick=gran)
                     )
                     st.plotly_chart(fig_speed, use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### 🌡️ Termodinamica del Muro: Zomma & Color")
+                col_z, col_c = st.columns(2)
+                
+                with col_z:
+                    fig_zomma = go.Figure()
+                    fig_zomma.add_trace(go.Bar(
+                        x=plot_df['Zomma'], y=plot_df['strike'], orientation='h',
+                        marker_color='#00FFFF', name='Zomma'
+                    ))
+                    fig_zomma.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
+                    fig_zomma.add_hline(y=c_wall, line_color="#32CD32", line_width=2, line_dash="dot", annotation_text="CW")
+                    fig_zomma.add_hline(y=p_wall, line_color="#FF4500", line_width=2, line_dash="dot", annotation_text="PW")
+                    fig_zomma.update_layout(
+                        title="Zomma Profile (Gamma vs Volatility)", xaxis_title="Net Zomma", yaxis_title="Strike",
+                        template="plotly_dark", height=600, yaxis=dict(range=[lo, hi], dtick=gran)
+                    )
+                    st.plotly_chart(fig_zomma, use_container_width=True)
+
+                with col_c:
+                    fig_color_greek = go.Figure()
+                    fig_color_greek.add_trace(go.Bar(
+                        x=plot_df['Color'], y=plot_df['strike'], orientation='h',
+                        marker_color='#FFA500', name='Color'
+                    ))
+                    fig_color_greek.add_hline(y=spot, line_color="#00FFFF", line_width=3, annotation_text="SPOT")
+                    fig_color_greek.add_hline(y=c_wall, line_color="#32CD32", line_width=2, line_dash="dot", annotation_text="CW")
+                    fig_color_greek.add_hline(y=p_wall, line_color="#FF4500", line_width=2, line_dash="dot", annotation_text="PW")
+                    fig_color_greek.update_layout(
+                        title="Color Profile (Gamma Decay vs Time)", xaxis_title="Net Color", yaxis_title="Strike",
+                        template="plotly_dark", height=600, yaxis=dict(range=[lo, hi], dtick=gran)
+                    )
+                    st.plotly_chart(fig_color_greek, use_container_width=True)
 
 elif menu == "🔥 SCANNER HOT TICKERS":
     st.title("🔥 Professional Market Scanner (50 Tickers)")
