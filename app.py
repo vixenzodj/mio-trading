@@ -19,9 +19,32 @@ from bs4 import BeautifulSoup
 import histdatacom
 from histdatacom.options import Options
 import os, zipfile, shutil, glob
+from curl_cffi import requests as cffi_requests
+import yfinance as yf
 
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
+
+# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE) ---
+# Creiamo una sessione globale crittografata che finge di essere Google Chrome (Bypass TLS Fingerprint)
+STEALTH_SESSION = cffi_requests.Session(impersonate="chrome")
+
+# 1. Overriding di yf.download per usare sempre la sessione stealth
+_original_yf_download = yf.download
+def _stealth_download(*args, **kwargs):
+    kwargs.setdefault('session', STEALTH_SESSION)
+    return _original_yf_download(*args, **kwargs)
+yf.download = _stealth_download
+
+# 2. Overriding di yf.Ticker per usare sempre la sessione stealth
+_original_yf_ticker = yf.Ticker
+class StealthTicker(_original_yf_ticker):
+    def __init__(self, ticker, session=None, **kwargs):
+        if session is None:
+            session = STEALTH_SESSION
+        super().__init__(ticker, session=session, **kwargs)
+yf.Ticker = StealthTicker
+# --- FINE SISTEMA ANTI-BAN ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
 def get_precise_dte(exp_str):
