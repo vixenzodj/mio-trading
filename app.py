@@ -1105,13 +1105,14 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df_c = df[df['type'] == 'call'].sort_values('strike').copy()
     df_p = df[df['type'] == 'put'].sort_values('strike').copy()
     
-    # 3. Curva di Volatilità e Pendenza Indipendenti
+    # 3. Curva di Volatilità e Pendenza Indipendenti (Calcolo Istituzionale Centralizzato)
     for d in [df_c, df_p]:
         if not d.empty:
             d['iv_working'] = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, np.nan).interpolate().bfill().ffill()
             d['iv_working'] = np.maximum(d['iv_working'], 0.01) # Protezione anti-zero
-            d['skew_slope'] = d['iv_working'].diff() / d['strike'].diff().replace(0, np.nan)
-            d['skew_slope'] = d['skew_slope'].bfill().ffill().clip(-0.005, 0.005)
+            # Utilizzo della differenza centrale (np.gradient) per una derivata liscia
+            d['skew_slope'] = np.gradient(d['iv_working'], d['strike'])
+            d['skew_slope'] = pd.Series(d['skew_slope']).bfill().ffill().clip(-0.005, 0.005).values
         
     # Ricostruzione Ordine
     df = pd.concat([df_c, df_p]).sort_values('strike').reset_index(drop=True)
@@ -2583,13 +2584,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 c_iv = p_iv = mean_iv
 
             # 2. Calcolo Fixed 1-Day Move (1/252)
-            one_day_factor = np.sqrt(1/252)
+            dt = 1/252.0
+            one_day_factor = np.sqrt(dt)
             
-            # 3. Creazione delle 4 Linee Asimmetriche
-            sd1_up = spot * (1 + (c_iv * one_day_factor))
-            sd2_up = spot * (1 + (c_iv * 2 * one_day_factor))
-            sd1_down = spot * (1 - (p_iv * one_day_factor))
-            sd2_down = spot * (1 - (p_iv * 2 * one_day_factor))
+            # 3. Creazione delle 4 Linee Asimmetriche (Geometric Brownian Motion / Log-Normale)
+            # Incorporiamo Drift (Tasso - Dividendo) ed effetto Volatilità (Convexity Drag)
+            drift_c = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * c_iv**2)
+            drift_p = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * p_iv**2)
+            
+            sd1_up = spot * np.exp((drift_c * dt) + (c_iv * one_day_factor))
+            sd2_up = spot * np.exp((drift_c * dt) + (c_iv * 2 * one_day_factor))
+            sd1_down = spot * np.exp((drift_p * dt) - (p_iv * one_day_factor))
+            sd2_down = spot * np.exp((drift_p * dt) - (p_iv * 2 * one_day_factor))
             
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
             # ---------------------------------------------
@@ -3477,13 +3483,18 @@ elif menu == "🔥 SCANNER HOT TICKERS":
                 c_iv = p_iv = 0.15 # Fallback prudenziale
 
             # 2. Calcolo Fixed 1-Day Move (1/252)
-            one_day_factor = np.sqrt(1/252)
+            dt = 1/252.0
+            one_day_factor = np.sqrt(dt)
             
-            # 3. Creazione delle 4 Linee Asimmetriche per lo Scanner
-            sd1_up = px * (1 + (c_iv * one_day_factor))
-            sd2_up = px * (1 + (c_iv * 2 * one_day_factor))
-            sd1_down = px * (1 - (p_iv * one_day_factor))
-            sd2_down = px * (1 - (p_iv * 2 * one_day_factor))
+            # 3. Creazione delle 4 Linee Asimmetriche per lo Scanner (Geometric Brownian Motion / Log-Normale)
+            # Incorporiamo Drift (Tasso - Dividendo) ed effetto Volatilità (Convexity Drag)
+            drift_c = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * c_iv**2)
+            drift_p = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * p_iv**2)
+            
+            sd1_up = px * np.exp((drift_c * dt) + (c_iv * one_day_factor))
+            sd2_up = px * np.exp((drift_c * dt) + (c_iv * 2 * one_day_factor))
+            sd1_down = px * np.exp((drift_p * dt) - (p_iv * one_day_factor))
+            sd2_down = px * np.exp((drift_p * dt) - (p_iv * 2 * one_day_factor))
             
             # 4. Skew Factor
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
