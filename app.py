@@ -25,24 +25,34 @@ import yfinance as yf
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
-# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE) ---
-# Creiamo una funzione per generare una sessione fresca ad ogni chiamata (Previene Crumb Expiration su dati 1m)
+# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE & RATE LIMITER) ---
+# La sessione vive 1 ora (previene Crumb Expiration), persistendo tra i riavvii (previene TLS Handshake Spam)
+@st.cache_resource(ttl=3600)
 def get_stealth_session():
-    return cffi_requests.Session(impersonate="chrome")
+    session = cffi_requests.Session(impersonate="chrome")
+    
+    # Inject Custom Rate Limiter: Freno a mano chirurgico
+    _original_request = session.request
+    def _rate_limited_request(*args, **kwargs):
+        time.sleep(0.25)  # Delay di 250ms (max 4 chiamate/sec). Azzera il rischio Errore 429 (Rate Limit).
+        return _original_request(*args, **kwargs)
+        
+    session.request = _rate_limited_request
+    return session
 
-# 1. Overriding di yf.download per usare sempre una sessione stealth fresca
+# 1. Overriding di yf.download
 _original_yf_download = yf.download
 def _stealth_download(*args, **kwargs):
-    kwargs['session'] = get_stealth_session() # Assegnazione dinamica ad ogni richiesta
+    kwargs['session'] = get_stealth_session()
     return _original_yf_download(*args, **kwargs)
 yf.download = _stealth_download
 
-# 2. Overriding di yf.Ticker per usare sempre una sessione stealth fresca
+# 2. Overriding di yf.Ticker
 _original_yf_ticker = yf.Ticker
 class StealthTicker(_original_yf_ticker):
     def __init__(self, ticker, session=None, **kwargs):
         if session is None:
-            session = get_stealth_session() # Assegnazione dinamica ad ogni richiesta
+            session = get_stealth_session()
         super().__init__(ticker, session=session, **kwargs)
 yf.Ticker = StealthTicker
 # --- FINE SISTEMA ANTI-BAN ---
