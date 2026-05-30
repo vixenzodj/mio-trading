@@ -2842,23 +2842,33 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 """, unsafe_allow_html=True)
             # --- FINE NUOVO HUD ---
 
-            # --- CALCOLO STORICO E CURTOSI ---
+            # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE) ---
             try:
                 hist_1m = ticker_obj.history(period='1mo')
                 hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
                 
+                # 1. Trova IV ATM
                 iv_atm = raw_data.iloc[(raw_data['strike'] - spot).abs().argsort()[:1]]['impliedVolatility'].values[0]
-                iv_put_tail = raw_data[raw_data['strike'] <= spot * 0.9]['impliedVolatility'].mean()
-                iv_call_tail = raw_data[raw_data['strike'] >= spot * 1.1]['impliedVolatility'].mean()
-                # Se mancano code, fallback su ATM
-                iv_put_tail = iv_put_tail if pd.notna(iv_put_tail) else iv_atm
-                iv_call_tail = iv_call_tail if pd.notna(iv_call_tail) else iv_atm
                 
-                kurtosis_ratio = (iv_put_tail + iv_call_tail) / (2 * iv_atm)
-                kurt_pct = min(max((kurtosis_ratio - 1.0) * 200, 0), 100) # Normalizza 0-100%
+                # 2. Definisce la vera coda (Tail) usando la -1 Standard Deviation calcolata precedentemente
+                # Filtra solo le PUT OTM reali e con Open Interest per evitare rumore di spread
+                tail_puts = raw_data[(raw_data['type'] == 'put') & (raw_data['strike'] <= sd1_down) & (raw_data['openInterest'] > 0)]
+                
+                if not tail_puts.empty:
+                    # 3. Media ponderata dell'IV di coda basata sui contratti aperti (Smart Money)
+                    iv_put_tail = np.average(tail_puts['impliedVolatility'], weights=tail_puts['openInterest'])
+                else:
+                    iv_put_tail = iv_atm
+                
+                # 4. Skew Ratio (Premio per il rischio di coda estremo)
+                skew_ratio = iv_put_tail / iv_atm if iv_atm > 0 else 1.0
+                
+                # 5. Normalizzazione Istituzionale (0 - 100%)
+                # Uno skew ratio base è ~1.05. Sopra 1.50 scatta il panico estremo.
+                kurt_pct = min(max((skew_ratio - 1.05) * (100 / 0.45), 0), 100)
                 
                 kurt_color = "#2ecc71" if kurt_pct < 30 else ("#f1c40f" if kurt_pct < 60 else "#e74c3c")
-            except:
+            except Exception as e:
                 hv_20d, kurt_pct, kurt_color = 0.0, 0, "gray"
 
             # --- UI LAYOUT AGGIORNATO ---
