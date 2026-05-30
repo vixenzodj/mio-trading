@@ -2842,17 +2842,24 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 """, unsafe_allow_html=True)
             # --- FINE NUOVO HUD ---
 
-            # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE) ---
+            # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE CON FILTRO LIQUIDITÀ) ---
             try:
                 hist_1m = ticker_obj.history(period='1mo')
                 hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
                 
-                # 1. Trova IV ATM
+                # 1. Trova IV ATM (Con Protezione Anti-Zero)
                 iv_atm = raw_data.iloc[(raw_data['strike'] - spot).abs().argsort()[:1]]['impliedVolatility'].values[0]
+                iv_atm = max(iv_atm, 0.01) # Protezione limite
                 
-                # 2. Definisce la vera coda (Tail) usando la -1 Standard Deviation calcolata precedentemente
-                # Filtra solo le PUT OTM reali e con Open Interest per evitare rumore di spread
-                tail_puts = raw_data[(raw_data['type'] == 'put') & (raw_data['strike'] <= sd1_down) & (raw_data['openInterest'] > 0)]
+                # 2. Definisce la vera coda (Tail) usando la -1 Standard Deviation
+                # Aggiungiamo un severo FILTRO DI LIQUIDITÀ: escludiamo contratti con Bid a 0 o Spread > 100% (Anomalie del Weekend)
+                tail_puts = raw_data[(raw_data['type'] == 'put') & 
+                                     (raw_data['strike'] <= sd1_down) & 
+                                     (raw_data['openInterest'] > 0) & 
+                                     (raw_data['bid'] > 0)] # Scudo contro "prezzi fantasma"
+                
+                # Filtro aggiuntivo: escludiamo IV palesemente irreali (> 300%) comuni sulle 0DTE illiquide a mercato chiuso
+                tail_puts = tail_puts[tail_puts['impliedVolatility'] < 3.0]
                 
                 if not tail_puts.empty:
                     # 3. Media ponderata dell'IV di coda basata sui contratti aperti (Smart Money)
@@ -2861,11 +2868,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     iv_put_tail = iv_atm
                 
                 # 4. Skew Ratio (Premio per il rischio di coda estremo)
-                skew_ratio = iv_put_tail / iv_atm if iv_atm > 0 else 1.0
+                skew_ratio = iv_put_tail / iv_atm
                 
                 # 5. Normalizzazione Istituzionale (0 - 100%)
                 # Uno skew ratio base è ~1.05. Sopra 1.50 scatta il panico estremo.
-                kurt_pct = min(max((skew_ratio - 1.05) * (100 / 0.45), 0), 100)
+                # Allarghiamo la tolleranza superiore a 2.0 (per gestire la sensibilità delle 0DTE)
+                kurt_pct = min(max((skew_ratio - 1.05) * (100 / 0.95), 0), 100)
                 
                 kurt_color = "#2ecc71" if kurt_pct < 30 else ("#f1c40f" if kurt_pct < 60 else "#e74c3c")
             except Exception as e:
