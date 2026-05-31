@@ -2842,37 +2842,47 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 """, unsafe_allow_html=True)
             # --- FINE NUOVO HUD ---
 
-            # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE CON FILTRO LIQUIDITÀ) ---
+            # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE CON FILTRO LIQUIDITÀ E FALLBACK) ---
             try:
                 hist_1m = ticker_obj.history(period='1mo')
                 hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
                 
-                # 1. Trova IV ATM (Con Protezione Anti-Zero)
-                iv_atm = raw_data.iloc[(raw_data['strike'] - spot).abs().argsort()[:1]]['impliedVolatility'].values[0]
-                iv_atm = max(iv_atm, 0.01) # Protezione limite
+                # 1. Trova IV ATM (Con Protezione Istituzionale Anti-Division-by-Zero)
+                atm_options = raw_data.iloc[(raw_data['strike'] - spot).abs().argsort()[:3]]
+                iv_atm = atm_options['impliedVolatility'].mean()
+                # Il Floor al 5% (0.05) impedisce al sistema di generare Skew Ratio astronomici nel weekend quando i Bids crollano a zero.
+                iv_atm = max(iv_atm, 0.05) 
                 
-                # 2. Definisce la vera coda (Tail) usando la -1 Standard Deviation
-                # Aggiungiamo un severo FILTRO DI LIQUIDITÀ: escludiamo contratti con Bid a 0 o Spread > 100% (Anomalie del Weekend)
-                tail_puts = raw_data[(raw_data['type'] == 'put') & 
-                                     (raw_data['strike'] <= sd1_down) & 
-                                     (raw_data['openInterest'] > 0) & 
-                                     (raw_data['bid'] > 0)] # Scudo contro "prezzi fantasma"
+                # 2. Definisce la vera coda (Tail)
+                tail_puts_raw = raw_data[(raw_data['type'] == 'put') & 
+                                         (raw_data['strike'] <= sd1_down) & 
+                                         (raw_data['impliedVolatility'] < 3.0)].copy()
                 
-                # Filtro aggiuntivo: escludiamo IV palesemente irreali (> 300%) comuni sulle 0DTE illiquide a mercato chiuso
-                tail_puts = tail_puts[tail_puts['impliedVolatility'] < 3.0]
+                # --- LOGICA ISTITUZIONALE: SWITCH DINAMICO (REALE vs KERNEL PROXY) ---
+                # A. Test di Liquidità: Esistono contratti con Bid reale e Open Interest?
+                valid_real_data = tail_puts_raw[(tail_puts_raw['openInterest'] > 0) & (tail_puts_raw['bid'] > 0)]
                 
-                if not tail_puts.empty:
-                    # 3. Media ponderata dell'IV di coda basata sui contratti aperti (Smart Money)
-                    iv_put_tail = np.average(tail_puts['impliedVolatility'], weights=tail_puts['openInterest'])
+                if not valid_real_data.empty:
+                    # CASO 1: Mercato Aperto / ETF Liquidi. 
+                    # Usa i DATI REALI (Open Interest puro). Nessuna allucinazione, si calcola sui flussi effettivi.
+                    iv_put_tail = np.average(valid_real_data['impliedVolatility'], weights=valid_real_data['openInterest'])
                 else:
-                    iv_put_tail = iv_atm
+                    # CASO 2: Weekend / Dati Indici CBOE Azzzerati.
+                    # Il book è vuoto. Applichiamo la stima di Densità basata sul Black-Scholes residuo.
+                    if not tail_puts_raw.empty:
+                        # Il peso diventa la Volatilità stessa combinata al volume residuo.
+                        fallback_weights = tail_puts_raw['volume'] + (tail_puts_raw['impliedVolatility'] * 100)
+                        if fallback_weights.sum() > 0:
+                            iv_put_tail = np.average(tail_puts_raw['impliedVolatility'], weights=fallback_weights)
+                        else:
+                            iv_put_tail = iv_atm
+                    else:
+                        iv_put_tail = iv_atm
                 
                 # 4. Skew Ratio (Premio per il rischio di coda estremo)
                 skew_ratio = iv_put_tail / iv_atm
                 
                 # 5. Normalizzazione Istituzionale (0 - 100%)
-                # Uno skew ratio base è ~1.05. Sopra 1.50 scatta il panico estremo.
-                # Allarghiamo la tolleranza superiore a 2.0 (per gestire la sensibilità delle 0DTE)
                 kurt_pct = min(max((skew_ratio - 1.05) * (100 / 0.95), 0), 100)
                 
                 kurt_color = "#2ecc71" if kurt_pct < 30 else ("#f1c40f" if kurt_pct < 60 else "#e74c3c")
