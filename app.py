@@ -1056,25 +1056,43 @@ def display_macro_war_room():
 
 # --- CORE QUANT ENGINE ---
 def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
+    """Calcolo GEX Statico Istituzionale (Normalizzazione Esatta S^2)"""
     K = df['strike'].values
-    iv = df['impliedVolatility'].values
-    T = np.maximum(df['dte_years'].values, 0.00005) # Allineato al Floor 0DTE
-    # Calibrazione Istituzionale: 80% OI + 20% Volume per matchare get_greeks_pro
+    iv = df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values
+    T = np.maximum(df['dte_years'].values, 0.00005)
     exposure_size = (df['openInterest'].fillna(0).values * 0.8) + (df['volume'].fillna(0).values * 0.2)
+    
     d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
-    gamma = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
+    gamma_bs = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
     side = np.where(df['type'] == 'call', 1, -1)
-    return np.sum(gamma * exposure_size * 100 * price * side)
+    
+    # Normalizzazione monetaria allineata a get_greeks_pro
+    gex_static = gamma_bs * (price**2) * 0.01 * exposure_size * 100 * side
+    return np.sum(gex_static)
 
 def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
+    """Calcolo Zero Gamma Dinamico con integrazione Vanna e Skew Proxy"""
     K = df['strike'].values
-    iv = df['impliedVolatility'].values
-    T = np.maximum(df['dte_years'].values, 0.00005) # Allineato al Floor 0DTE
-    exposure_size = df['volume'].fillna(0).values 
-    d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
-    gamma = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
+    skew_slope = df['skew_slope'].values if 'skew_slope' in df.columns else 0.0
+    
+    # Sticky Strike Proxy: adatta la volatilità localmente rispetto al movimento del prezzo
+    iv_base = df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values
+    iv_dyn = np.maximum(iv_base + skew_slope * (price - K), 0.01)
+    
+    T = np.maximum(df['dte_years'].values, 0.00005)
+    exposure_size = (df['openInterest'].fillna(0).values * 0.8) + (df['volume'].fillna(0).values * 0.2)
+    
+    d1 = (np.log(price/K) + (r - q + 0.5 * iv_dyn**2) * T) / (iv_dyn * np.sqrt(T))
+    gamma_bs = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv_dyn * np.sqrt(T))
+    vega_bs = price * np.exp(-q * T) * norm.pdf(d1) * np.sqrt(T)
+    vanna = (vega_bs / price) * (1 - d1 / (iv_dyn * np.sqrt(T)))
+    
+    # Shadow Gamma: Gamma corretto per il differenziale di Skew
+    gamma_adj = gamma_bs + (vanna * skew_slope)
+    
     side = np.where(df['type'] == 'call', 1, -1)
-    return np.sum(gamma * exposure_size * 100 * price * side)
+    gex_dyn = gamma_adj * (price**2) * 0.01 * exposure_size * 100 * side
+    return np.sum(gex_dyn)
 
 def bs_price(S, K, T, r, q, iv, option_type='call'):
     d1 = (np.log(S/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
@@ -2583,19 +2601,21 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             except:
                 c_iv = p_iv = mean_iv
 
-            # 2. Calcolo Fixed 1-Day Move (1/252)
-            dt = 1/252.0
-            one_day_factor = np.sqrt(dt)
+            # 2. Calcolo Dinamico Orizzonte Temporale (Scudo 0DTE)
+            # Scala il tempo basandosi sulla reale vita residua dell'opzione selezionata (max 1 giorno)
+            actual_dte = max(raw_data['dte_years'].min(), 0.00005) if not raw_data.empty else 1/252.0
+            dt = min(1/252.0, actual_dte)
+            time_factor = np.sqrt(dt)
             
             # 3. Creazione delle 4 Linee Asimmetriche (Geometric Brownian Motion / Log-Normale)
             # Incorporiamo Drift (Tasso - Dividendo) ed effetto Volatilità (Convexity Drag)
             drift_c = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * c_iv**2)
             drift_p = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * p_iv**2)
             
-            sd1_up = spot * np.exp((drift_c * dt) + (c_iv * one_day_factor))
-            sd2_up = spot * np.exp((drift_c * dt) + (c_iv * 2 * one_day_factor))
-            sd1_down = spot * np.exp((drift_p * dt) - (p_iv * one_day_factor))
-            sd2_down = spot * np.exp((drift_p * dt) - (p_iv * 2 * one_day_factor))
+            sd1_up = spot * np.exp((drift_c * dt) + (c_iv * time_factor))
+            sd2_up = spot * np.exp((drift_c * dt) + (c_iv * 2 * time_factor))
+            sd1_down = spot * np.exp((drift_p * dt) - (p_iv * time_factor))
+            sd2_down = spot * np.exp((drift_p * dt) - (p_iv * 2 * time_factor))
             
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
             # ---------------------------------------------
@@ -3500,19 +3520,20 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             except:
                 c_iv = p_iv = 0.15 # Fallback prudenziale
 
-            # 2. Calcolo Fixed 1-Day Move (1/252)
-            dt = 1/252.0
-            one_day_factor = np.sqrt(dt)
+            # 2. Calcolo Dinamico Orizzonte Temporale per lo Scanner (Scudo 0DTE)
+            actual_dte = max(df_scan['dte_years'].min(), 0.00005) if not df_scan.empty else 1/252.0
+            dt = min(1/252.0, actual_dte)
+            time_factor = np.sqrt(dt)
             
             # 3. Creazione delle 4 Linee Asimmetriche per lo Scanner (Geometric Brownian Motion / Log-Normale)
             # Incorporiamo Drift (Tasso - Dividendo) ed effetto Volatilità (Convexity Drag)
             drift_c = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * c_iv**2)
             drift_p = (DYNAMIC_R - div_yield if 'div_yield' in locals() else DYNAMIC_R) - (0.5 * p_iv**2)
             
-            sd1_up = px * np.exp((drift_c * dt) + (c_iv * one_day_factor))
-            sd2_up = px * np.exp((drift_c * dt) + (c_iv * 2 * one_day_factor))
-            sd1_down = px * np.exp((drift_p * dt) - (p_iv * one_day_factor))
-            sd2_down = px * np.exp((drift_p * dt) - (p_iv * 2 * one_day_factor))
+            sd1_up = px * np.exp((drift_c * dt) + (c_iv * time_factor))
+            sd2_up = px * np.exp((drift_c * dt) + (c_iv * 2 * time_factor))
+            sd1_down = px * np.exp((drift_p * dt) - (p_iv * time_factor))
+            sd2_down = px * np.exp((drift_p * dt) - (p_iv * 2 * time_factor))
             
             # 4. Skew Factor
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
