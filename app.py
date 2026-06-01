@@ -2706,6 +2706,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 </div>
                 """, unsafe_allow_html=True)
 
+            # Inizializzazione quantitativa del fattore temporale giornaliero (1 giorno su base annua commerciale)
+            one_day_factor = np.sqrt(1 / 252.0)
+            
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("CALL WALL", f"{c_wall:.0f}")
             m2.metric("ZERO GAMMA (STA/DYN)", f"{z_gamma:.0f} / {z_gamma_dyn:.0f}")
