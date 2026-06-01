@@ -1060,7 +1060,11 @@ def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.00005)
-    exposure_size = (df['openInterest'].fillna(0).values * 0.8) + (df['volume'].fillna(0).values * 0.2)
+    oi_arr = df['openInterest'].fillna(0).values
+    vol_arr = df['volume'].fillna(0).values
+    l_ratio = np.where(oi_arr > 0, vol_arr / oi_arr, 0)
+    v_weight = np.where(l_ratio > 1.0, 0.05, 0.2)
+    exposure_size = (oi_arr * (1 - v_weight)) + (vol_arr * v_weight)
     
     d1 = (np.log(price/K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
     gamma_bs = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv * np.sqrt(T))
@@ -1080,7 +1084,11 @@ def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
     iv_dyn = np.maximum(iv_base + skew_slope * (price - K), 0.01)
     
     T = np.maximum(df['dte_years'].values, 0.00005)
-    exposure_size = (df['openInterest'].fillna(0).values * 0.8) + (df['volume'].fillna(0).values * 0.2)
+    oi_arr = df['openInterest'].fillna(0).values
+    vol_arr = df['volume'].fillna(0).values
+    l_ratio = np.where(oi_arr > 0, vol_arr / oi_arr, 0)
+    v_weight = np.where(l_ratio > 1.0, 0.05, 0.2)
+    exposure_size = (oi_arr * (1 - v_weight)) + (vol_arr * v_weight)
     
     d1 = (np.log(price/K) + (r - q + 0.5 * iv_dyn**2) * T) / (iv_dyn * np.sqrt(T))
     gamma_bs = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv_dyn * np.sqrt(T))
@@ -1127,9 +1135,13 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     for d in [df_c, df_p]:
         if not d.empty:
             d['iv_working'] = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, np.nan).interpolate().bfill().ffill()
+            # 1. Filtro Quantitativo Istituzionale: Mediana mobile per tagliare gli outlier di YF prima del calcolo della pendenza
+            d['iv_working'] = d['iv_working'].rolling(window=3, min_periods=1, center=True).median()
             d['iv_working'] = np.maximum(d['iv_working'], 0.01) # Protezione anti-zero
-            # Utilizzo della differenza centrale (np.gradient) per una derivata liscia
-            d['skew_slope'] = np.gradient(d['iv_working'], d['strike'])
+            # 2. Utilizzo della differenza centrale (np.gradient) su curva smussata
+            raw_skew = np.gradient(d['iv_working'], d['strike'])
+            # 3. Applicazione filtro esponenziale (EWMA) per stabilizzare la derivata locale
+            d['skew_slope'] = pd.Series(raw_skew).ewm(span=3, adjust=False).mean().values
             d['skew_slope'] = pd.Series(d['skew_slope']).bfill().ffill().clip(-0.005, 0.005).values
         
     # Ricostruzione Ordine
@@ -1155,8 +1167,12 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df['Gamma_Adj'] = gamma_bs + (2 * vanna * df['skew_slope']) + (vomma * (df['skew_slope']**2))
     
     # 6. Conversione in Esposizione Monetaria (Notional GEX & Cross-Greeks)
-    # Calcolo base dell'esposizione volumetrica
-    oi_vol = (df['openInterest'] * 0.8) + (df['volume'] * 0.2)
+    # Calcolo base dell'esposizione volumetrica con Penalità di Rumore (Noise Penalty)
+    # Se il Volume > OI, riduciamo drasticamente il peso del volume (tipico di YF data)
+    liquidity_ratio = np.where(df['openInterest'] > 0, df['volume'] / df['openInterest'], 0)
+    vol_weight = np.where(liquidity_ratio > 1.0, 0.05, 0.2)
+    oi_weight = 1.0 - vol_weight
+    oi_vol = (df['openInterest'] * oi_weight) + (df['volume'] * vol_weight)
     df['type_sign'] = df['type'].map({'call': 1, 'put': -1})
     
     # GEX: Dollari di esposizione per 1% mossa del sottostante
@@ -1184,11 +1200,20 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df['Vomma'] = vomma * 0.0001 * oi_vol * 100 
     df['Speed'] = speed_raw * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
     
-    # Integrazione Nuove 3rd Order Greeks
+    # Integrazione Nuove 3rd Order Greeks con Clipping Istituzionale Anti-Singolarità (Max Rischio Monetario: 10 Miliardi)
+    MAX_EXPOSURE = 1e10
+    
     # Zomma: Variazione monetaria del Gamma per 1% change IV
-    df['Zomma'] = zomma_raw * (S**2) * 0.0001 * oi_vol * 100 * df['type_sign']
+    zomma_calc = zomma_raw * (S**2) * 0.0001 * oi_vol * 100 * df['type_sign']
+    df['Zomma'] = np.clip(zomma_calc, -MAX_EXPOSURE, MAX_EXPOSURE)
+    
     # Color: Variazione monetaria del Gamma per 1 Giorno di decadimento (1/252)
-    df['Color'] = color_raw * (S**2) * 0.01 * (1/252.0) * oi_vol * 100 * df['type_sign']
+    color_calc = color_raw * (S**2) * 0.01 * (1/252.0) * oi_vol * 100 * df['type_sign']
+    df['Color'] = np.clip(color_calc, -MAX_EXPOSURE, MAX_EXPOSURE)
+    
+    # Protezione esplosione Speed
+    df['Speed'] = np.clip(df['Speed'], -MAX_EXPOSURE, MAX_EXPOSURE)
+    
     df['Gamma'] = df['GEX_Total']
     
     df['Delta'] = np.exp(-q * T) * np.where(df['type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
