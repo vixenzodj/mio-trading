@@ -1098,12 +1098,15 @@ def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
     exposure_size = (oi_arr * (1 - v_weight)) + (vol_arr * v_weight)
     
     d1 = (np.log(price/K) + (r - q + 0.5 * iv_dyn**2) * T) / (iv_dyn * np.sqrt(T))
+    d2 = d1 - iv_dyn * np.sqrt(T)
+    
     gamma_bs = (norm.pdf(d1) * np.exp(-q * T)) / (price * iv_dyn * np.sqrt(T))
     vega_bs = price * np.exp(-q * T) * norm.pdf(d1) * np.sqrt(T)
-    vanna = (vega_bs / price) * (1 - d1 / (iv_dyn * np.sqrt(T)))
+    vanna_bs = (vega_bs / price) * (1 - d1 / (iv_dyn * np.sqrt(T)))
+    vomma_bs = vega_bs * (d1 * d2 / iv_dyn)
     
-    # Shadow Gamma: Gamma corretto per il differenziale di Skew
-    gamma_adj = gamma_bs + (vanna * skew_slope)
+    # Shadow Gamma: Gamma Istituzionale corretto con la Chain Rule esatta
+    gamma_adj = gamma_bs + (2 * vanna_bs * skew_S) + (vomma_bs * (skew_S**2))
     
     side = np.where(df['type'] == 'call', 1, -1)
     gex_dyn = gamma_adj * (price**2) * 0.01 * exposure_size * 100 * side
@@ -1213,11 +1216,15 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     oi_vol = (df['openInterest'] * oi_weight) + (df['volume'] * vol_weight)
     df['type_sign'] = df['type'].map({'call': 1, 'put': -1})
     
+    MAX_EXPOSURE = 1e10 # Tetto Istituzionale a 10 Miliardi
+
     # GEX: Dollari di esposizione per 1% mossa del sottostante
     df['GEX_Total'] = df['Gamma_Adj'] * (S**2) * 0.01 * oi_vol * 100 * df['type_sign']
+    df['GEX_Total'] = np.clip(df['GEX_Total'], -MAX_EXPOSURE, MAX_EXPOSURE) # Scudo Singolarità ATM
     
     # Scaling Istituzionale delle Greche Aggiustate
     df['Vanna'] = vanna_adj * 0.01 * S * oi_vol * 100 * df['type_sign'] 
+    df['Vanna'] = np.clip(df['Vanna'], -MAX_EXPOSURE, MAX_EXPOSURE) # Scudo Singolarità ATM
     df['Charm'] = S * charm_bs * (1/252.0) * oi_vol * 100 * df['type_sign']
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     
@@ -2675,12 +2682,12 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
             # ---------------------------------------------
 
-            # CALCOLO 0-GAMMA ORIGINALE
-            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.85, spot * 1.15, args=(raw_data, DYNAMIC_R, div_yield))
+            # CALCOLO 0-GAMMA ORIGINALE (Ricerca Espansa al 50%)
+            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.50, spot * 1.50, args=(raw_data, DYNAMIC_R, div_yield))
             except: z_gamma = spot 
 
-            # CALCOLO 0-GAMMA DINAMICO (SOLO VOLUMI)
-            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.85, spot * 1.15, args=(raw_data, DYNAMIC_R, div_yield))
+            # CALCOLO 0-GAMMA DINAMICO (Ricerca Espansa al 50%)
+            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.50, spot * 1.50, args=(raw_data, DYNAMIC_R, div_yield))
             except: z_gamma_dyn = spot
 
             df = get_greeks_pro(raw_data, spot, r=DYNAMIC_R, q=div_yield)
