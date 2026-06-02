@@ -1075,13 +1075,20 @@ def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     return np.sum(gex_static)
 
 def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
-    """Calcolo Zero Gamma Dinamico con integrazione Vanna e Skew Proxy"""
+    """Calcolo Zero Gamma Dinamico con integrazione Vanna e Skew-Spot Proxy"""
     K = df['strike'].values
-    skew_slope = df['skew_slope'].values if 'skew_slope' in df.columns else 0.0
     
-    # Sticky Strike Proxy: adatta la volatilità localmente rispetto al movimento del prezzo
+    # Usiamo lo skew_spot se disponibile, altrimenti deriviamo lo skew_slope approssimato
+    if 'skew_spot' in df.columns:
+        skew_S = df['skew_spot'].values
+    elif 'skew_slope' in df.columns:
+        skew_S = -(K / price) * df['skew_slope'].values
+    else:
+        skew_S = 0.0
+        
     iv_base = df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values
-    iv_dyn = np.maximum(iv_base + skew_slope * (price - K), 0.01)
+    # Dinamica Sticky-Strike reale: L'IV si muove sulla curva seguendo lo skew per variazioni di S
+    iv_dyn = np.maximum(iv_base + skew_S * (price - K), 0.01)
     
     T = np.maximum(df['dte_years'].values, 0.00005)
     oi_arr = df['openInterest'].fillna(0).values
@@ -1131,18 +1138,40 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df_c = df[df['type'] == 'call'].sort_values('strike').copy()
     df_p = df[df['type'] == 'put'].sort_values('strike').copy()
     
-    # 3. Curva di Volatilità e Pendenza Indipendenti (Calcolo Istituzionale Centralizzato)
-    for d in [df_c, df_p]:
-        if not d.empty:
-            d['iv_working'] = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, np.nan).interpolate().bfill().ffill()
-            # 1. Filtro Quantitativo Istituzionale: Mediana mobile per tagliare gli outlier di YF prima del calcolo della pendenza
-            d['iv_working'] = d['iv_working'].rolling(window=3, min_periods=1, center=True).median()
-            d['iv_working'] = np.maximum(d['iv_working'], 0.01) # Protezione anti-zero
-            # 2. Utilizzo della differenza centrale (np.gradient) su curva smussata
-            raw_skew = np.gradient(d['iv_working'], d['strike'])
-            # 3. Applicazione filtro esponenziale (EWMA) per stabilizzare la derivata locale
-            d['skew_slope'] = pd.Series(raw_skew).ewm(span=3, adjust=False).mean().values
-            d['skew_slope'] = pd.Series(d['skew_slope']).bfill().ffill().clip(-0.005, 0.005).values
+    from scipy.interpolate import CubicSpline
+    # 3. Curva di Volatilità Istituzionale (Cubic Spline) e Calcolo Skew-Spot Analitico
+    for i, d in enumerate([df_c, df_p]):
+        if len(d) > 3:
+            # 1. Pulizia base dai dati sporchi di Yahoo Finance
+            iv_clean = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, np.nan).interpolate(method='linear').bfill().ffill()
+            iv_clean = iv_clean.rolling(window=3, min_periods=1, center=True).median()
+            iv_clean = np.maximum(iv_clean, 0.01)
+            
+            # 2. Fit Spline Cubica per ottenere una curva continua e differenziabile
+            strikes = d['strike'].values
+            ivs = iv_clean.values
+            valid_idx = np.concatenate(([True], np.diff(strikes) > 0)) # Assicura array strettamente crescente
+            strikes_valid, ivs_valid = strikes[valid_idx], ivs[valid_idx]
+            
+            if len(strikes_valid) > 3:
+                cs = CubicSpline(strikes_valid, ivs_valid, bc_type='natural')
+                d['iv_working'] = cs(strikes)
+                # Derivata prima analitica (d_sigma / d_K) limitata per stabilità
+                skew_k = np.clip(cs(strikes, 1), -0.01, 0.01)
+            else:
+                d['iv_working'] = iv_clean.values
+                skew_k = np.clip(np.gradient(d['iv_working'], strikes), -0.01, 0.01)
+        else:
+            d['iv_working'] = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, 0.01).bfill().ffill()
+            skew_k = 0.0
+            
+        # 3. Trasformazione Fondamentale: Conversione in d_sigma / d_S
+        # Approssimazione matematica istituzionale: d_sigma/d_S ≈ -(K/S) * d_sigma/d_K
+        d['skew_slope'] = skew_k
+        d['skew_spot'] = -(d['strike'].values / S) * skew_k
+        
+        if i == 0: df_c = d
+        else: df_p = d
         
     # Ricostruzione Ordine
     df = pd.concat([df_c, df_p]).sort_values('strike').reset_index(drop=True)
@@ -1156,19 +1185,28 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     pdf = norm.pdf(d1)
     cdf = norm.cdf(d1)
 
-    # Formule Standard BS
+    # Formule Standard BS (Greche pure)
     gamma_bs = np.exp(-q * T) * pdf / (S * iv * np.sqrt(T))
     vega_bs = S * np.exp(-q * T) * pdf * np.sqrt(T)
-    vanna = (vega_bs / S) * (1 - d1 / (iv * np.sqrt(T)))
-    vomma = vega_bs * (d1 * d2 / iv)
+    vanna_bs = (vega_bs / S) * (1 - d1 / (iv * np.sqrt(T)))
+    vomma_bs = vega_bs * (d1 * d2 / iv)
+    
+    side = np.where(df['type'] == 'call', 1, -1)
+    charm_bs = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
+    speed_bs = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
+    zomma_bs = gamma_bs * ((d1 * d2 - 1) / iv)
+    color_bs = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1 - d1 * d2) / (2 * T))
 
-    # 5. Calcolo Shadow Gamma (Corretto per la pendenza IV)
-    # Questa è la formula "maniacale" per l'esposizione reale
-    df['Gamma_Adj'] = gamma_bs + (2 * vanna * df['skew_slope']) + (vomma * (df['skew_slope']**2))
+    # 5. Calcolo Shadow Greeks: Applicazione "Chain Rule" Skew-Spot (d_sigma/d_S)
+    # Questa logica incorpora l'elasticità dell'IV rispetto al mercato.
+    skew_S = df['skew_spot'].values
+    
+    # Vero Gamma, Vero Vanna e Vero Speed del Market Maker
+    df['Gamma_Adj'] = gamma_bs + (2 * vanna_bs * skew_S) + (vomma_bs * (skew_S**2))
+    vanna_adj = vanna_bs + (vomma_bs * skew_S)
+    speed_adj = speed_bs + (3 * zomma_bs * skew_S)
     
     # 6. Conversione in Esposizione Monetaria (Notional GEX & Cross-Greeks)
-    # Calcolo base dell'esposizione volumetrica con Penalità di Rumore (Noise Penalty)
-    # Se il Volume > OI, riduciamo drasticamente il peso del volume (tipico di YF data)
     liquidity_ratio = np.where(df['openInterest'] > 0, df['volume'] / df['openInterest'], 0)
     vol_weight = np.where(liquidity_ratio > 1.0, 0.05, 0.2)
     oi_weight = 1.0 - vol_weight
@@ -1178,18 +1216,9 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # GEX: Dollari di esposizione per 1% mossa del sottostante
     df['GEX_Total'] = df['Gamma_Adj'] * (S**2) * 0.01 * oi_vol * 100 * df['type_sign']
     
-    # --- IL DROPNA È STATO SPOSTATO ALLA FINE PER EVITARE VALUEERROR ---
-
-    # Cross-Greeks Scaling Istituzionale
-    side = np.where(df['type'] == 'call', 1, -1)
-    charm_raw = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
-    speed_raw = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
-    zomma_raw = gamma_bs * ((d1 * d2 - 1) / iv)
-    color_raw = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1 - d1 * d2) / (2 * T))
-    
-    # Calcolo Greche (Scaling puro, nessuna alterazione formule base)
-    df['Vanna'] = vanna * 0.01 * S * oi_vol * 100 * df['type_sign'] 
-    df['Charm'] = S * charm_raw * (1/252.0) * oi_vol * 100 * df['type_sign']
+    # Scaling Istituzionale delle Greche Aggiustate
+    df['Vanna'] = vanna_adj * 0.01 * S * oi_vol * 100 * df['type_sign'] 
+    df['Charm'] = S * charm_bs * (1/252.0) * oi_vol * 100 * df['type_sign']
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     
     term1 = -(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))
@@ -1197,18 +1226,19 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
     df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol * 100
     
-    df['Vomma'] = vomma * 0.0001 * oi_vol * 100 
-    df['Speed'] = speed_raw * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
+    df['Vomma'] = vomma_bs * 0.0001 * oi_vol * 100 
+    # Lo Speed viene calcolato sulla variabile "speed_adj" corretta per lo skew
+    df['Speed'] = speed_adj * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
     
     # Integrazione Nuove 3rd Order Greeks con Clipping Istituzionale Anti-Singolarità (Max Rischio Monetario: 10 Miliardi)
     MAX_EXPOSURE = 1e10
     
     # Zomma: Variazione monetaria del Gamma per 1% change IV
-    zomma_calc = zomma_raw * (S**2) * 0.0001 * oi_vol * 100 * df['type_sign']
+    zomma_calc = zomma_bs * (S**2) * 0.0001 * oi_vol * 100 * df['type_sign']
     df['Zomma'] = np.clip(zomma_calc, -MAX_EXPOSURE, MAX_EXPOSURE)
     
     # Color: Variazione monetaria del Gamma per 1 Giorno di decadimento (1/252)
-    color_calc = color_raw * (S**2) * 0.01 * (1/252.0) * oi_vol * 100 * df['type_sign']
+    color_calc = color_bs * (S**2) * 0.01 * (1/252.0) * oi_vol * 100 * df['type_sign']
     df['Color'] = np.clip(color_calc, -MAX_EXPOSURE, MAX_EXPOSURE)
     
     # Protezione esplosione Speed
