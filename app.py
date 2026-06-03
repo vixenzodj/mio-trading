@@ -1130,140 +1130,121 @@ def find_iv(target_price, S, K, T, r, q, option_type):
 @st.cache_data(ttl=60)
 def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df = df.copy()
-    if df.empty: return df
-    
-    # 1. Pre-processing Istituzionale
+    if df.empty:
+        return df
+
+    # 1. PRE-PROCESSING ISTITUZIONALE E CONVERSIONI DI SICUREZZA
     df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
     df['openInterest'] = df['openInterest'].fillna(0)
     df['volume'] = df['volume'].fillna(0)
     
-    # 2. Separazione Vettoriale per Calcolo Skew Puro (Evita derivate nulle su strike identici C/P)
-    df_c = df[df['type'] == 'call'].sort_values('strike').copy()
-    df_p = df[df['type'] == 'put'].sort_values('strike').copy()
-    
-    from scipy.interpolate import CubicSpline
-    # 3. Curva di Volatilità Istituzionale (Cubic Spline) e Calcolo Skew-Spot Analitico
-    for i, d in enumerate([df_c, df_p]):
-        if len(d) > 3:
-            # 1. Pulizia base dai dati sporchi di Yahoo Finance
-            iv_clean = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, np.nan).interpolate(method='linear').bfill().ffill()
-            iv_clean = iv_clean.rolling(window=3, min_periods=1, center=True).median()
-            iv_clean = np.maximum(iv_clean, 0.01)
+    # Gestione del feed della volatilità implicita
+    if 'iv_working' in df.columns:
+        df['iv_smoothed'] = pd.to_numeric(df['iv_working'], errors='coerce').fillna(df['impliedVolatility'])
+    else:
+        df['iv_smoothed'] = pd.to_numeric(df['impliedVolatility'], errors='coerce').fillna(0.15)
+        
+    df['d_sigma_dk'] = 0.0
+    S = float(S)
+
+    # 2. VOLATILITY SMILE SMOOTHER & ANALYTICAL SKEW SLOPE
+    for dte_val in df['dte_years'].unique():
+        mask = df['dte_years'] == dte_val
+        sub_df = df[mask]
+        
+        # Filtro per isolare dati di volatilità reali ed evitare buchi a zero
+        valid_mask = (sub_df['iv_smoothed'] > 0.01) & (sub_df['iv_smoothed'] < 3.0) & (~sub_df['iv_smoothed'].isna())
+        valid_pts = sub_df[valid_mask]
+        
+        if len(valid_pts) >= 4:
+            # Ponderazione monetaria: gli strike liquidi (ATM e Near-the-Money) definiscono la struttura dello skew
+            weights = (valid_pts['openInterest'].values + valid_pts['volume'].values + 1.0)
             
-            # 2. Fit Spline Cubica per ottenere una curva continua e differenziabile
-            strikes = d['strike'].values
-            ivs = iv_clean.values
-            valid_idx = np.concatenate(([True], np.diff(strikes) > 0)) # Assicura array strettamente crescente
-            strikes_valid, ivs_valid = strikes[valid_idx], ivs[valid_idx]
+            # Fit parabolico di 2° grado dello Skew rispetto allo Strike (K)
+            poly_coefs = np.polyfit(valid_pts['strike'].values, valid_pts['iv_smoothed'].values, 2, w=weights)
             
-            if len(strikes_valid) > 3:
-                cs = CubicSpline(strikes_valid, ivs_valid, bc_type='natural')
-                d['iv_working'] = cs(strikes)
-                # Derivata prima analitica (d_sigma / d_K) limitata per stabilità
-                skew_k = np.clip(cs(strikes, 1), -0.01, 0.01)
-            else:
-                d['iv_working'] = iv_clean.values
-                skew_k = np.clip(np.gradient(d['iv_working'], strikes), -0.01, 0.01)
+            # Ricostruzione della curva continua priva di rumore retail
+            smoothed_vals = np.polyval(poly_coefs, sub_df['strike'].values)
+            
+            # Controlli di robustezza asintotica per evitare la divergenza delle code paraboliche
+            min_bound = max(0.02, valid_pts['iv_smoothed'].min() * 0.5)
+            max_bound = min(2.5, valid_pts['iv_smoothed'].max() * 1.5)
+            smoothed_vals = np.clip(smoothed_vals, min_bound, max_bound)
+            
+            df.loc[mask, 'iv_smoothed'] = smoothed_vals
+            # Calcolo analitico esatto della pendenza dello Skew rispetto allo strike: d_sigma / dK = 2aK + b
+            df.loc[mask, 'd_sigma_dk'] = 2 * poly_coefs[0] * sub_df['strike'].values + poly_coefs[1]
         else:
-            d['iv_working'] = pd.to_numeric(d['impliedVolatility'], errors='coerce').replace(0, 0.01).bfill().ffill()
-            skew_k = 0.0
-            
-        # 3. Trasformazione Fondamentale: Conversione in d_sigma / d_S
-        # Approssimazione matematica istituzionale: d_sigma/d_S ≈ -(K/S) * d_sigma/d_K
-        d['skew_slope'] = skew_k
-        d['skew_spot'] = -(d['strike'].values / S) * skew_k
-        
-        if i == 0: df_c = d
-        else: df_p = d
-        
-    # Ricostruzione Ordine
-    df = pd.concat([df_c, df_p]).sort_values('strike').reset_index(drop=True)
+            # Fallback strutturale protettivo per catene illiquide o scadenze lunghissime residuali
+            df.loc[mask, 'iv_smoothed'] = df.loc[mask, 'iv_smoothed'].replace(0, 0.15).fillna(0.15)
 
-    # 4. Motore Greco Vettorializzato (Con Sweet Spot 0DTE)
-    T = np.maximum(df['dte_years'].values, 0.00005) if 'dte_years' in df.columns else 0.00005
-    iv = df['iv_working'].values
+    # 3. MATRICI VETTORIALI PER IL CALCOLO CORE DI BLACK-SCHOLES-MERTON
     K = df['strike'].values
-    d1 = (np.log(S / K) + (r - q + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
+    iv = df['iv_smoothed'].values
+    T = np.maximum(df['dte_years'].values, 0.00005) # Floor anti-singolarità per trading 0DTE intraday
+    
+    d1 = (np.log(S / K) + (r - q + 0.5 * iv ** 2) * T) / (iv * np.sqrt(T))
     d2 = d1 - iv * np.sqrt(T)
+    
     pdf = norm.pdf(d1)
-    cdf = norm.cdf(d1)
+    df['type_sign'] = np.where(df['type'] == 'call', 1, -1)
+    side = df['type_sign'].values
 
-    # Formule Standard BS (Greche pure)
+    # 4. CALCOLO DELLE GRECHE PURE DI BLACK-SCHOLES (BASE REPERTORIO COA)
     gamma_bs = np.exp(-q * T) * pdf / (S * iv * np.sqrt(T))
     vega_bs = S * np.exp(-q * T) * pdf * np.sqrt(T)
-    vanna_bs = (vega_bs / S) * (1 - d1 / (iv * np.sqrt(T)))
+    vanna_bs = (vega_bs / S) * (1.0 - d1 / (iv * np.sqrt(T)))
     vomma_bs = vega_bs * (d1 * d2 / iv)
+    charm_bs = side * q * np.exp(-q * T) * norm.cdf(d1 * side) - np.exp(-q * T) * pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T))
     
-    side = np.where(df['type'] == 'call', 1, -1)
-    charm_bs = -np.exp(-q * T) * (pdf * ((r - q) / (iv * np.sqrt(T)) - d2 / (2 * T)) + side * q * norm.cdf(d1 * side))
-    speed_bs = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1)
-    zomma_bs = gamma_bs * ((d1 * d2 - 1) / iv)
-    color_bs = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1 - d1 * d2) / (2 * T))
+    speed_bs = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1.0)
+    zomma_bs = gamma_bs * ((d1 * d2 - 1.0) / iv)
+    color_bs = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1.0 - d1 * d2) / (2 * T))
 
-    # 5. Calcolo Shadow Greeks: Applicazione "Chain Rule" Skew-Spot (d_sigma/d_S)
-    # Questa logica incorpora l'elasticità dell'IV rispetto al mercato.
-    skew_S = df['skew_spot'].values
+    # 5. INIEZIONE DINAMICA DELLO SKEW NELLE FORMULE DI EXPOSURE (WALL STREET DESK ALIGNMENT)
+    # Trasformazione Sticky-Moneyness dalla pendenza per Strike alla pendenza per Spot Price
+    d_sigma_ds = - (K / S) * df['d_sigma_dk'].values
     
-    # Vero Gamma, Vero Vanna e Vero Speed del Market Maker
-    df['Gamma_Adj'] = gamma_bs + (2 * vanna_bs * skew_S) + (vomma_bs * (skew_S**2))
-    vanna_adj = vanna_bs + (vomma_bs * skew_S)
-    speed_adj = speed_bs + (3 * zomma_bs * skew_S)
+    # Filtro di stabilità istituzionale per prevenire anomalie macro sulle ali Deep OTM
+    d_sigma_ds = np.clip(d_sigma_ds, -0.015, 0.015)
     
-    # 6. Conversione in Esposizione Monetaria (Notional GEX & Cross-Greeks)
-    liquidity_ratio = np.where(df['openInterest'] > 0, df['volume'] / df['openInterest'], 0)
-    vol_weight = np.where(liquidity_ratio > 1.0, 0.05, 0.2)
-    oi_weight = 1.0 - vol_weight
-    oi_vol = (df['openInterest'] * oi_weight) + (df['volume'] * vol_weight)
-    df['type_sign'] = df['type'].map({'call': 1, 'put': -1})
+    # Calcolo del Gamma e del Delta Skew-Adjusted (Derivate totali)
+    gamma_adj = gamma_bs + 2.0 * (vanna_bs / S) * d_sigma_ds
+    gamma_adj = np.maximum(gamma_adj, 0.0) # Il gamma di una singola opzione vanilla non può essere negativo
     
-    MAX_EXPOSURE = 1e10 # Tetto Istituzionale a 10 Miliardi
+    delta_bs = np.where(df['type'] == 'call', norm.cdf(d1) * np.exp(-q * T), (norm.cdf(d1) * np.exp(-q * T) - 1.0))
+    delta_adj = delta_bs + (vega_bs / S) * d_sigma_ds
 
-    # GEX: Dollari di esposizione per 1% mossa del sottostante
-    df['GEX_Total'] = df['Gamma_Adj'] * (S**2) * 0.01 * oi_vol * 100 * df['type_sign']
-    df['GEX_Total'] = np.clip(df['GEX_Total'], -MAX_EXPOSURE, MAX_EXPOSURE) # Scudo Singolarità ATM
-    
-    # Scaling Istituzionale delle Greche Aggiustate
-    df['Vanna'] = vanna_adj * 0.01 * S * oi_vol * 100 * df['type_sign'] 
-    df['Vanna'] = np.clip(df['Vanna'], -MAX_EXPOSURE, MAX_EXPOSURE) # Scudo Singolarità ATM
-    df['Charm'] = S * charm_bs * (1/252.0) * oi_vol * 100 * df['type_sign']
+    # 6. CONFIGURAZIONE DEI PESI DEI FLUSSI SULLA LIQUIDITÀ REALE (OI VS VOLUME)
+    oi_arr = df['openInterest'].values
+    vol_arr = df['volume'].values
+    l_ratio = np.where(oi_arr > 0, vol_arr / oi_arr, 0)
+    v_weight = np.where(l_ratio > 1.0, 0.05, 0.2)
+    oi_vol = (oi_arr * (1.0 - v_weight)) + (vol_arr * v_weight)
+
+    # 7. AGGREGAZIONE DELLE ESPOSIZIONI MONETARIE SCALATE (MURI DI LIQUIDITÀ DI SECONDO LIVELLO)
+    df['Gamma'] = gamma_adj * (S ** 2) * 0.01 * oi_vol * 100 * side
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
-    
-    term1 = -(S * np.exp(-q * T) * pdf * iv) / (2 * np.sqrt(T))
-    term2 = side * r * K * np.exp(-r * T) * norm.cdf(d2 * side)
-    term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
-    df['Theta'] = (term1 - term2 + term3) * (1/252.0) * oi_vol * 100
-    
-    df['Vomma'] = vomma_bs * 0.0001 * oi_vol * 100 
-    # Lo Speed viene calcolato sulla variabile "speed_adj" corretta per lo skew
-    df['Speed'] = speed_adj * oi_vol * 100 * (S**3) * 0.0001 * df['type_sign']
-    
-    # Integrazione Nuove 3rd Order Greeks con Clipping Istituzionale Anti-Singolarità (Max Rischio Monetario: 10 Miliardi)
-    MAX_EXPOSURE = 1e10
-    
-    # Zomma: Variazione monetaria del Gamma per 1% change IV
-    zomma_calc = zomma_bs * (S**2) * 0.0001 * oi_vol * 100 * df['type_sign']
-    df['Zomma'] = np.clip(zomma_calc, -MAX_EXPOSURE, MAX_EXPOSURE)
-    
-    # Color: Variazione monetaria del Gamma per 1 Giorno di decadimento (1/252)
-    color_calc = color_bs * (S**2) * 0.01 * (1/252.0) * oi_vol * 100 * df['type_sign']
-    df['Color'] = np.clip(color_calc, -MAX_EXPOSURE, MAX_EXPOSURE)
-    
-    # Protezione esplosione Speed
-    df['Speed'] = np.clip(df['Speed'], -MAX_EXPOSURE, MAX_EXPOSURE)
-    
-    df['Gamma'] = df['GEX_Total']
-    
-    df['Delta'] = np.exp(-q * T) * np.where(df['type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
-    df['DEX'] = df['Delta'] * S * 0.01 * oi_vol * 100
-    
-    # Garantisce che tutte le colonne esistano prima del ritorno
-    for col in ['Gamma', 'Vanna', 'Vomma', 'Charm', 'Speed', 'Zomma', 'Color', 'Vega', 'Theta', 'DEX']:
-        if col not in df.columns:
-            df[col] = 0.0
+    df['Vanna'] = vanna_bs * S * 0.01 * oi_vol * 100 * side
+    df['Charm'] = charm_bs * oi_vol * 100 * side
+    df['Vomma'] = vomma_bs * 0.0001 * oi_vol * 100
+    df['Zomma'] = zomma_bs * (S ** 2) * 0.01 * oi_vol * 100 * side
+    df['Speed'] = speed_bs * oi_vol * 100 * (S ** 3) * 0.0001 * side
+    df['Color'] = color_bs * oi_vol * 100 * (1.0 / 252.0) * side
 
-    # 7. PULIZIA FINALE (Spostata qui per proteggere l'integrità dei vettori)
-    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['GEX_Total'])
-    
+    # Formula Omnicomprensiva del Theta basata su giorni commerciali reali (1/252)
+    theta_term1 = -(S * np.exp(-q * T) * pdf * iv) / (2.0 * np.sqrt(T))
+    theta_term2 = side * r * K * np.exp(-r * T) * norm.cdf(d2 * side)
+    theta_term3 = side * q * S * np.exp(-q * T) * norm.cdf(d1 * side)
+    df['Theta'] = (theta_term1 - theta_term2 + theta_term3) * (1.0 / 252.0) * oi_vol * 100
+
+    # Delta Exposure Netta (DEX) calibrata con la sensibilità dello Skew
+    df['DEX'] = delta_adj * oi_vol * 100 * S
+
+    # 8. SISTEMA ANTI-ALLUCINAZIONE VISIVA: NORMALIZZAZIONE A DURATION COSTANTE (30 GIORNI)
+    # Permette la coesistenza visiva nei grafici tra l'esplosione delle 0DTE e l'architettura Swing a lungo termine
+    df['GEX_Normalized'] = df['Gamma'] * np.sqrt(T / (30.0 / 365.25))
+
     return df
 
 @st.cache_data(ttl=60, show_spinner=False)
