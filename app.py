@@ -2990,9 +2990,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         </div>
                     """, unsafe_allow_html=True)
 
-            # --- ANCORAGGIO VISIVO ANTI-SCHIACCIAMENTO (SOLO GRAFICA) ---
-            # Creiamo array puramente visivi tagliati al 95° percentile strutturale 
-            # per non alterare la matematica a monte. I pop-up mostreranno il dato reale.
+            # --- ANCORAGGIO VISIVO E FORMATTAZIONE STRUTTURALE SUFFISSI (SOLO GRAFICA) ---
             def get_visual_array(series):
                 abs_v = np.abs(series.values)
                 if len(abs_v) > 0:
@@ -3002,11 +3000,29 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     ceiling = 1e8
                 return np.clip(series.values, -ceiling, ceiling)
 
+            def format_financial(val):
+                if pd.isna(val) or val == 0: 
+                    return "0"
+                abs_v = abs(val)
+                sign = "-" if val < 0 else ""
+                if abs_v >= 1e9:
+                    return f"{sign}{abs_v / 1e9:.2f} B"
+                elif abs_v >= 1e6:
+                    return f"{sign}{abs_v / 1e6:.2f} M"
+                elif abs_v >= 1e3:
+                    return f"{sign}{abs_v / 1e3:.1f} K"
+                return f"{sign}{abs_v:.0f}"
+
             plot_metric = get_visual_array(visible_agg[metric])
             plot_gamma = get_visual_array(visible_agg['Gamma'])
             plot_vanna = get_visual_array(visible_agg['Vanna'])
             plot_dex = get_visual_array(visible_agg['DEX'])
-            # -------------------------------------------------------------
+
+            fmt_metric = [format_financial(x) for x in visible_agg[metric]]
+            fmt_gamma = [format_financial(x) for x in visible_agg['Gamma']]
+            fmt_vanna = [format_financial(x) for x in visible_agg['Vanna']]
+            fmt_dex = [format_financial(x) for x in visible_agg['DEX']]
+            # ----------------------------------------------------------------------------
 
             fig = go.Figure()
 
@@ -3017,8 +3033,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     orientation='h', 
                     marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]),
                     name=metric,
-                    customdata=visible_agg[metric],
-                    hovertemplate="<b>Strike: %{y}</b><br>Net " + metric + ": %{customdata:,.0f}<extra></extra>"
+                    customdata=fmt_metric,
+                    hovertemplate="<b>Strike: %{y}</b><br>Net " + metric + ": <b>%{customdata}</b><extra></extra>"
                 ))
                 xaxis_title = f"Net {metric} Exposure (Visually Scaled)"
                 
@@ -3030,8 +3046,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), 
                     name="Gamma (Background)",
                     xaxis="x1",
-                    customdata=visible_agg['Gamma'],
-                    hovertemplate="<b>Strike: %{y}</b><br>Net Gamma: %{customdata:,.0f}<extra></extra>"
+                    customdata=fmt_gamma,
+                    hovertemplate="<b>Strike: %{y}</b><br>Net Gamma: <b>%{customdata}</b><extra></extra>"
                 ))
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
@@ -3044,8 +3060,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     width=gran * 0.4, 
                     name="Vanna (Focus)",
                     xaxis="x2",
-                    customdata=visible_agg['Vanna'],
-                    hovertemplate="<b>Strike: %{y}</b><br>Net Vanna: %{customdata:,.0f}<extra></extra>"
+                    customdata=fmt_vanna,
+                    hovertemplate="<b>Strike: %{y}</b><br>Net Vanna: <b>%{customdata}</b><extra></extra>"
                 ))
                 fig.update_layout(
                     xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
@@ -3059,15 +3075,15 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     y=visible_agg['strike'], x=plot_gamma, orientation='h', 
                     marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), 
                     name="Gamma (Background)", xaxis="x1",
-                    customdata=visible_agg['Gamma'],
-                    hovertemplate="<b>Strike: %{y}</b><br>Net Gamma: %{customdata:,.0f}<extra></extra>"
+                    customdata=fmt_gamma,
+                    hovertemplate="<b>Strike: %{y}</b><br>Net Gamma: <b>%{customdata}</b><extra></extra>"
                 ))
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], x=plot_dex, orientation='h', 
                     marker=dict(color=['#00FFCC' if x >= 0 else '#FF3366' for x in visible_agg['DEX']], line=dict(color='white', width=1)),
                     width=gran * 0.4, name="Delta Exposure (DEX)", xaxis="x2",
-                    customdata=visible_agg['DEX'],
-                    hovertemplate="<b>Strike: %{y}</b><br>Net DEX: %{customdata:,.0f}<extra></extra>"
+                    customdata=fmt_dex,
+                    hovertemplate="<b>Strike: %{y}</b><br>Net DEX: <b>%{customdata}</b><extra></extra>"
                 ))
                 fig.update_layout(
                     xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
@@ -3081,8 +3097,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     y=visible_agg['strike'], x=plot_dex, orientation='h', 
                     marker=dict(color=['#00FFCC' if x >= 0 else '#FF3366' for x in visible_agg['DEX']]),
                     name="DEX Netto",
-                    customdata=visible_agg['DEX'],
-                    hovertemplate="<b>Strike: %{y}</b><br>Net DEX: %{customdata:,.0f}<extra></extra>"
+                    customdata=fmt_dex,
+                    hovertemplate="<b>Strike: %{y}</b><br>Net DEX: <b>%{customdata}</b><extra></extra>"
                 ))
                 xaxis_title = "Pure Delta Exposure (DEX)"
 
