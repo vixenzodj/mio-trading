@@ -2990,30 +2990,52 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                         </div>
                     """, unsafe_allow_html=True)
 
+            # --- ANCORAGGIO VISIVO ANTI-SCHIACCIAMENTO (SOLO GRAFICA) ---
+            # Creiamo array puramente visivi tagliati al 95° percentile strutturale 
+            # per non alterare la matematica a monte. I pop-up mostreranno il dato reale.
+            def get_visual_array(series):
+                abs_v = np.abs(series.values)
+                if len(abs_v) > 0:
+                    ceiling = np.percentile(abs_v, 95) * 2.5
+                    if ceiling <= 0: ceiling = np.max(abs_v) if np.max(abs_v) > 0 else 1e8
+                else:
+                    ceiling = 1e8
+                return np.clip(series.values, -ceiling, ceiling)
+
+            plot_metric = get_visual_array(visible_agg[metric])
+            plot_gamma = get_visual_array(visible_agg['Gamma'])
+            plot_vanna = get_visual_array(visible_agg['Vanna'])
+            plot_dex = get_visual_array(visible_agg['DEX'])
+            # -------------------------------------------------------------
+
             fig = go.Figure()
 
             if view_mode == "📊 Standard":
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
-                    x=visible_agg[metric], 
+                    x=plot_metric, 
                     orientation='h', 
                     marker=dict(color=['#00FF41' if x >= 0 else '#FF4136' for x in visible_agg[metric]]),
-                    name=metric
+                    name=metric,
+                    customdata=visible_agg[metric],
+                    hovertemplate="<b>Strike: %{y}</b><br>Net " + metric + ": %{customdata:,.0f}<extra></extra>"
                 ))
-                xaxis_title = f"Net {metric} Exposure"
+                xaxis_title = f"Net {metric} Exposure (Visually Scaled)"
                 
             elif view_mode == "🌪️ Vanna Overlay":
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
-                    x=visible_agg['Gamma'], 
+                    x=plot_gamma, 
                     orientation='h', 
                     marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), 
                     name="Gamma (Background)",
-                    xaxis="x1"
+                    xaxis="x1",
+                    customdata=visible_agg['Gamma'],
+                    hovertemplate="<b>Strike: %{y}</b><br>Net Gamma: %{customdata:,.0f}<extra></extra>"
                 ))
                 fig.add_trace(go.Bar(
                     y=visible_agg['strike'], 
-                    x=visible_agg['Vanna'], 
+                    x=plot_vanna, 
                     orientation='h', 
                     marker=dict(
                         color=['#00FFFF' if x >= 0 else '#FF00FF' for x in visible_agg['Vanna']], 
@@ -3021,7 +3043,9 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     ),
                     width=gran * 0.4, 
                     name="Vanna (Focus)",
-                    xaxis="x2"
+                    xaxis="x2",
+                    customdata=visible_agg['Vanna'],
+                    hovertemplate="<b>Strike: %{y}</b><br>Net Vanna: %{customdata:,.0f}<extra></extra>"
                 ))
                 fig.update_layout(
                     xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
@@ -3032,14 +3056,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
             elif view_mode == "⚡ DEX Overlay":
                 fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], x=visible_agg['Gamma'], orientation='h', 
+                    y=visible_agg['strike'], x=plot_gamma, orientation='h', 
                     marker=dict(color='rgba(100, 100, 100, 0.3)', line=dict(width=0)), 
-                    name="Gamma (Background)", xaxis="x1"
+                    name="Gamma (Background)", xaxis="x1",
+                    customdata=visible_agg['Gamma'],
+                    hovertemplate="<b>Strike: %{y}</b><br>Net Gamma: %{customdata:,.0f}<extra></extra>"
                 ))
                 fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], x=visible_agg['DEX'], orientation='h', 
+                    y=visible_agg['strike'], x=plot_dex, orientation='h', 
                     marker=dict(color=['#00FFCC' if x >= 0 else '#FF3366' for x in visible_agg['DEX']], line=dict(color='white', width=1)),
-                    width=gran * 0.4, name="Delta Exposure (DEX)", xaxis="x2"
+                    width=gran * 0.4, name="Delta Exposure (DEX)", xaxis="x2",
+                    customdata=visible_agg['DEX'],
+                    hovertemplate="<b>Strike: %{y}</b><br>Net DEX: %{customdata:,.0f}<extra></extra>"
                 ))
                 fig.update_layout(
                     xaxis=dict(title="Gamma Exposure", side="bottom", showgrid=False),
@@ -3050,9 +3078,11 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 
             elif view_mode == "📉 Puro DEX":
                 fig.add_trace(go.Bar(
-                    y=visible_agg['strike'], x=visible_agg['DEX'], orientation='h', 
+                    y=visible_agg['strike'], x=plot_dex, orientation='h', 
                     marker=dict(color=['#00FFCC' if x >= 0 else '#FF3366' for x in visible_agg['DEX']]),
-                    name="DEX Netto"
+                    name="DEX Netto",
+                    customdata=visible_agg['DEX'],
+                    hovertemplate="<b>Strike: %{y}</b><br>Net DEX: %{customdata:,.0f}<extra></extra>"
                 ))
                 xaxis_title = "Pure Delta Exposure (DEX)"
 
