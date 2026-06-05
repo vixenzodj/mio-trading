@@ -1074,23 +1074,24 @@ def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     gex_static = gamma_bs * (price**2) * 0.01 * exposure_size * 100 * side
     return np.sum(gex_static)
 
-def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
-    """Calcolo Zero Gamma Dinamico con integrazione Vanna e Skew-Spot Proxy"""
+def calculate_0g_dynamic(price, df, S0, r=DYNAMIC_R, q=0.0):
+    """Calcolo Zero Gamma Dinamico corretto per Espansione di Taylor Sticky-Strike Pura"""
     K = df['strike'].values
+    T = np.maximum(df['dte_years'].values, 0.00005)
     
-    # Usiamo lo skew_spot se disponibile, altrimenti deriviamo lo skew_slope approssimato
     if 'skew_spot' in df.columns:
         skew_S = df['skew_spot'].values
-    elif 'skew_slope' in df.columns:
-        skew_S = -(K / price) * df['skew_slope'].values
+    elif 'd_sigma_dk' in df.columns:
+        skew_S = -(K / S0) * df['d_sigma_dk'].values
     else:
         skew_S = 0.0
         
-    iv_base = df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values
-    # Dinamica Sticky-Strike reale: L'IV si muove sulla curva seguendo lo skew per variazioni di S
-    iv_dyn = np.maximum(iv_base + skew_S * (price - K), 0.01)
+    iv_base = df['iv_smoothed'].values if 'iv_smoothed' in df.columns else (df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values)
     
-    T = np.maximum(df['dte_years'].values, 0.00005)
+    # Espansione differenziale corretta rispetto allo Spot Iniziale (S0), senza floor empirici distorsivi
+    delta_spot = price - S0
+    iv_dyn = np.maximum(iv_base + skew_S * delta_spot, 0.01)
+    
     oi_arr = df['openInterest'].fillna(0).values
     vol_arr = df['volume'].fillna(0).values
     l_ratio = np.where(oi_arr > 0, vol_arr / oi_arr, 0)
@@ -1105,8 +1106,8 @@ def calculate_0g_dynamic(price, df, r=DYNAMIC_R, q=0.0):
     vanna_bs = (vega_bs / price) * (1 - d1 / (iv_dyn * np.sqrt(T)))
     vomma_bs = vega_bs * (d1 * d2 / iv_dyn)
     
-    # Shadow Gamma: Gamma Istituzionale corretto con la Chain Rule esatta
-    gamma_adj = gamma_bs + (2 * vanna_bs * skew_S) + (vomma_bs * (skew_S**2))
+    # Shadow Gamma: Modello istituzionale puro basato sulla variazione totale dello skew
+    gamma_adj = gamma_bs + (2.0 * vanna_bs * skew_S) + (vomma_bs * (skew_S**2))
     
     side = np.where(df['type'] == 'call', 1, -1)
     gex_dyn = gamma_adj * (price**2) * 0.01 * exposure_size * 100 * side
@@ -1209,11 +1210,12 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     d_sigma_ds = np.clip(d_sigma_ds, -0.015, 0.015)
     
     # Calcolo del Gamma e del Delta Skew-Adjusted (Derivate totali)
-    gamma_adj = gamma_bs + 2.0 * (vanna_bs / S) * d_sigma_ds
+    # RIMOSSA LA DIVISIONE ERRATA PER "S": Le funzioni analitiche BSM di Vega e Vanna esprimono già la corretta sensibilità assoluta spaziale.
+    gamma_adj = gamma_bs + 2.0 * vanna_bs * d_sigma_ds
     gamma_adj = np.maximum(gamma_adj, 0.0) # Il gamma di una singola opzione vanilla non può essere negativo
     
     delta_bs = np.where(df['type'] == 'call', norm.cdf(d1) * np.exp(-q * T), (norm.cdf(d1) * np.exp(-q * T) - 1.0))
-    delta_adj = delta_bs + (vega_bs / S) * d_sigma_ds
+    delta_adj = delta_bs + vega_bs * d_sigma_ds
 
     # 6. CONFIGURAZIONE DEI PESI DEI FLUSSI SULLA LIQUIDITÀ REALE (OI VS VOLUME)
     oi_arr = df['openInterest'].values
@@ -2668,7 +2670,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             except: z_gamma = spot 
 
             # CALCOLO 0-GAMMA DINAMICO (Ricerca Espansa al 50%)
-            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.50, spot * 1.50, args=(raw_data, DYNAMIC_R, div_yield))
+            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.50, spot * 1.50, args=(raw_data, spot, DYNAMIC_R, div_yield))
             except: z_gamma_dyn = spot
 
             df = get_greeks_pro(raw_data, spot, r=DYNAMIC_R, q=div_yield)
@@ -3563,7 +3565,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             # Calcolo 0-G Statico e Dinamico
             try: zg_val = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan,))
             except: zg_val = px
-            try: zg_dyn = brentq(calculate_0g_dynamic, px*0.75, px*1.25, args=(df_scan,))
+            try: zg_dyn = brentq(calculate_0g_dynamic, px*0.75, px*1.25, args=(df_scan, px))
             except: zg_dyn = px
 
             # Calcolo Greche Scanner
