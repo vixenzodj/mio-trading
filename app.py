@@ -1088,9 +1088,10 @@ def calculate_0g_dynamic(price, df, S0, r=DYNAMIC_R, q=0.0):
         
     iv_base = df['iv_smoothed'].values if 'iv_smoothed' in df.columns else (df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values)
     
-    # Espansione differenziale corretta rispetto allo Spot Iniziale (S0), senza floor empirici distorsivi
-    delta_spot = price - S0
-    iv_dyn = np.maximum(iv_base + skew_S * delta_spot, 0.01)
+    # Risolutore ancorato correttamente allo Spot Iniziale (S0) per evitare la cecità sul livello ATM
+    delta_spot_relativo = (price - S0) / S0 if S0 > 0 else 0.0
+    iv_dyn = iv_base + (skew_S * S0) * delta_spot_relativo
+    iv_dyn = np.clip(iv_dyn, 0.01, 2.5)  # Protezione del dominio di Black-Scholes per evitare il fallimento di brentq
     
     oi_arr = df['openInterest'].fillna(0).values
     vol_arr = df['volume'].fillna(0).values
@@ -2919,29 +2920,39 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 iv_atm = raw_data.iloc[(raw_data['strike'] - spot).abs().argsort()[:1]]['impliedVolatility'].values[0]
                 iv_atm = max(iv_atm, 0.01) # Protezione limite
                 
-                # 2. Definisce la vera coda (Tail) usando la -1 Standard Deviation
-                # Aggiungiamo un severo FILTRO DI LIQUIDITÀ: escludiamo contratti con Bid a 0 o Spread > 100% (Anomalie del Weekend)
-                tail_puts = raw_data[(raw_data['type'] == 'put') & 
-                                     (raw_data['strike'] <= sd1_down) & 
-                                     (raw_data['openInterest'] > 0) & 
-                                     (raw_data['bid'] > 0)] # Scudo contro "prezzi fantasma"
-                
-                # Filtro aggiuntivo: escludiamo IV palesemente irreali (> 300%) comuni sulle 0DTE illiquide a mercato chiuso
-                tail_puts = tail_puts[tail_puts['impliedVolatility'] < 3.0]
-                
-                if not tail_puts.empty:
-                    # 3. Media ponderata dell'IV di coda basata sui contratti aperti (Smart Money)
-                    iv_put_tail = np.average(tail_puts['impliedVolatility'], weights=tail_puts['openInterest'])
+                df_put = raw_data[raw_data['type'] == 'put'].copy()
+                # --- LOGICA ISTITUZIONALE NORMALIZZATA PER TAIL RISK (MONEYNESS RELATIVA) ---
+                if not df_put.empty and spot > 0:
+                    # Pulizia preliminare della Option Chain dai bad ticks di Yahoo Finance
+                    df_put_pulito = df_put[(df_put['bid'] > 0) & (df_put['openInterest'] > 0)].copy()
+                    
+                    # Definiamo la vera "Coda" in percentuale (Moneyness tra l'85% e il 92% dello Spot attuale)
+                    limite_inferiore_coda = spot * 0.85
+                    limite_superiore_coda = spot * 0.92
+                    
+                    df_coda = df_put_pulito[(df_put_pulito['strike'] >= limite_inferiore_coda) & (df_put_pulito['strike'] <= limite_superiore_coda)].copy()
+                    
+                    # Definiamo il comparto At-The-Money (ATM) per la normalizzazione del rapporto (Moneyness tra 98% e 102%)
+                    df_atm = df_put_pulito[(df_put_pulito['strike'] >= spot * 0.98) & (df_put_pulito['strike'] <= spot * 1.02)].copy()
+                    
+                    epsilon = 1e-9  # Protezione contro la divisione per zero
+                    sum_oi_atm = df_atm['openInterest'].sum() + epsilon
+                    sum_oi_coda = df_coda['openInterest'].sum()
+                    
+                    # Calcolo dell'indice di coda pesato per la volatilità dinamica delle ali per catturare lo skew di panico
+                    if not df_coda.empty:
+                        iv_medio_coda = df_coda['iv_smoothed'].mean() if 'iv_smoothed' in df_coda.columns else df_coda['impliedVolatility'].mean()
+                        tail_risk_greggio = (sum_oi_coda / sum_oi_atm) * (iv_medio_coda + epsilon)
+                        
+                        # Normalizzazione in scala 0 - 100% condizionata dal fattore tempo (regola della radice del tempo)
+                        t_scadenza = df_coda['dte_years'].iloc[0] * 365.25 if 'dte_years' in df_coda.columns else 30.0
+                        fattore_tempo = np.sqrt(max(t_scadenza, 1.0) / 365.25)
+                        
+                        kurt_pct = np.clip((tail_risk_greggio / fattore_tempo) * 100.0, 0.0, 100.0)
+                    else:
+                        kurt_pct = 0.0
                 else:
-                    iv_put_tail = iv_atm
-                
-                # 4. Skew Ratio (Premio per il rischio di coda estremo)
-                skew_ratio = iv_put_tail / iv_atm
-                
-                # 5. Normalizzazione Istituzionale (0 - 100%)
-                # Uno skew ratio base è ~1.05. Sopra 1.50 scatta il panico estremo.
-                # Allarghiamo la tolleranza superiore a 2.0 (per gestire la sensibilità delle 0DTE)
-                kurt_pct = min(max((skew_ratio - 1.05) * (100 / 0.95), 0), 100)
+                    kurt_pct = 0.0
                 
                 kurt_color = "#2ecc71" if kurt_pct < 30 else ("#f1c40f" if kurt_pct < 60 else "#e74c3c")
             except Exception as e:
