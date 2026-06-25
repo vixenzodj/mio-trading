@@ -25,67 +25,36 @@ import yfinance as yf
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
-# --- INIZIO SISTEMA ANTI-BAN (AUTO-HEALING STOCHASTIC ENGINE) ---
-import random
-import yfinance.utils as yf_utils
-
-_BROWSERS = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
-
-@st.cache_resource
-def _get_or_create_healing_session():
-    """
-    Sessione curl_cffi nativa con jitter stocastico.
-    @st.cache_resource garantisce che sia creata UNA SOLA VOLTA per tutta la
-    vita del server Streamlit, sopravvivendo a tutti i re-run dello script.
-    """
-    browser = random.choice(_BROWSERS)
-    sess = cffi_requests.Session(impersonate=browser)
-    _orig_req = sess.request
-    def _patched_request(method, url, *args, **kwargs):
-        # 1. PROTEZIONE FINGERPRINT: yfinance inietta un User-Agent statico.
-        # Se impersoniamo Safari TLS ma l'header dice Chrome, Yahoo ci banna all'istante (401/403).
-        # Rimuoviamo l'header forzato per far usare a curl_cffi il suo User-Agent perfettamente allineato!
-        if 'headers' in kwargs and kwargs['headers']:
-            kwargs['headers'] = {k: v for k, v in kwargs['headers'].items() if k.lower() != 'user-agent'}
-
-        # 2. JITTER STOCASTICO: prevenzione filtri volumetrici (0.1s - 0.4s)
-        time.sleep(random.uniform(0.1, 0.4))
-        
-        # 3. NESSUN RETRY INTERNO PER I 401/403!
-        # Se c'è un 401 (Crumb scaduto), dobbiamo restituirlo INONDIZIONATAMENTE a yfinance.
-        # yfinance ha un suo "healing loop" che riconosce il 401, pulisce i cookie, 
-        # chiede un NUOVO crumb e ricalcola un NUOVO URL.
-        # Nascondere o ritentare internamente il 401 con il VECCHIO URL (scaduto)
-        # equivaleva a schiantarsi in un vicolo cieco in loop, causando la "Schermata Nera".
-        return _orig_req(method, url, *args, **kwargs)
-        
-    sess.request = _patched_request
-    return sess
-
-# Sessione globale: curl_cffi pura, creata una volta sola
-_HEALING_SESSION = _get_or_create_healing_session()
-
-# SOSTITUZIONE DEFINITIVA E ASSOLUTA: Iniettiamo la sessione DIRETTAMENTE nel core di yfinance.
-# Ignoriamo del tutto yf.Ticker e yf.download per evitare qualsiasi loop di Streamlit.
-# Facendo monkey-patching di YfData bypassiamo i controlli "isinstance" fallati di yfinance
-# (causati dai reload dei moduli su Streamlit) e impediamo alla radice YFDataException.
-import yfinance.data as yf_data
-if not getattr(yf_data.YfData, '_is_stealth', False):
-    def _stealth_set_session(self, session):
-        # Forza incondizionatamente la nostra sessione anti-ban stocastica.
-        # NESSUN controllo di tipo = NESSUN YFDataException possibile.
-        self._session = _HEALING_SESSION
+# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE & RATE LIMITER) ---
+# La sessione vive 1 ora (previene Crumb Expiration), persistendo tra i riavvii (previene TLS Handshake Spam)
+@st.cache_resource(ttl=3600)
+def get_stealth_session():
+    session = cffi_requests.Session(impersonate="chrome")
     
-    yf_data.YfData._set_session = _stealth_set_session
-    yf_data.YfData._is_stealth = True
+    # Inject Custom Rate Limiter: Freno a mano chirurgico
+    _original_request = session.request
+    def _rate_limited_request(*args, **kwargs):
+        time.sleep(0.25)  # Delay di 250ms (max 4 chiamate/sec). Azzera il rischio Errore 429 (Rate Limit).
+        return _original_request(*args, **kwargs)
+        
+    session.request = _rate_limited_request
+    return session
 
-# 2. PATCH CRUMB MANAGER: yfinance recupera i Crumb (cookie) in un'area
-# separata (yfinance.utils). Se non patchiamo anche questo, il recupero 
-# dei Crumb fallisce silenziosamente causando la schermata nera ("Errore nel recupero dati").
-if not getattr(yf_utils, '_is_stealth', False):
-    yf_utils.get_session = lambda: _HEALING_SESSION
-    yf_utils._is_stealth = True
+# 1. Overriding di yf.download
+_original_yf_download = yf.download
+def _stealth_download(*args, **kwargs):
+    kwargs['session'] = get_stealth_session()
+    return _original_yf_download(*args, **kwargs)
+yf.download = _stealth_download
 
+# 2. Overriding di yf.Ticker
+_original_yf_ticker = yf.Ticker
+class StealthTicker(_original_yf_ticker):
+    def __init__(self, ticker, session=None, **kwargs):
+        if session is None:
+            session = get_stealth_session()
+        super().__init__(ticker, session=session, **kwargs)
+yf.Ticker = StealthTicker
 # --- FINE SISTEMA ANTI-BAN ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
