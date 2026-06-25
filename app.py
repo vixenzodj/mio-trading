@@ -25,35 +25,72 @@ import yfinance as yf
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
-# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE & RATE LIMITER) ---
-# La sessione vive 1 ora (previene Crumb Expiration), persistendo tra i riavvii (previene TLS Handshake Spam)
-@st.cache_resource(ttl=3600)
-def get_stealth_session():
-    session = cffi_requests.Session(impersonate="chrome")
-    
-    # Inject Custom Rate Limiter: Freno a mano chirurgico
-    _original_request = session.request
-    def _rate_limited_request(*args, **kwargs):
-        time.sleep(0.25)  # Delay di 250ms (max 4 chiamate/sec). Azzera il rischio Errore 429 (Rate Limit).
-        return _original_request(*args, **kwargs)
-        
-    session.request = _rate_limited_request
-    return session
+# --- INIZIO SISTEMA ANTI-BAN (AUTO-HEALING STOCHASTIC ENGINE) ---
+import random
+import yfinance.utils as yf_utils
 
-# 1. Overriding di yf.download
+class AutoHealingSession:
+    """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb"""
+    def __init__(self):
+        self.browsers = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
+        self.session = self._create_session()
+
+    def _create_session(self):
+        # Ruota il fingerprint TLS per eludere il riconoscimento dei pattern
+        browser = random.choice(self.browsers)
+        return cffi_requests.Session(impersonate=browser)
+
+    def request(self, *args, **kwargs):
+        max_retries = 3
+        base_delay = 1.0
+
+        for attempt in range(max_retries):
+            try:
+                # Jitter stocastico per eludere i filtri volumetrici (0.2s - 0.7s)
+                time.sleep(random.uniform(0.2, 0.7))
+                
+                response = self.session.request(*args, **kwargs)
+                
+                # Intercettazione blocchi di sicurezza Yahoo
+                if response.status_code in [401, 403, 429]:
+                    raise Exception(f"Yahoo Security Block: {response.status_code}")
+                    
+                return response
+                
+            except Exception as e:
+                # Logica di Auto-Guarigione (Backoff Esponenziale)
+                time.sleep(base_delay * (2 ** attempt)) 
+                
+                # 1. Distruzione della vecchia sessione bannata
+                self.session = self._create_session()
+                
+                # 2. Distruzione forzata della cache dei Crumb/Cookie di yfinance (FONDAMENTALE)
+                yf_utils.get_session().cookies.clear()
+                
+                if attempt == max_retries - 1:
+                    # Fail-safe per evitare il crash di Streamlit: ritorna un oggetto vuoto
+                    class DummyResponse:
+                        status_code = 404
+                        text = "{}"
+                        @staticmethod
+                        def json(): return {}
+                    return DummyResponse()
+
+# Inizializzazione Globale Singola (Non cachata, si rigenera a ogni run o errore)
+_HEALING_SESSION = AutoHealingSession()
+
+# 1. Overriding Invasivo di yf.download
 _original_yf_download = yf.download
 def _stealth_download(*args, **kwargs):
-    kwargs['session'] = get_stealth_session()
+    kwargs['session'] = _HEALING_SESSION
     return _original_yf_download(*args, **kwargs)
 yf.download = _stealth_download
 
-# 2. Overriding di yf.Ticker
+# 2. Overriding Invasivo di yf.Ticker
 _original_yf_ticker = yf.Ticker
 class StealthTicker(_original_yf_ticker):
     def __init__(self, ticker, session=None, **kwargs):
-        if session is None:
-            session = get_stealth_session()
-        super().__init__(ticker, session=session, **kwargs)
+        super().__init__(ticker, session=_HEALING_SESSION, **kwargs)
 yf.Ticker = StealthTicker
 # --- FINE SISTEMA ANTI-BAN ---
 
