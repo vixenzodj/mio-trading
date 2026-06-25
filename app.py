@@ -59,28 +59,23 @@ def _get_or_create_healing_session():
     sess.request = _patched_request
     return sess
 
-# Sessione globale: curl_cffi pura, accettata nativamente da yfinance, creata una volta sola
+# Sessione globale: curl_cffi pura, creata una volta sola
 _HEALING_SESSION = _get_or_create_healing_session()
 
-# 1. Override yf.download — guardia _is_stealth previene il doppio-wrapping sui re-run
-if not getattr(yf.download, '_is_stealth', False):
-    _orig_download = yf.download
-    def _stealth_download(*args, **kwargs):
-        kwargs['session'] = _HEALING_SESSION
-        return _orig_download(*args, **kwargs)
-    _stealth_download._is_stealth = True
-    yf.download = _stealth_download
+# SOSTITUZIONE DEFINITIVA E ASSOLUTA: Iniettiamo la sessione DIRETTAMENTE nel core di yfinance.
+# Ignoriamo del tutto yf.Ticker e yf.download per evitare qualsiasi loop di Streamlit.
+# Facendo monkey-patching di YfData bypassiamo i controlli "isinstance" fallati di yfinance
+# (causati dai reload dei moduli su Streamlit) e impediamo alla radice YFDataException.
+import yfinance.data as yf_data
+if not getattr(yf_data.YfData, '_is_stealth', False):
+    def _stealth_set_session(self, session):
+        # Forza incondizionatamente la nostra sessione anti-ban stocastica.
+        # NESSUN controllo di tipo = NESSUN YFDataException possibile.
+        self._session = _HEALING_SESSION
+    
+    yf_data.YfData._set_session = _stealth_set_session
+    yf_data.YfData._is_stealth = True
 
-# 2. Override yf.Ticker — guardia _is_stealth previene la ricorsione infinita sui re-run
-# CAUSA ROOT del crash: ad ogni re-run Streamlit, senza guardia, _OriginalTicker catturava
-# StealthTicker stessa, creando un loop infinito che terminava con YFDataException.
-if not getattr(yf.Ticker, '_is_stealth', False):
-    _OriginalTicker = yf.Ticker
-    class StealthTicker(_OriginalTicker):
-        _is_stealth = True
-        def __init__(self, ticker, session=None, **kwargs):
-            _OriginalTicker.__init__(self, ticker, session=_HEALING_SESSION, **kwargs)
-    yf.Ticker = StealthTicker
 # --- FINE SISTEMA ANTI-BAN ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
