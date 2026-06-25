@@ -32,9 +32,11 @@ import yfinance.utils as yf_utils
 class AutoHealingSession(requests.Session):
     """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb (Eredita da requests.Session)"""
     def __init__(self):
+        self._init_done = False
         super().__init__()
         self.browsers = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
         self.inner_session = self._create_session()
+        self._init_done = True
 
     def _create_session(self):
         # Ruota il fingerprint TLS per eludere il riconoscimento dei pattern
@@ -80,27 +82,43 @@ class AutoHealingSession(requests.Session):
     # Proprietà per mantenere la sincronizzazione completa con requests.Session
     @property
     def cookies(self):
-        return self.inner_session.cookies
+        if getattr(self, '_init_done', False):
+            return self.inner_session.cookies
+        return getattr(self, '_req_cookies', None)
 
     @cookies.setter
     def cookies(self, value):
-        self.inner_session.cookies = value
+        if getattr(self, '_init_done', False):
+            self.inner_session.cookies = value
+        else:
+            self._req_cookies = value
 
     @property
     def headers(self):
-        return self.inner_session.headers
+        if getattr(self, '_init_done', False):
+            return self.inner_session.headers
+        return getattr(self, '_req_headers', None)
 
     @headers.setter
     def headers(self, value):
-        self.inner_session.headers = value
+        if getattr(self, '_init_done', False):
+            # Non sovrascriviamo l'intero dizionario headers per non perdere l'impersonation di curl_cffi
+            pass
+        else:
+            self._req_headers = value
         
     @property
     def proxies(self):
-        return self.inner_session.proxies
+        if getattr(self, '_init_done', False):
+            return self.inner_session.proxies
+        return getattr(self, '_req_proxies', None)
 
     @proxies.setter
     def proxies(self, value):
-        self.inner_session.proxies = value
+        if getattr(self, '_init_done', False):
+            self.inner_session.proxies = value
+        else:
+            self._req_proxies = value
 
 # Inizializzazione Globale Singola (Non cachata, si rigenera a ogni run o errore)
 _HEALING_SESSION = AutoHealingSession()
