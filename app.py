@@ -29,112 +29,65 @@ os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 import random
 import yfinance.utils as yf_utils
 
-class AutoHealingSession(requests.Session):
-    """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb (Eredita da requests.Session)"""
-    def __init__(self):
-        self._init_done = False
-        super().__init__()
-        self.browsers = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
-        self.inner_session = self._create_session()
-        self._init_done = True
+_BROWSERS = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
 
-    def _create_session(self):
-        # Ruota il fingerprint TLS per eludere il riconoscimento dei pattern
-        browser = random.choice(self.browsers)
-        return cffi_requests.Session(impersonate=browser)
+def _create_native_session():
+    """Crea una sessione curl_cffi nativa con fingerprint TLS casuale e jitter stocastico."""
+    browser = random.choice(_BROWSERS)
+    sess = cffi_requests.Session(impersonate=browser)
 
-    def request(self, method, url, *args, **kwargs):
+    # Monkey-patch: inietta il rate limiter stocastico direttamente sul metodo nativo
+    _original_req = sess.request
+    def _jittered_request(method, url, *args, **kwargs):
         max_retries = 3
         base_delay = 1.0
-
         for attempt in range(max_retries):
             try:
-                # Jitter stocastico per eludere i filtri volumetrici (0.2s - 0.7s)
                 time.sleep(random.uniform(0.2, 0.7))
-                
-                response = self.inner_session.request(method, url, *args, **kwargs)
-                
-                # Intercettazione blocchi di sicurezza Yahoo
-                if response.status_code in [401, 403, 429]:
-                    raise Exception(f"Yahoo Security Block: {response.status_code}")
-                    
-                return response
-                
-            except Exception as e:
-                # Logica di Auto-Guarigione (Backoff Esponenziale)
-                time.sleep(base_delay * (2 ** attempt)) 
-                
-                # 1. Distruzione della vecchia sessione bannata
-                self.inner_session = self._create_session()
-                
-                # 2. Distruzione forzata della cache dei Crumb/Cookie di yfinance (FONDAMENTALE)
-                yf_utils.get_session().cookies.clear()
-                
+                resp = _original_req(method, url, *args, **kwargs)
+                if resp.status_code in [401, 403, 429]:
+                    raise Exception(f"Yahoo Security Block: {resp.status_code}")
+                return resp
+            except Exception:
+                time.sleep(base_delay * (2 ** attempt))
                 if attempt == max_retries - 1:
-                    # Fail-safe per evitare il crash di Streamlit: ritorna un oggetto vuoto
-                    class DummyResponse:
-                        status_code = 404
-                        text = "{}"
-                        @staticmethod
-                        def json(): return {}
-                    return DummyResponse()
-
-    # Proprietà per mantenere la sincronizzazione completa con requests.Session
-    @property
-    def cookies(self):
-        if getattr(self, '_init_done', False):
-            return self.inner_session.cookies
-        return getattr(self, '_req_cookies', None)
-
-    @cookies.setter
-    def cookies(self, value):
-        if getattr(self, '_init_done', False):
-            self.inner_session.cookies = value
-        else:
-            self._req_cookies = value
-
-    @property
-    def headers(self):
-        if getattr(self, '_init_done', False):
-            return self.inner_session.headers
-        return getattr(self, '_req_headers', None)
-
-    @headers.setter
-    def headers(self, value):
-        if getattr(self, '_init_done', False):
-            # Non sovrascriviamo l'intero dizionario headers per non perdere l'impersonation di curl_cffi
-            pass
-        else:
-            self._req_headers = value
+                    # Rigenerazione completa: nuova sessione + pulizia Crumb
+                    return _regenerate_global_session()
         
-    @property
-    def proxies(self):
-        if getattr(self, '_init_done', False):
-            return self.inner_session.proxies
-        return getattr(self, '_req_proxies', None)
+    sess.request = _jittered_request
+    return sess
 
-    @proxies.setter
-    def proxies(self, value):
-        if getattr(self, '_init_done', False):
-            self.inner_session.proxies = value
-        else:
-            self._req_proxies = value
+def _regenerate_global_session():
+    """Auto-Guarigione: distrugge e ricrea la sessione globale."""
+    global _HEALING_SESSION
+    try:
+        yf_utils.get_session().cookies.clear()
+    except Exception:
+        pass
+    _HEALING_SESSION = _create_native_session()
+    # Aggiorna la sessione attiva su yfinance
+    try:
+        import yfinance.data as yf_data
+        if yf_data.YfData in yf_data.YfData._instances:
+            yf_data.YfData._instances[yf_data.YfData]._set_session(_HEALING_SESSION)
+    except Exception:
+        pass
 
-# Inizializzazione Globale Singola (Non cachata, si rigenera a ogni run o errore)
-_HEALING_SESSION = AutoHealingSession()
+# Sessione globale nativa (curl_cffi pura: accettata da yfinance senza eccezioni)
+_HEALING_SESSION = _create_native_session()
 
-# 1. Overriding Invasivo di yf.download
+# 1. Overriding di yf.download con sessione nativa
 _original_yf_download = yf.download
 def _stealth_download(*args, **kwargs):
     kwargs['session'] = _HEALING_SESSION
     return _original_yf_download(*args, **kwargs)
 yf.download = _stealth_download
 
-# 2. Overriding Invasivo di yf.Ticker
-_original_yf_ticker = yf.Ticker
-class StealthTicker(_original_yf_ticker):
+# 2. Overriding di yf.Ticker con sessione nativa
+_OriginalTicker = yf.Ticker
+class StealthTicker(_OriginalTicker):
     def __init__(self, ticker, session=None, **kwargs):
-        super().__init__(ticker, session=_HEALING_SESSION, **kwargs)
+        _OriginalTicker.__init__(self, ticker, session=_HEALING_SESSION, **kwargs)
 yf.Ticker = StealthTicker
 # --- FINE SISTEMA ANTI-BAN ---
 
