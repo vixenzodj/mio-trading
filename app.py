@@ -29,11 +29,12 @@ os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 import random
 import yfinance.utils as yf_utils
 
-class AutoHealing_curl_cffi_Session:
-    """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb (Compatibile con yfinance)"""
+class AutoHealingSession(requests.Session):
+    """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb (Eredita da requests.Session)"""
     def __init__(self):
+        super().__init__()
         self.browsers = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
-        self.session = self._create_session()
+        self.inner_session = self._create_session()
 
     def _create_session(self):
         # Ruota il fingerprint TLS per eludere il riconoscimento dei pattern
@@ -49,7 +50,7 @@ class AutoHealing_curl_cffi_Session:
                 # Jitter stocastico per eludere i filtri volumetrici (0.2s - 0.7s)
                 time.sleep(random.uniform(0.2, 0.7))
                 
-                response = self.session.request(method, url, *args, **kwargs)
+                response = self.inner_session.request(method, url, *args, **kwargs)
                 
                 # Intercettazione blocchi di sicurezza Yahoo
                 if response.status_code in [401, 403, 429]:
@@ -62,7 +63,7 @@ class AutoHealing_curl_cffi_Session:
                 time.sleep(base_delay * (2 ** attempt)) 
                 
                 # 1. Distruzione della vecchia sessione bannata
-                self.session = self._create_session()
+                self.inner_session = self._create_session()
                 
                 # 2. Distruzione forzata della cache dei Crumb/Cookie di yfinance (FONDAMENTALE)
                 yf_utils.get_session().cookies.clear()
@@ -76,19 +77,33 @@ class AutoHealing_curl_cffi_Session:
                         def json(): return {}
                     return DummyResponse()
 
-    def get(self, url, **kwargs):
-        kwargs.setdefault('allow_redirects', True)
-        return self.request('GET', url, **kwargs)
+    # Proprietà per mantenere la sincronizzazione completa con requests.Session
+    @property
+    def cookies(self):
+        return self.inner_session.cookies
 
-    def post(self, url, data=None, json=None, **kwargs):
-        return self.request('POST', url, data=data, json=json, **kwargs)
+    @cookies.setter
+    def cookies(self, value):
+        self.inner_session.cookies = value
 
-    def __getattr__(self, name):
-        # Delegazione degli attributi (es. cookies) alla sessione sottostante per compatibilità completa
-        return getattr(self.session, name)
+    @property
+    def headers(self):
+        return self.inner_session.headers
+
+    @headers.setter
+    def headers(self, value):
+        self.inner_session.headers = value
+        
+    @property
+    def proxies(self):
+        return self.inner_session.proxies
+
+    @proxies.setter
+    def proxies(self, value):
+        self.inner_session.proxies = value
 
 # Inizializzazione Globale Singola (Non cachata, si rigenera a ogni run o errore)
-_HEALING_SESSION = AutoHealing_curl_cffi_Session()
+_HEALING_SESSION = AutoHealingSession()
 
 # 1. Overriding Invasivo di yf.download
 _original_yf_download = yf.download
