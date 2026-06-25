@@ -42,6 +42,13 @@ def _get_or_create_healing_session():
     sess = cffi_requests.Session(impersonate=browser)
     _orig_req = sess.request
     def _patched_request(method, url, *args, **kwargs):
+        # 1. PROTEZIONE FINGERPRINT: yfinance inietta un User-Agent statico.
+        # Se impersoniamo Safari TLS ma l'header dice Chrome, Yahoo ci banna all'istante (401/403).
+        # Rimuoviamo l'header forzato per far usare a curl_cffi il suo User-Agent perfettamente allineato!
+        if 'headers' in kwargs and kwargs['headers']:
+            kwargs['headers'] = {k: v for k, v in kwargs['headers'].items() if k.lower() != 'user-agent'}
+
+        last_exc = None
         for attempt in range(3):
             try:
                 time.sleep(random.uniform(0.2, 0.7))
@@ -49,13 +56,25 @@ def _get_or_create_healing_session():
                 if resp.status_code in [401, 403, 429]:
                     raise Exception(f"Yahoo Block: {resp.status_code}")
                 return resp
-            except Exception:
+            except Exception as e:
+                last_exc = e
                 if attempt < 2:
                     time.sleep(1.0 * (2 ** attempt))
                     try:
                         yf_utils.get_session().cookies.clear()
                     except Exception:
                         pass
+        
+        # 2. FAIL-SAFE: Se fallisce dopo 3 tentativi, non possiamo restituire None (yfinance craslerebbe).
+        # Ritorniamo un oggetto compatibile che segnala l'errore in modo elegante, o solleviamo l'errore.
+        class DummyResponse:
+            status_code = 404
+            text = "{}"
+            reason = str(last_exc)
+            @staticmethod
+            def json(): return {}
+        return DummyResponse()
+        
     sess.request = _patched_request
     return sess
 
