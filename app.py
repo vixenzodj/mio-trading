@@ -29,8 +29,8 @@ os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 import random
 import yfinance.utils as yf_utils
 
-class AutoHealingSession:
-    """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb"""
+class AutoHealing_curl_cffi_Session:
+    """Motore Istituzionale di rigenerazione sessioni TLS e distruzione Crumb (Compatibile con yfinance)"""
     def __init__(self):
         self.browsers = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
         self.session = self._create_session()
@@ -40,7 +40,7 @@ class AutoHealingSession:
         browser = random.choice(self.browsers)
         return cffi_requests.Session(impersonate=browser)
 
-    def request(self, *args, **kwargs):
+    def request(self, method, url, *args, **kwargs):
         max_retries = 3
         base_delay = 1.0
 
@@ -49,7 +49,7 @@ class AutoHealingSession:
                 # Jitter stocastico per eludere i filtri volumetrici (0.2s - 0.7s)
                 time.sleep(random.uniform(0.2, 0.7))
                 
-                response = self.session.request(*args, **kwargs)
+                response = self.session.request(method, url, *args, **kwargs)
                 
                 # Intercettazione blocchi di sicurezza Yahoo
                 if response.status_code in [401, 403, 429]:
@@ -76,8 +76,19 @@ class AutoHealingSession:
                         def json(): return {}
                     return DummyResponse()
 
+    def get(self, url, **kwargs):
+        kwargs.setdefault('allow_redirects', True)
+        return self.request('GET', url, **kwargs)
+
+    def post(self, url, data=None, json=None, **kwargs):
+        return self.request('POST', url, data=data, json=json, **kwargs)
+
+    def __getattr__(self, name):
+        # Delegazione degli attributi (es. cookies) alla sessione sottostante per compatibilità completa
+        return getattr(self.session, name)
+
 # Inizializzazione Globale Singola (Non cachata, si rigenera a ogni run o errore)
-_HEALING_SESSION = AutoHealingSession()
+_HEALING_SESSION = AutoHealing_curl_cffi_Session()
 
 # 1. Overriding Invasivo di yf.download
 _original_yf_download = yf.download
