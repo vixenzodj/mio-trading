@@ -95,6 +95,13 @@ if not getattr(yf_data.YfData, '_is_stealth', False):
     yf_data.YfData._set_session = _stealth_set_session
     yf_data.YfData._is_stealth = True
 
+# 2. PATCH CRUMB MANAGER: yfinance recupera i Crumb (cookie) in un'area
+# separata (yfinance.utils). Se non patchiamo anche questo, il recupero 
+# dei Crumb fallisce silenziosamente causando la schermata nera ("Errore nel recupero dati").
+if not getattr(yf_utils, '_is_stealth', False):
+    yf_utils.get_session = lambda: _HEALING_SESSION
+    yf_utils._is_stealth = True
+
 # --- FINE SISTEMA ANTI-BAN ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
