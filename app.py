@@ -31,64 +31,56 @@ import yfinance.utils as yf_utils
 
 _BROWSERS = ["chrome110", "chrome120", "edge101", "safari15_3", "safari15_5"]
 
-def _create_native_session():
-    """Crea una sessione curl_cffi nativa con fingerprint TLS casuale e jitter stocastico."""
+@st.cache_resource
+def _get_or_create_healing_session():
+    """
+    Sessione curl_cffi nativa con jitter stocastico.
+    @st.cache_resource garantisce che sia creata UNA SOLA VOLTA per tutta la
+    vita del server Streamlit, sopravvivendo a tutti i re-run dello script.
+    """
     browser = random.choice(_BROWSERS)
     sess = cffi_requests.Session(impersonate=browser)
-
-    # Monkey-patch: inietta il rate limiter stocastico direttamente sul metodo nativo
-    _original_req = sess.request
-    def _jittered_request(method, url, *args, **kwargs):
-        max_retries = 3
-        base_delay = 1.0
-        for attempt in range(max_retries):
+    _orig_req = sess.request
+    def _patched_request(method, url, *args, **kwargs):
+        for attempt in range(3):
             try:
                 time.sleep(random.uniform(0.2, 0.7))
-                resp = _original_req(method, url, *args, **kwargs)
+                resp = _orig_req(method, url, *args, **kwargs)
                 if resp.status_code in [401, 403, 429]:
-                    raise Exception(f"Yahoo Security Block: {resp.status_code}")
+                    raise Exception(f"Yahoo Block: {resp.status_code}")
                 return resp
             except Exception:
-                time.sleep(base_delay * (2 ** attempt))
-                if attempt == max_retries - 1:
-                    # Rigenerazione completa: nuova sessione + pulizia Crumb
-                    return _regenerate_global_session()
-        
-    sess.request = _jittered_request
+                if attempt < 2:
+                    time.sleep(1.0 * (2 ** attempt))
+                    try:
+                        yf_utils.get_session().cookies.clear()
+                    except Exception:
+                        pass
+    sess.request = _patched_request
     return sess
 
-def _regenerate_global_session():
-    """Auto-Guarigione: distrugge e ricrea la sessione globale."""
-    global _HEALING_SESSION
-    try:
-        yf_utils.get_session().cookies.clear()
-    except Exception:
-        pass
-    _HEALING_SESSION = _create_native_session()
-    # Aggiorna la sessione attiva su yfinance
-    try:
-        import yfinance.data as yf_data
-        if yf_data.YfData in yf_data.YfData._instances:
-            yf_data.YfData._instances[yf_data.YfData]._set_session(_HEALING_SESSION)
-    except Exception:
-        pass
+# Sessione globale: curl_cffi pura, accettata nativamente da yfinance, creata una volta sola
+_HEALING_SESSION = _get_or_create_healing_session()
 
-# Sessione globale nativa (curl_cffi pura: accettata da yfinance senza eccezioni)
-_HEALING_SESSION = _create_native_session()
+# 1. Override yf.download — guardia _is_stealth previene il doppio-wrapping sui re-run
+if not getattr(yf.download, '_is_stealth', False):
+    _orig_download = yf.download
+    def _stealth_download(*args, **kwargs):
+        kwargs['session'] = _HEALING_SESSION
+        return _orig_download(*args, **kwargs)
+    _stealth_download._is_stealth = True
+    yf.download = _stealth_download
 
-# 1. Overriding di yf.download con sessione nativa
-_original_yf_download = yf.download
-def _stealth_download(*args, **kwargs):
-    kwargs['session'] = _HEALING_SESSION
-    return _original_yf_download(*args, **kwargs)
-yf.download = _stealth_download
-
-# 2. Overriding di yf.Ticker con sessione nativa
-_OriginalTicker = yf.Ticker
-class StealthTicker(_OriginalTicker):
-    def __init__(self, ticker, session=None, **kwargs):
-        _OriginalTicker.__init__(self, ticker, session=_HEALING_SESSION, **kwargs)
-yf.Ticker = StealthTicker
+# 2. Override yf.Ticker — guardia _is_stealth previene la ricorsione infinita sui re-run
+# CAUSA ROOT del crash: ad ogni re-run Streamlit, senza guardia, _OriginalTicker catturava
+# StealthTicker stessa, creando un loop infinito che terminava con YFDataException.
+if not getattr(yf.Ticker, '_is_stealth', False):
+    _OriginalTicker = yf.Ticker
+    class StealthTicker(_OriginalTicker):
+        _is_stealth = True
+        def __init__(self, ticker, session=None, **kwargs):
+            _OriginalTicker.__init__(self, ticker, session=_HEALING_SESSION, **kwargs)
+    yf.Ticker = StealthTicker
 # --- FINE SISTEMA ANTI-BAN ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
