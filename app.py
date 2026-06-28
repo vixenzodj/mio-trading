@@ -1239,6 +1239,11 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
 # se il dato non era cambiato. Wrapper sotto: stessa identica chiamata
 # yfinance, nessun cambio di logica/dati, solo evitare di rifare la richiesta
 # in pochi secondi. (Nessun session= custom passato: lo gestisce yfinance).
+@st.cache_data(ttl=8, show_spinner=False)
+def get_spot_price_cached(ticker_symbol):
+    """Cache 8s dedicata al prezzo spot intraday: separata da get_history_cached perché per lo scalping serve la massima reattività su questa singola chiamata leggera, senza forzare lo stesso ritmo sullo storico mensile (HV) che non ne ha bisogno."""
+    return yf.Ticker(ticker_symbol).history(period='1d')
+
 @st.cache_data(ttl=20, show_spinner=False)
 def get_history_cached(ticker_symbol, period):
     """Cache 20s su .history(): assorbe i rerun ravvicinati senza percepibile perdita di freschezza."""
@@ -1260,7 +1265,7 @@ def _download_close_cached(tickers_tuple, period):
     return yf.download(list(tickers_tuple), period=period)['Close']
 # --- FINE PATCH ANTI RATE-LIMIT ---
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)  # PATCH: portato da 60s a 30s su richiesta esplicita (scalping/intraday)
 def fetch_data(ticker, dates):
     t = yf.Ticker(ticker)
     frames = []
@@ -2531,7 +2536,7 @@ with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
-    st_autorefresh(interval=60000, key="sentinel_dash_refresh")
+    st_autorefresh(interval=30000, key="sentinel_dash_refresh")  # PATCH: da 60s a 30s, in linea con la cache della option chain
 elif menu == "🔥 SCANNER HOT TICKERS":
     st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
@@ -2558,7 +2563,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
     ticker_obj = yf.Ticker(current_ticker)
-    h = get_history_cached(current_ticker, '1d')  # PATCH: prima era ticker_obj.history('1d') senza cache
+    h = get_spot_price_cached(current_ticker)  # PATCH: cache 8s dedicata, separata dallo storico mensile
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
