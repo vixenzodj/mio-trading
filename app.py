@@ -1182,7 +1182,10 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     
     speed_bs = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1.0)
     zomma_bs = gamma_bs * ((d1 * d2 - 1.0) / iv)
-    color_bs = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1.0 - d1 * d2) / (2 * T))
+    # FIX ACCADEMICO (validato con derivazione simbolica sympy + cross-check a differenze finite):
+    # la versione precedente aveva il segno invertito ED il termine dividendo "+q" mancante nella
+    # parentesi. Color = -dGamma/dT; forma esatta = +Gamma * [(r-q)d1/(σ√T) + (1-d1d2)/(2T) + q]
+    color_bs = gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1.0 - d1 * d2) / (2 * T) + q)
 
     # 5. INIEZIONE DINAMICA DELLO SKEW NELLE FORMULE DI EXPOSURE (WALL STREET DESK ALIGNMENT)
     # Trasformazione Sticky-Moneyness dalla pendenza per Strike alla pendenza per Spot Price
@@ -1196,7 +1199,10 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     gamma_adj = gamma_bs + 2.0 * vanna_bs * d_sigma_ds
     gamma_adj = np.maximum(gamma_adj, 0.0) # Il gamma di una singola opzione vanilla non può essere negativo
     
-    delta_bs = np.where(df['type'] == 'call', norm.cdf(d1) * np.exp(-q * T), (norm.cdf(d1) * np.exp(-q * T) - 1.0))
+    # FIX ACCADEMICO (Put-Call Parity: Δ_put = Δ_call - e^-qT => Δ_put = e^-qT*N(d1) - e^-qT, NON "-1.0" secco).
+    # Con dividendo q>0 la versione precedente sottostimava |Delta Put| dell'esatto importo (1 - e^-qT).
+    # A q=0 (default storico della funzione) l'errore era invisibile: e^0=1 rende le due forme identiche.
+    delta_bs = np.where(df['type'] == 'call', norm.cdf(d1) * np.exp(-q * T), np.exp(-q * T) * (norm.cdf(d1) - 1.0))
     delta_adj = delta_bs + vega_bs * d_sigma_ds
 
     # 6. CONFIGURAZIONE DEI PESI DEI FLUSSI SULLA LIQUIDITÀ REALE (OI VS VOLUME)
@@ -1210,7 +1216,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df['Gamma'] = gamma_adj * (S ** 2) * 0.01 * oi_vol * 100 * side
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     df['Vanna'] = vanna_bs * S * 0.01 * oi_vol * 100 * side
-    df['Charm'] = charm_bs * oi_vol * 100 * side
+    df['Charm'] = charm_bs * (1.0 / 252.0) * oi_vol * 100 * side  # FIX: mancava la conversione annuo->giornaliero (come Theta e Color)
     df['Vomma'] = vomma_bs * 0.0001 * oi_vol * 100
     df['Zomma'] = zomma_bs * (S ** 2) * 0.01 * oi_vol * 100 * side
     df['Speed'] = speed_bs * oi_vol * 100 * (S ** 3) * 0.0001 * side
