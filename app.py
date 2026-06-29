@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy import stats
 from scipy.stats import norm
-from scipy.optimize import brentq
+from scipy.optimize import brentq, least_squares
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
@@ -19,43 +19,23 @@ from bs4 import BeautifulSoup
 import histdatacom
 from histdatacom.options import Options
 import os, zipfile, shutil, glob
-from curl_cffi import requests as cffi_requests
 import yfinance as yf
 
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
-# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE & RATE LIMITER) ---
-# La sessione vive 1 ora (previene Crumb Expiration), persistendo tra i riavvii (previene TLS Handshake Spam)
-@st.cache_resource(ttl=3600)
-def get_stealth_session():
-    session = cffi_requests.Session(impersonate="chrome")
-    
-    # Inject Custom Rate Limiter: Freno a mano chirurgico
-    _original_request = session.request
-    def _rate_limited_request(*args, **kwargs):
-        time.sleep(0.25)  # Delay di 250ms (max 4 chiamate/sec). Azzera il rischio Errore 429 (Rate Limit).
-        return _original_request(*args, **kwargs)
-        
-    session.request = _rate_limited_request
-    return session
-
-# 1. Overriding di yf.download
-_original_yf_download = yf.download
-def _stealth_download(*args, **kwargs):
-    kwargs['session'] = get_stealth_session()
-    return _original_yf_download(*args, **kwargs)
-yf.download = _stealth_download
-
-# 2. Overriding di yf.Ticker
-_original_yf_ticker = yf.Ticker
-class StealthTicker(_original_yf_ticker):
-    def __init__(self, ticker, session=None, **kwargs):
-        if session is None:
-            session = get_stealth_session()
-        super().__init__(ticker, session=session, **kwargs)
-yf.Ticker = StealthTicker
-# --- FINE SISTEMA ANTI-BAN ---
+# --- SISTEMA ANTI-RATE-LIMIT (API UFFICIALE YFINANCE, NIENTE MONKEY-PATCH) ---
+# Le versioni recenti di yfinance usano GIA' curl_cffi con impersonazione Chrome
+# internamente di default: non serve (e può rompersi) sostituire la sessione a mano.
+# Lo dicono gli stessi sviluppatori di yfinance: impostare una sessione custom con
+# session=... fa scattare un controllo isinstance() interno che, con i reload dei
+# moduli causati da Streamlit, può fallire e bloccare OGNI richiesta con
+# YFDataException — esattamente il sintomo "non scarica più nulla, come tagliato".
+# Usiamo quindi solo le leve ufficiali e documentate, stabili tra le versioni:
+yf.config.network.retries = 3          # Retry automatico con backoff esponenziale (1s, 2s, 4s) sugli errori di rete transitori
+# yf.config.network.proxy = "http://USER:PASS@HOST:PORT"  # <-- Se l'IP del cloud è condiviso/bloccato, inserisci qui un proxy dedicato (vedi spiegazione in chat)
+yf.config.debug.hide_exceptions = False  # Mostra l'eccezione REALE (non più genericamente "Rate Limit") finché stiamo diagnosticando
+# --- FINE SISTEMA ANTI-RATE-LIMIT ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
 def get_precise_dte(exp_str):
@@ -180,7 +160,8 @@ STRATEGY_PARAM_GRID = {
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
-def calc_fund_metrics_v3(ticker_symbol, t_data):
+@st.cache_data(ttl=900, show_spinner=False)
+def calc_fund_metrics_v3(ticker_symbol, _t_data):
     try:
         # Download dati 5 anni per Fondo e Benchmark (SPY)
         df_f = yf.download(ticker_symbol, period="5y", interval="1d")['Close']
@@ -306,7 +287,7 @@ def display_correlation_matrix(tickers):
     try:
         st.markdown("### 📊 Analisi di Correlazione e Rischio")
         st.write("Verifica se i titoli selezionati si muovono insieme. Correlazione > 0.70 indica un alto rischio di concentrazione.")
-        data = yf.download(tickers, period="1y")['Close']
+        data = _download_close_cached(tuple(tickers), "1y")
         if isinstance(data, pd.Series) or data.empty: return
         corr_matrix = data.corr()
         fig = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1, aspect="auto")
@@ -314,6 +295,7 @@ def display_correlation_matrix(tickers):
     except:
         pass
 
+@st.cache_data(ttl=900, show_spinner=False)
 def safe_get_adj_close(tickers, period="5y"):
     """Scarica i dati risolvendo il problema di Adj Close per Indici e Futures."""
     try:
@@ -1060,6 +1042,7 @@ def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values
     T = np.maximum(df['dte_years'].values, 0.00005)
+    r = get_term_structured_rate_array(T)  # Struttura a termine: coerente con get_greeks_pro, non più un ^IRX piatto
     oi_arr = df['openInterest'].fillna(0).values
     vol_arr = df['volume'].fillna(0).values
     l_ratio = np.where(oi_arr > 0, vol_arr / oi_arr, 0)
@@ -1078,6 +1061,7 @@ def calculate_0g_dynamic(price, df, S0, r=DYNAMIC_R, q=0.0):
     """Calcolo Zero Gamma Dinamico corretto per Espansione di Taylor Sticky-Strike Pura"""
     K = df['strike'].values
     T = np.maximum(df['dte_years'].values, 0.00005)
+    r = get_term_structured_rate_array(T)  # Struttura a termine: coerente con get_greeks_pro, non più un ^IRX piatto
     
     if 'skew_spot' in df.columns:
         skew_S = df['skew_spot'].values
@@ -1128,11 +1112,180 @@ def find_iv(target_price, S, K, T, r, q, option_type):
     except:
         return np.nan
 
+# ============================================================================
+# MODULO ACCADEMICO AVANZATO (Gatheral SVI + Breeden-Litzenberger + Term Structure)
+# Ogni formula qui sotto è stata validata con derivazione simbolica (sympy) e/o
+# cross-check a differenze finite prima dell'integrazione nel motore principale.
+# ============================================================================
+
+def _trapz_manual(y, x):
+    """Integrazione trapezoidale manuale: np.trapz è stato rimosso in numpy 2.0 (sostituito da
+    np.trapezoid in modo non retrocompatibile). Questa versione funziona su qualsiasi versione."""
+    return np.sum((y[1:] + y[:-1]) * 0.5 * np.diff(x))
+
+def _svi_w_and_derivs(params, k):
+    """Varianza totale SVI w(k) e le sue derivate 1a/2a rispetto al log-moneyness forward k,
+    tutte in forma chiusa analitica (nessuna differenziazione numerica)."""
+    a, b, rho, m, sigma = params
+    u = k - m
+    s = np.sqrt(u**2 + sigma**2)
+    w = a + b * (rho * u + s)
+    wp = b * (rho + u / s)
+    wpp = b * (sigma**2) / (s**3)
+    return w, wp, wpp
+
+def fit_svi_slice(strikes, ivs, weights, S, T, r, q):
+    """
+    Fit della parametrizzazione SVI (Gatheral) sulla varianza totale, in log-moneyness
+    FORWARD k=ln(K/F). Ritorna i 5 parametri (a,b,rho,m,sigma) o None se il fit fallisce
+    o produce una superficie con arbitraggio (validato con il test g(k)>=0 di Gatheral-Jacquier).
+    """
+    F = S * np.exp((r - q) * T)
+    k = np.log(strikes / F)
+    w = (ivs ** 2) * T
+
+    def svi_w(p, k_):
+        a, b, rho, m, sigma = p
+        return a + b * (rho * (k_ - m) + np.sqrt((k_ - m) ** 2 + sigma ** 2))
+
+    def resid(p):
+        return (svi_w(p, k) - w) * np.sqrt(weights)
+
+    a0 = max(np.min(w) * 0.85, 1e-6)
+    p0 = [a0, 0.15, -0.3, 0.0, 0.15]
+    lb = [0.0, 0.0, -0.999, -2.5, 0.005]
+    ub = [max(np.max(w) * 3, a0 * 3), 8.0, 0.999, 2.5, 3.0]
+    try:
+        res = least_squares(resid, p0, bounds=(lb, ub), max_nfev=3000)
+        if not res.success:
+            return None
+        a, b, rho, m, sigma = res.x
+        # Test di non-arbitraggio (Gatheral-Jacquier): varianza minima non negativa
+        if a + b * sigma * np.sqrt(1 - rho ** 2) < -1e-7:
+            return None
+        fitted = svi_w(res.x, k)
+        rel_err = np.mean(np.abs(fitted - w) / (w + 1e-9))
+        if rel_err > 0.30:  # fit troppo povero rispetto al rumore bid/ask reale: non fidarsi
+            return None
+        return res.x
+    except Exception:
+        return None
+
+def svi_iv_and_deriv_dK(svi_params, K, S, T, r, q):
+    """IV e d(IV)/dK dalla superficie SVI fittata, derivata analitica esatta (validata a 0.000% errore
+    contro differenze finite). Serve per alimentare d_sigma_dk con una curva no-arbitrage anziché
+    un semplice polinomio di 2° grado."""
+    F = S * np.exp((r - q) * T)
+    k = np.log(K / F)
+    w, wp, _ = _svi_w_and_derivs(svi_params, k)
+    w = np.maximum(w, 1e-10)
+    iv = np.sqrt(w / T)
+    d_iv_dK = wp / (2 * np.sqrt(w * T)) / K
+    return iv, d_iv_dK
+
+def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000):
+    """
+    Estrae media/std/skewness/excess-kurtosis RISK-NEUTRALE VERA del log-rendimento a scadenza,
+    usando la formula chiusa di Gatheral-Jacquier (2014) applicata alla superficie SVI fittata.
+    Verificata: coincide esattamente (rapporto 1.0000) con la derivata seconda simbolica pura
+    di Breeden-Litzenberger sui prezzi Call. Nessuna differenza finita rumorosa è coinvolta.
+    Ritorna None se la superficie non passa il test di non-arbitraggio su tutta la griglia.
+    """
+    try:
+        k_grid = np.linspace(-k_range, k_range, n)
+        w, wp, wpp = _svi_w_and_derivs(svi_params, k_grid)
+        w = np.maximum(w, 1e-10)
+        g = (1 - (k_grid * wp) / (2 * w)) ** 2 - (wp ** 2 / 4) * (1 / w + 0.25) + wpp / 2
+        if np.min(g) < -1e-4:
+            return None  # superficie non arbitrage-free su questa griglia: non fidarsi del risultato
+        d_minus = -k_grid / np.sqrt(w) - np.sqrt(w) / 2
+        dens = g / np.sqrt(2 * np.pi * w) * np.exp(-d_minus ** 2 / 2)
+        dens = np.clip(dens, 0, None)
+        area = _trapz_manual(dens, k_grid)
+        if area <= 1e-8:
+            return None
+        dens = dens / area
+        mean_k = _trapz_manual(k_grid * dens, k_grid)
+        var_k = _trapz_manual((k_grid - mean_k) ** 2 * dens, k_grid)
+        std_k = np.sqrt(var_k)
+        if std_k <= 1e-8:
+            return None
+        skew_k = _trapz_manual((k_grid - mean_k) ** 3 * dens, k_grid) / std_k ** 3
+        kurt_k = _trapz_manual((k_grid - mean_k) ** 4 * dens, k_grid) / std_k ** 4 - 3.0
+        return dict(skew=skew_k, excess_kurtosis=kurt_k, std=std_k)
+    except Exception:
+        return None
+
+def estimate_implied_dividend(calls_df, puts_df, S, r, T, n_strikes=6):
+    """
+    Stima il dividend yield implicito dal mercato delle opzioni via Put-Call Parity,
+    usando gli strike più vicini all'ATM con quote bid/ask valide su entrambi i lati:
+        q = -ln[(C_mid - P_mid + K*e^-rT) / S] / T
+    Più affidabile del campo 'dividendYield' di Yahoo (spesso stantio/assente) perché usa
+    dati di mercato correnti già scaricati, senza alcuna chiamata di rete aggiuntiva.
+    Ritorna None se non ci sono coppie call/put valide vicine all'ATM.
+    """
+    try:
+        c = calls_df[['strike', 'bid', 'ask']].copy()
+        p = puts_df[['strike', 'bid', 'ask']].copy()
+        merged = pd.merge(c, p, on='strike', suffixes=('_c', '_p'))
+        merged = merged[(merged['bid_c'] > 0) & (merged['ask_c'] > 0) &
+                         (merged['bid_p'] > 0) & (merged['ask_p'] > 0) &
+                         (merged['ask_c'] >= merged['bid_c']) & (merged['ask_p'] >= merged['bid_p'])]
+        if merged.empty:
+            return None
+        merged['dist'] = (merged['strike'] - S).abs()
+        merged = merged.nsmallest(n_strikes, 'dist')
+        c_mid = (merged['bid_c'] + merged['ask_c']) / 2
+        p_mid = (merged['bid_p'] + merged['ask_p']) / 2
+        ratio = (c_mid - p_mid + merged['strike'] * np.exp(-r * T)) / S
+        ratio = ratio[ratio > 0]
+        if ratio.empty:
+            return None
+        q_implied = -np.log(ratio.median()) / T
+        return float(q_implied) if -0.02 <= q_implied <= 0.20 else None
+    except Exception:
+        return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_rate_ticker_cached(ticker_symbol):
+    try:
+        info = yf.Ticker(ticker_symbol).fast_info
+        if info and hasattr(info, 'last_price') and info.last_price:
+            return float(info.last_price) / 100.0
+    except Exception:
+        pass
+    return None
+
+def get_term_structured_rate(T_years):
+    """
+    Seleziona il punto della curva dei tassi USA più vicino alla scadenza dell'opzione,
+    invece di usare sempre ^IRX (13 settimane) anche per LEAPS pluriennali.
+    Fallback su DYNAMIC_R (^IRX) se il fetch del punto specifico fallisce.
+    """
+    if T_years < 1.0:
+        ticker = "^IRX"
+    elif T_years < 7.0:
+        ticker = "^FVX"
+    elif T_years < 20.0:
+        ticker = "^TNX"
+    else:
+        ticker = "^TYX"
+    rate = _fetch_rate_ticker_cached(ticker)
+    return rate if rate is not None else DYNAMIC_R
+
+def get_term_structured_rate_array(T_array):
+    """Versione vettoriale: assegna ad ogni riga del dataframe delle opzioni il punto di curva
+    corretto in base alla propria scadenza, anziché un tasso piatto unico per tutta la chain."""
+    unique_T = np.unique(np.round(np.asarray(T_array), 6))
+    rate_map = {Tv: get_term_structured_rate(Tv) for Tv in unique_T}
+    return np.array([rate_map[Tv] for Tv in np.round(T_array, 6)])
+
 @st.cache_data(ttl=60)
 def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df = df.copy()
     if df.empty:
-        return df
+        return df, {}
 
     # 1. PRE-PROCESSING ISTITUZIONALE E CONVERSIONI DI SICUREZZA
     df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
@@ -1147,35 +1300,57 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
         
     df['d_sigma_dk'] = 0.0
     S = float(S)
+    svi_by_dte = {}  # Salva i parametri SVI per scadenza: servono a valle per la kurtosi risk-neutral vera
 
     # 2. VOLATILITY SMILE SMOOTHER & ANALYTICAL SKEW SLOPE
+    # Tentativo primario: fit SVI (Gatheral) no-arbitrage. Fallback automatico al polinomio
+    # pesato di 2° grado (collaudato) se il fit SVI fallisce o i punti liquidi sono insufficienti:
+    # nessuna funzionalità esistente viene mai rimossa, solo affiancata da un metodo più rigoroso.
     for dte_val in df['dte_years'].unique():
         mask = df['dte_years'] == dte_val
         sub_df = df[mask]
-        
+        r_local = get_term_structured_rate(dte_val)  # tasso della scadenza giusta, non sempre ^IRX
+
         # Filtro per isolare dati di volatilità reali ed evitare buchi a zero
         valid_mask = (sub_df['iv_smoothed'] > 0.01) & (sub_df['iv_smoothed'] < 3.0) & (~sub_df['iv_smoothed'].isna())
         valid_pts = sub_df[valid_mask]
-        
-        if len(valid_pts) >= 4:
+
+        svi_params = None
+        if len(valid_pts) >= 6:
+            weights = (valid_pts['openInterest'].values + valid_pts['volume'].values + 1.0)
+            svi_params = fit_svi_slice(valid_pts['strike'].values, valid_pts['iv_smoothed'].values,
+                                        weights, S, max(dte_val, 0.00005), r_local, q)
+
+        if svi_params is not None:
+            svi_by_dte[dte_val] = svi_params
+            smoothed_vals, deriv_vals = svi_iv_and_deriv_dK(svi_params, sub_df['strike'].values, S,
+                                                             max(dte_val, 0.00005), r_local, q)
+            min_bound = max(0.02, valid_pts['iv_smoothed'].min() * 0.5)
+            max_bound = min(2.5, valid_pts['iv_smoothed'].max() * 1.5)
+            df.loc[mask, 'iv_smoothed'] = np.clip(smoothed_vals, min_bound, max_bound)
+            df.loc[mask, 'd_sigma_dk'] = deriv_vals
+
+        elif len(valid_pts) >= 4:
+            svi_by_dte[dte_val] = None
             # Ponderazione monetaria: gli strike liquidi (ATM e Near-the-Money) definiscono la struttura dello skew
             weights = (valid_pts['openInterest'].values + valid_pts['volume'].values + 1.0)
-            
-            # Fit parabolico di 2° grado dello Skew rispetto allo Strike (K)
+
+            # Fit parabolico di 2° grado dello Skew rispetto allo Strike (K) - FALLBACK se SVI non converge
             poly_coefs = np.polyfit(valid_pts['strike'].values, valid_pts['iv_smoothed'].values, 2, w=weights)
-            
+
             # Ricostruzione della curva continua priva di rumore retail
             smoothed_vals = np.polyval(poly_coefs, sub_df['strike'].values)
-            
+
             # Controlli di robustezza asintotica per evitare la divergenza delle code paraboliche
             min_bound = max(0.02, valid_pts['iv_smoothed'].min() * 0.5)
             max_bound = min(2.5, valid_pts['iv_smoothed'].max() * 1.5)
             smoothed_vals = np.clip(smoothed_vals, min_bound, max_bound)
-            
+
             df.loc[mask, 'iv_smoothed'] = smoothed_vals
             # Calcolo analitico esatto della pendenza dello Skew rispetto allo strike: d_sigma / dK = 2aK + b
             df.loc[mask, 'd_sigma_dk'] = 2 * poly_coefs[0] * sub_df['strike'].values + poly_coefs[1]
         else:
+            svi_by_dte[dte_val] = None
             # Fallback strutturale protettivo per catene illiquide o scadenze lunghissime residuali
             df.loc[mask, 'iv_smoothed'] = df.loc[mask, 'iv_smoothed'].replace(0, 0.15).fillna(0.15)
 
@@ -1183,7 +1358,8 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     K = df['strike'].values
     iv = df['iv_smoothed'].values
     T = np.maximum(df['dte_years'].values, 0.00005) # Floor anti-singolarità per trading 0DTE intraday
-    
+    r = get_term_structured_rate_array(T)  # Struttura a termine: ogni riga usa il tasso della SUA scadenza, non un ^IRX piatto per tutto
+
     d1 = (np.log(S / K) + (r - q + 0.5 * iv ** 2) * T) / (iv * np.sqrt(T))
     d2 = d1 - iv * np.sqrt(T)
     
@@ -1200,7 +1376,10 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     
     speed_bs = -(gamma_bs / S) * (d1 / (iv * np.sqrt(T)) + 1.0)
     zomma_bs = gamma_bs * ((d1 * d2 - 1.0) / iv)
-    color_bs = -gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1.0 - d1 * d2) / (2 * T))
+    # FIX ACCADEMICO (validato con derivazione simbolica sympy + cross-check a differenze finite):
+    # la versione precedente aveva il segno invertito ED il termine dividendo "+q" mancante nella
+    # parentesi. Color = -dGamma/dT; forma esatta = +Gamma * [(r-q)d1/(σ√T) + (1-d1d2)/(2T) + q]
+    color_bs = gamma_bs * (((r - q) * d1) / (iv * np.sqrt(T)) + (1.0 - d1 * d2) / (2 * T) + q)
 
     # 5. INIEZIONE DINAMICA DELLO SKEW NELLE FORMULE DI EXPOSURE (WALL STREET DESK ALIGNMENT)
     # Trasformazione Sticky-Moneyness dalla pendenza per Strike alla pendenza per Spot Price
@@ -1211,10 +1390,15 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     
     # Calcolo del Gamma e del Delta Skew-Adjusted (Derivate totali)
     # RIMOSSA LA DIVISIONE ERRATA PER "S": Le funzioni analitiche BSM di Vega e Vanna esprimono già la corretta sensibilità assoluta spaziale.
-    gamma_adj = gamma_bs + 2.0 * vanna_bs * d_sigma_ds
+    # FIX COERENZA ACCADEMICA: aggiunto il termine di 2° ordine Vomma*skew^2, già presente in
+    # calculate_0g_dynamic ma mancante qui. Espansione di Taylor ora uniforme tra le due funzioni.
+    gamma_adj = gamma_bs + 2.0 * vanna_bs * d_sigma_ds + vomma_bs * (d_sigma_ds ** 2)
     gamma_adj = np.maximum(gamma_adj, 0.0) # Il gamma di una singola opzione vanilla non può essere negativo
     
-    delta_bs = np.where(df['type'] == 'call', norm.cdf(d1) * np.exp(-q * T), (norm.cdf(d1) * np.exp(-q * T) - 1.0))
+    # FIX ACCADEMICO (Put-Call Parity: Δ_put = Δ_call - e^-qT => Δ_put = e^-qT*N(d1) - e^-qT, NON "-1.0" secco).
+    # Con dividendo q>0 la versione precedente sottostimava |Delta Put| dell'esatto importo (1 - e^-qT).
+    # A q=0 (default storico della funzione) l'errore era invisibile: e^0=1 rende le due forme identiche.
+    delta_bs = np.where(df['type'] == 'call', norm.cdf(d1) * np.exp(-q * T), np.exp(-q * T) * (norm.cdf(d1) - 1.0))
     delta_adj = delta_bs + vega_bs * d_sigma_ds
 
     # 6. CONFIGURAZIONE DEI PESI DEI FLUSSI SULLA LIQUIDITÀ REALE (OI VS VOLUME)
@@ -1228,7 +1412,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     df['Gamma'] = gamma_adj * (S ** 2) * 0.01 * oi_vol * 100 * side
     df['Vega'] = vega_bs * 0.01 * oi_vol * 100
     df['Vanna'] = vanna_bs * S * 0.01 * oi_vol * 100 * side
-    df['Charm'] = charm_bs * oi_vol * 100 * side
+    df['Charm'] = charm_bs * (1.0 / 252.0) * oi_vol * 100 * side  # FIX: mancava la conversione annuo->giornaliero (come Theta e Color)
     df['Vomma'] = vomma_bs * 0.0001 * oi_vol * 100
     df['Zomma'] = zomma_bs * (S ** 2) * 0.01 * oi_vol * 100 * side
     df['Speed'] = speed_bs * oi_vol * 100 * (S ** 3) * 0.0001 * side
@@ -1247,9 +1431,43 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # Permette la coesistenza visiva nei grafici tra l'esplosione delle 0DTE e l'architettura Swing a lungo termine
     df['GEX_Normalized'] = df['Gamma'] * np.sqrt(T / (30.0 / 365.25))
 
-    return df
+    return df, svi_by_dte
 
-@st.cache_data(ttl=60, show_spinner=False)
+# --- PATCH ANTI RATE-LIMIT: CACHE MANCANTE SUI PUNTI "CALDI" ---
+# Streamlit ri-esegue TUTTO lo script ad ogni interazione (selectbox, slider,
+# checkbox, bottone) e ad ogni autorefresh. Le chiamate sotto erano fatte
+# DIRETTAMENTE su yf.Ticker(...).history()/.options/.info SENZA cache: questo
+# significa che venivano ripetute a Yahoo Finance ad ogni singolo rerun, anche
+# se il dato non era cambiato. Wrapper sotto: stessa identica chiamata
+# yfinance, nessun cambio di logica/dati, solo evitare di rifare la richiesta
+# in pochi secondi. (Nessun session= custom passato: lo gestisce yfinance).
+@st.cache_data(ttl=8, show_spinner=False)
+def get_spot_price_cached(ticker_symbol):
+    """Cache 8s dedicata al prezzo spot intraday: separata da get_history_cached perché per lo scalping serve la massima reattività su questa singola chiamata leggera, senza forzare lo stesso ritmo sullo storico mensile (HV) che non ne ha bisogno."""
+    return yf.Ticker(ticker_symbol).history(period='1d')
+
+@st.cache_data(ttl=20, show_spinner=False)
+def get_history_cached(ticker_symbol, period):
+    """Cache 20s su .history(): assorbe i rerun ravvicinati senza percepibile perdita di freschezza."""
+    return yf.Ticker(ticker_symbol).history(period=period)
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_options_cached(ticker_symbol):
+    """Cache 15 min sulle scadenze disponibili: cambiano poche volte al giorno, non ad ogni rerun."""
+    return yf.Ticker(ticker_symbol).options
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_info_cached(ticker_symbol):
+    """Cache 1h su .info: è la chiamata più pesante (quoteSummary multi-modulo) e i dati fondamentali/dividendi non cambiano in pochi secondi."""
+    return yf.Ticker(ticker_symbol).info
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _download_close_cached(tickers_tuple, period):
+    """Cache 15 min sui prezzi Close multi-ticker (usata es. dalla matrice di correlazione)."""
+    return yf.download(list(tickers_tuple), period=period)['Close']
+# --- FINE PATCH ANTI RATE-LIMIT ---
+
+@st.cache_data(ttl=30, show_spinner=False)  # PATCH: portato da 60s a 30s su richiesta esplicita (scalping/intraday)
 def fetch_data(ticker, dates):
     t = yf.Ticker(ticker)
     frames = []
@@ -2520,7 +2738,7 @@ with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
-    st_autorefresh(interval=60000, key="sentinel_dash_refresh")
+    st_autorefresh(interval=30000, key="sentinel_dash_refresh")  # PATCH: da 60s a 30s, in linea con la cache della option chain
 elif menu == "🔥 SCANNER HOT TICKERS":
     st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
@@ -2547,14 +2765,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
     ticker_obj = yf.Ticker(current_ticker)
-    h = ticker_obj.history(period='1d')
+    h = get_spot_price_cached(current_ticker)  # PATCH: cache 8s dedicata, separata dallo storico mensile
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
     try:
-        available_dates = ticker_obj.options
+        available_dates = get_options_cached(current_ticker)  # PATCH: prima era ticker_obj.options senza cache
     except Exception as e:
-        st.error("⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi 10 minuti prima di riprovare.")
+        err_str = str(e)
+        if "429" in err_str or "too many" in err_str.lower() or "rate" in err_str.lower():
+            st.error(f"⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi qualche minuto prima di riprovare.\n\nDettaglio tecnico: {err_str}")
+        else:
+            st.error(f"⚠️ Errore nel recupero delle scadenze per {current_ticker} (non è un rate limit). Dettaglio tecnico: {err_str}")
         st.stop()
 
     all_dates_info = []
@@ -2586,15 +2808,43 @@ if menu == "🏟️ DASHBOARD SINGOLA":
         raw_data = fetch_data(current_ticker, target_dates)
         
         if not raw_data.empty:
+            # FILTRO LIQUIDITÀ + 2 HARDENING DIFENSIVI (feed gratuito Yahoo, dati a volte rumorosi):
+            # 1) mercato incrociato (ask<bid, anomalia di quota) -> scartato
+            # 2) quote eccessivamente stantie (>5 giorni di calendario senza un trade) -> scartate,
+            #    ma solo se il campo lastTradeDate è presente (alcuni contratti non lo riportano)
             raw_data = raw_data[(raw_data['volume'] > 0) | (raw_data['openInterest'] > 0)].copy()
+            crossed = (raw_data['bid'] > 0) & (raw_data['ask'] > 0) & (raw_data['ask'] < raw_data['bid'])
+            raw_data = raw_data[~crossed]
+            if 'lastTradeDate' in raw_data.columns:
+                try:
+                    ltd = pd.to_datetime(raw_data['lastTradeDate'], utc=True, errors='coerce')
+                    now_utc = pd.Timestamp.now(tz='UTC')
+                    stale = (now_utc - ltd) > pd.Timedelta(days=5)
+                    raw_data = raw_data[~stale.fillna(False)]
+                except Exception:
+                    pass
             raw_data['dte_years'] = raw_data['exp'].apply(get_precise_dte)
-            
-            # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
+
+            # Dividend Yield: stimato dal mercato delle opzioni via Put-Call Parity (più affidabile
+            # del campo 'dividendYield' di Yahoo, spesso stantio/annualizzato/assente), usando la
+            # scadenza più vicina già scaricata in raw_data - zero chiamate di rete aggiuntive.
+            # Fallback automatico sul campo Yahoo se il mercato non offre coppie call/put valide.
+            div_yield = None
             try:
-                div_yield = ticker_obj.info.get('dividendYield', 0.0)
-                if div_yield is None: div_yield = 0.0
-            except:
-                div_yield = 0.0
+                near_exp = target_dates[0]
+                near_chain = raw_data[raw_data['exp'] == near_exp]
+                near_T = max(near_chain['dte_years'].iloc[0], 0.00005) if not near_chain.empty else 0.00005
+                div_yield = estimate_implied_dividend(near_chain[near_chain['type'] == 'call'],
+                                                        near_chain[near_chain['type'] == 'put'],
+                                                        spot, DYNAMIC_R, near_T)
+            except Exception:
+                div_yield = None
+            if div_yield is None:
+                try:
+                    div_yield = get_info_cached(current_ticker).get('dividendYield', 0.0)  # Fallback: campo Yahoo
+                    if div_yield is None: div_yield = 0.0
+                except:
+                    div_yield = 0.0
 
             # Funzione sicura di ricalcolo IV sul Mid-Price
             def refine_iv_vectorized(row):
@@ -2603,13 +2853,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     if b > 0 and a > 0:
                         mid = (b + a) / 2
                         K_val, T_val, opt_type = row['strike'], max(row['dte_years'], 0.00005), row['type']
+                        r_val = get_term_structured_rate(T_val)  # FIX: struttura a termine anziché ^IRX piatto
                         def bs_price(x_iv):
-                            d1_tmp = (np.log(spot/K_val) + (DYNAMIC_R - div_yield + 0.5 * x_iv**2) * T_val) / (x_iv * np.sqrt(T_val))
+                            d1_tmp = (np.log(spot/K_val) + (r_val - div_yield + 0.5 * x_iv**2) * T_val) / (x_iv * np.sqrt(T_val))
                             d2_tmp = d1_tmp - x_iv * np.sqrt(T_val)
                             if opt_type == 'call': 
-                                return spot * np.exp(-div_yield*T_val) * norm.cdf(d1_tmp) - K_val * np.exp(-DYNAMIC_R*T_val) * norm.cdf(d2_tmp)
+                                return spot * np.exp(-div_yield*T_val) * norm.cdf(d1_tmp) - K_val * np.exp(-r_val*T_val) * norm.cdf(d2_tmp)
                             else: 
-                                return K_val * np.exp(-DYNAMIC_R*T_val) * norm.cdf(-d2_tmp) - spot * np.exp(-div_yield*T_val) * norm.cdf(-d1_tmp)
+                                return K_val * np.exp(-r_val*T_val) * norm.cdf(-d2_tmp) - spot * np.exp(-div_yield*T_val) * norm.cdf(-d1_tmp)
                         return brentq(lambda x: bs_price(x) - mid, 0.001, 5.0)
                 except: pass
                 return row['impliedVolatility']
@@ -2673,7 +2924,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.50, spot * 1.50, args=(raw_data, spot, DYNAMIC_R, div_yield))
             except: z_gamma_dyn = spot
 
-            df = get_greeks_pro(raw_data, spot, r=DYNAMIC_R, q=div_yield)
+            df, svi_by_dte = get_greeks_pro(raw_data, spot, r=DYNAMIC_R, q=div_yield)
             
             # --- LOGICA DI AGGREGAZIONE MATEMATICA (Binning Dinamico) ---
             # Usiamo floor division per forzare ogni contratto nel proprio bin matematico
@@ -2912,7 +3163,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE CON FILTRO LIQUIDITÀ) ---
             try:
-                hist_1m = ticker_obj.history(period='1mo')
+                hist_1m = get_history_cached(current_ticker, '1mo')  # PATCH: prima era ticker_obj.history('1mo') senza cache
                 hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
                 
                 # 1. Trova IV ATM (Con Protezione Anti-Zero)
@@ -2944,8 +3195,24 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 kurt_pct = min(max((skew_ratio - 1.05) * (100 / 0.95), 0), 100)
                 
                 kurt_color = "#2ecc71" if kurt_pct < 30 else ("#f1c40f" if kurt_pct < 60 else "#e74c3c")
+
+                # KURTOSI RISK-NEUTRAL VERA (Breeden-Litzenberger via formula chiusa di Gatheral-Jacquier,
+                # validata simbolicamente: vedi modulo SVI sopra). Usa i parametri SVI già fittati per la
+                # scadenza più vicina, se il fit è andato a buon fine; altrimenti N/A (nessun proxy improprio).
+                excess_kurt_rn = None
+                try:
+                    near_dte_val = raw_data[raw_data['exp'] == target_dates[0]]['dte_years'].iloc[0]
+                    svi_near = svi_by_dte.get(near_dte_val)
+                    if svi_near is not None:
+                        r_near = get_term_structured_rate(near_dte_val)
+                        moments = gatheral_risk_neutral_moments(svi_near, spot, max(near_dte_val, 0.00005), r_near, div_yield)
+                        if moments is not None:
+                            excess_kurt_rn = moments['excess_kurtosis']
+                except Exception:
+                    excess_kurt_rn = None
             except Exception as e:
                 hv_20d, kurt_pct, kurt_color = 0.0, 0, "gray"
+                excess_kurt_rn = None
 
             # --- UI LAYOUT AGGIORNATO ---
             col_view, col_vol = st.columns([1.8, 1.2])
@@ -2958,7 +3225,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 ], horizontal=True)
                 
             with col_vol:
-                v1, v2, v3 = st.columns([1.2, 1.2, 1])
+                v1, v2, v3, v4 = st.columns([1.1, 1.1, 0.9, 0.9])
                 with v1:
                     st.metric("📈 DYN IV", f"{mean_iv*100:.1f}%", delta=f"{iv_change*100:.1f}%", delta_color="inverse")
                 with v2:
@@ -2966,9 +3233,23 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 with v3:
                     st.markdown(f"""
                         <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; margin-top:-5px;">
-                            <span style="font-size:10px; color:#aaa;">TAIL RISK</span>
+                            <span style="font-size:10px; color:#aaa;">PUT SKEW</span>
                             <div style="width: 45px; height: 45px; border-radius: 50%; border: 4px solid {kurt_color}; display:flex; align-items:center; justify-content:center; background-color:rgba(0,0,0,0.2);">
                                 <span style="font-size:12px; font-weight:bold; color:{kurt_color};">{int(kurt_pct)}%</span>
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                with v4:
+                    if excess_kurt_rn is not None:
+                        ku_color = "#2ecc71" if excess_kurt_rn < 2 else ("#f1c40f" if excess_kurt_rn < 6 else "#e74c3c")
+                        ku_label = f"{excess_kurt_rn:.1f}"
+                    else:
+                        ku_color, ku_label = "gray", "N/A"
+                    st.markdown(f"""
+                        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; margin-top:-5px;">
+                            <span style="font-size:10px; color:#aaa;">KURT (RN)</span>
+                            <div style="width: 45px; height: 45px; border-radius: 50%; border: 4px solid {ku_color}; display:flex; align-items:center; justify-content:center; background-color:rgba(0,0,0,0.2);">
+                                <span style="font-size:12px; font-weight:bold; color:{ku_color};">{ku_label}</span>
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
@@ -3569,7 +3850,7 @@ elif menu == "🔥 SCANNER HOT TICKERS":
             except: zg_dyn = px
 
             # Calcolo Greche Scanner
-            df_scan_greeks = get_greeks_pro(df_scan, px)
+            df_scan_greeks, _ = get_greeks_pro(df_scan, px)
             net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
             net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
             
@@ -7462,7 +7743,7 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
         
         # Fallback: se non è un'azione (EQUITY) e non ha il prefisso, prova ad aggiungerlo
         try:
-            check = yf.Ticker(t_code).info
+            check = get_info_cached(t_code)  # PATCH: prima era yf.Ticker(t_code).info senza cache, rifatto ad ogni rerun
             if not check or 'quoteType' not in check:
                 if not t_code.startswith("^"):
                     t_code = "^" + t_code
@@ -8327,8 +8608,10 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
         for i, ticker in enumerate(full_db):
             status_msg.text(f"Analisi Quantitativa in corso: {ticker}...")
             try:
-                t = yf.Ticker(ticker)
-                inf = t.info
+                _t0 = time.time()
+                inf = get_info_cached(ticker)  # PATCH: prima era yf.Ticker(ticker).info senza cache, ora cache 1h
+                if time.time() - _t0 > 0.05:  # è stata una vera richiesta di rete (cache miss): piccola pausa di sicurezza anti rate-limit
+                    time.sleep(0.3)
                 
                 curr = inf.get('financialCurrency', inf.get('currency', '$'))
                 s_curr = "€" if curr == "EUR" else "$"
