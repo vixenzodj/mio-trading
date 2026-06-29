@@ -19,23 +19,43 @@ from bs4 import BeautifulSoup
 import histdatacom
 from histdatacom.options import Options
 import os, zipfile, shutil, glob
+from curl_cffi import requests as cffi_requests
 import yfinance as yf
 
 LOCAL_DB_DIR = 'local_database'
 os.makedirs(LOCAL_DB_DIR, exist_ok=True)
 
-# --- SISTEMA ANTI-RATE-LIMIT (API UFFICIALE YFINANCE, NIENTE MONKEY-PATCH) ---
-# Le versioni recenti di yfinance usano GIA' curl_cffi con impersonazione Chrome
-# internamente di default: non serve (e può rompersi) sostituire la sessione a mano.
-# Lo dicono gli stessi sviluppatori di yfinance: impostare una sessione custom con
-# session=... fa scattare un controllo isinstance() interno che, con i reload dei
-# moduli causati da Streamlit, può fallire e bloccare OGNI richiesta con
-# YFDataException — esattamente il sintomo "non scarica più nulla, come tagliato".
-# Usiamo quindi solo le leve ufficiali e documentate, stabili tra le versioni:
-yf.config.network.retries = 3          # Retry automatico con backoff esponenziale (1s, 2s, 4s) sugli errori di rete transitori
-# yf.config.network.proxy = "http://USER:PASS@HOST:PORT"  # <-- Se l'IP del cloud è condiviso/bloccato, inserisci qui un proxy dedicato (vedi spiegazione in chat)
-yf.config.debug.hide_exceptions = False  # Mostra l'eccezione REALE (non più genericamente "Rate Limit") finché stiamo diagnosticando
-# --- FINE SISTEMA ANTI-RATE-LIMIT ---
+# --- INIZIO SISTEMA ANTI-BAN (STEALTH MODE GLOBALE & RATE LIMITER) ---
+# La sessione vive 1 ora (previene Crumb Expiration), persistendo tra i riavvii (previene TLS Handshake Spam)
+@st.cache_resource(ttl=3600)
+def get_stealth_session():
+    session = cffi_requests.Session(impersonate="chrome")
+    
+    # Inject Custom Rate Limiter: Freno a mano chirurgico
+    _original_request = session.request
+    def _rate_limited_request(*args, **kwargs):
+        time.sleep(0.25)  # Delay di 250ms (max 4 chiamate/sec). Azzera il rischio Errore 429 (Rate Limit).
+        return _original_request(*args, **kwargs)
+        
+    session.request = _rate_limited_request
+    return session
+
+# 1. Overriding di yf.download
+_original_yf_download = yf.download
+def _stealth_download(*args, **kwargs):
+    kwargs['session'] = get_stealth_session()
+    return _original_yf_download(*args, **kwargs)
+yf.download = _stealth_download
+
+# 2. Overriding di yf.Ticker
+_original_yf_ticker = yf.Ticker
+class StealthTicker(_original_yf_ticker):
+    def __init__(self, ticker, session=None, **kwargs):
+        if session is None:
+            session = get_stealth_session()
+        super().__init__(ticker, session=session, **kwargs)
+yf.Ticker = StealthTicker
+# --- FINE SISTEMA ANTI-BAN ---
 
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
 def get_precise_dte(exp_str):
@@ -160,8 +180,7 @@ STRATEGY_PARAM_GRID = {
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", initial_sidebar_state="expanded")
 
-@st.cache_data(ttl=900, show_spinner=False)
-def calc_fund_metrics_v3(ticker_symbol, _t_data):
+def calc_fund_metrics_v3(ticker_symbol, t_data):
     try:
         # Download dati 5 anni per Fondo e Benchmark (SPY)
         df_f = yf.download(ticker_symbol, period="5y", interval="1d")['Close']
@@ -287,7 +306,7 @@ def display_correlation_matrix(tickers):
     try:
         st.markdown("### 📊 Analisi di Correlazione e Rischio")
         st.write("Verifica se i titoli selezionati si muovono insieme. Correlazione > 0.70 indica un alto rischio di concentrazione.")
-        data = _download_close_cached(tuple(tickers), "1y")
+        data = yf.download(tickers, period="1y")['Close']
         if isinstance(data, pd.Series) or data.empty: return
         corr_matrix = data.corr()
         fig = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale='RdBu_r', zmin=-1, zmax=1, aspect="auto")
@@ -295,7 +314,6 @@ def display_correlation_matrix(tickers):
     except:
         pass
 
-@st.cache_data(ttl=900, show_spinner=False)
 def safe_get_adj_close(tickers, period="5y"):
     """Scarica i dati risolvendo il problema di Adj Close per Indici e Futures."""
     try:
@@ -1231,41 +1249,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
 
     return df
 
-# --- PATCH ANTI RATE-LIMIT: CACHE MANCANTE SUI PUNTI "CALDI" ---
-# Streamlit ri-esegue TUTTO lo script ad ogni interazione (selectbox, slider,
-# checkbox, bottone) e ad ogni autorefresh. Le chiamate sotto erano fatte
-# DIRETTAMENTE su yf.Ticker(...).history()/.options/.info SENZA cache: questo
-# significa che venivano ripetute a Yahoo Finance ad ogni singolo rerun, anche
-# se il dato non era cambiato. Wrapper sotto: stessa identica chiamata
-# yfinance, nessun cambio di logica/dati, solo evitare di rifare la richiesta
-# in pochi secondi. (Nessun session= custom passato: lo gestisce yfinance).
-@st.cache_data(ttl=8, show_spinner=False)
-def get_spot_price_cached(ticker_symbol):
-    """Cache 8s dedicata al prezzo spot intraday: separata da get_history_cached perché per lo scalping serve la massima reattività su questa singola chiamata leggera, senza forzare lo stesso ritmo sullo storico mensile (HV) che non ne ha bisogno."""
-    return yf.Ticker(ticker_symbol).history(period='1d')
-
-@st.cache_data(ttl=20, show_spinner=False)
-def get_history_cached(ticker_symbol, period):
-    """Cache 20s su .history(): assorbe i rerun ravvicinati senza percepibile perdita di freschezza."""
-    return yf.Ticker(ticker_symbol).history(period=period)
-
-@st.cache_data(ttl=900, show_spinner=False)
-def get_options_cached(ticker_symbol):
-    """Cache 15 min sulle scadenze disponibili: cambiano poche volte al giorno, non ad ogni rerun."""
-    return yf.Ticker(ticker_symbol).options
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_info_cached(ticker_symbol):
-    """Cache 1h su .info: è la chiamata più pesante (quoteSummary multi-modulo) e i dati fondamentali/dividendi non cambiano in pochi secondi."""
-    return yf.Ticker(ticker_symbol).info
-
-@st.cache_data(ttl=900, show_spinner=False)
-def _download_close_cached(tickers_tuple, period):
-    """Cache 15 min sui prezzi Close multi-ticker (usata es. dalla matrice di correlazione)."""
-    return yf.download(list(tickers_tuple), period=period)['Close']
-# --- FINE PATCH ANTI RATE-LIMIT ---
-
-@st.cache_data(ttl=30, show_spinner=False)  # PATCH: portato da 60s a 30s su richiesta esplicita (scalping/intraday)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_data(ticker, dates):
     t = yf.Ticker(ticker)
     frames = []
@@ -2536,7 +2520,7 @@ with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False
 # Dashboard: refresh ogni 1 minuto (60000 ms)
 # Scanner: refresh ogni 5 minuti (300000 ms) per evitare Rate Limit
 if menu == "🏟️ DASHBOARD SINGOLA":
-    st_autorefresh(interval=30000, key="sentinel_dash_refresh")  # PATCH: da 60s a 30s, in linea con la cache della option chain
+    st_autorefresh(interval=60000, key="sentinel_dash_refresh")
 elif menu == "🔥 SCANNER HOT TICKERS":
     st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
@@ -2563,18 +2547,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
     ticker_obj = yf.Ticker(current_ticker)
-    h = get_spot_price_cached(current_ticker)  # PATCH: cache 8s dedicata, separata dallo storico mensile
+    h = ticker_obj.history(period='1d')
     if h.empty: st.stop()
     spot = h['Close'].iloc[-1]
 
     try:
-        available_dates = get_options_cached(current_ticker)  # PATCH: prima era ticker_obj.options senza cache
+        available_dates = ticker_obj.options
     except Exception as e:
-        err_str = str(e)
-        if "429" in err_str or "too many" in err_str.lower() or "rate" in err_str.lower():
-            st.error(f"⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi qualche minuto prima di riprovare.\n\nDettaglio tecnico: {err_str}")
-        else:
-            st.error(f"⚠️ Errore nel recupero delle scadenze per {current_ticker} (non è un rate limit). Dettaglio tecnico: {err_str}")
+        st.error("⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi 10 minuti prima di riprovare.")
         st.stop()
 
     all_dates_info = []
@@ -2611,7 +2591,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             
             # Recupero Dividend Yield dinamico (fallback a 0.0 se non disponibile)
             try:
-                div_yield = get_info_cached(current_ticker).get('dividendYield', 0.0)  # PATCH: prima era ticker_obj.info senza cache
+                div_yield = ticker_obj.info.get('dividendYield', 0.0)
                 if div_yield is None: div_yield = 0.0
             except:
                 div_yield = 0.0
@@ -2932,7 +2912,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
 
             # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE CON FILTRO LIQUIDITÀ) ---
             try:
-                hist_1m = get_history_cached(current_ticker, '1mo')  # PATCH: prima era ticker_obj.history('1mo') senza cache
+                hist_1m = ticker_obj.history(period='1mo')
                 hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
                 
                 # 1. Trova IV ATM (Con Protezione Anti-Zero)
@@ -7482,7 +7462,7 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
         
         # Fallback: se non è un'azione (EQUITY) e non ha il prefisso, prova ad aggiungerlo
         try:
-            check = get_info_cached(t_code)  # PATCH: prima era yf.Ticker(t_code).info senza cache, rifatto ad ogni rerun
+            check = yf.Ticker(t_code).info
             if not check or 'quoteType' not in check:
                 if not t_code.startswith("^"):
                     t_code = "^" + t_code
@@ -8347,10 +8327,8 @@ elif menu == "🔍 GLOBAL SCANNER (Alpha)":
         for i, ticker in enumerate(full_db):
             status_msg.text(f"Analisi Quantitativa in corso: {ticker}...")
             try:
-                _t0 = time.time()
-                inf = get_info_cached(ticker)  # PATCH: prima era yf.Ticker(ticker).info senza cache, ora cache 1h
-                if time.time() - _t0 > 0.05:  # è stata una vera richiesta di rete (cache miss): piccola pausa di sicurezza anti rate-limit
-                    time.sleep(0.3)
+                t = yf.Ticker(ticker)
+                inf = t.info
                 
                 curr = inf.get('financialCurrency', inf.get('currency', '$'))
                 s_curr = "€" if curr == "EUR" else "$"
