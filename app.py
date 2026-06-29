@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas_ta as ta
+import ta
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy import stats
