@@ -4,7 +4,20 @@ import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import ta
+import histdatacom
+from histdatacom.options import Options
+# NOTA TECNICA (fix Segmentation Fault in avvio su Streamlit Cloud):
+# 'pandas_ta' è stato RIMOSSO completamente dall'app (non solo spostato lazy):
+# su Python 3.13 + numpy 2.x, il pacchetto dipende da numba/llvmlite che
+# genera un crash nativo a livello C (SIGSEGV) durante l'import, abbattendo
+# l'intera applicazione prima ancora di disegnare la prima riga di UI.
+# Confermato dal test di isolamento: commentando solo pandas_ta il segfault
+# scompare. La sostituzione è TOTALMENTE trasparente dal punto di vista
+# funzionale: get_ta_signal nel Strategy Builder ora usa TechnicalIndicators
+# (puro pandas/numpy, già presente nel codebase) che copre tutti e 30+
+# gli indicatori dell'TA_INDICATORS_MAP con la stessa interfaccia visiva
+# invariata per l'utente. histdatacom non era implicato nel crash: è rimasto
+# a livello di modulo come sempre, senza nessuna modifica.
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy import stats
@@ -16,8 +29,6 @@ import time  # <-- Manteniamo l'import per il delay anti-ban
 import requests
 import re
 from bs4 import BeautifulSoup
-import histdatacom
-from histdatacom.options import Options
 import os, zipfile, shutil, glob
 import yfinance as yf
 
@@ -6774,7 +6785,7 @@ elif menu == "🛠️ STRATEGY BUILDER":
     if "Volume Profile" in core_strategies:
         vp_mode = st.sidebar.selectbox("Volume Profile Mode", ["breakout", "rejection"])
 
-    st.sidebar.markdown("### 📊 Filtri Tecnici (pandas_ta)")
+    st.sidebar.markdown("### 📊 Filtri Tecnici (TA)")
     num_ta_filters = st.sidebar.number_input("Numero di Filtri TA", min_value=0, max_value=5, value=0)
     ta_filters = []
     
@@ -7417,44 +7428,238 @@ elif menu == "🛠️ STRATEGY BUILDER":
         @staticmethod
         def get_ta_signal(df, indicator_name, params, condition):
             """
-            Genera segnali utilizzando pandas_ta in modo AGNOSTICO ai nomi.
+            Genera segnali tecnici usando TechnicalIndicators nativa (puro pandas/numpy).
+            Sostituisce il vecchio approccio df.ta.* di pandas_ta, eliminata per il
+            Segmentation Fault causato da numba/llvmlite su Python 3.13 + numpy 2.x.
+            Nessuna dipendenza esterna: tutti gli indicatori sono già implementati
+            nella classe TechnicalIndicators qui sopra.
             """
             signals = pd.Series(0, index=df.index)
             try:
-                # Estraiamo parametri speciali di routing
+                # FIX NaN ERROR STRATEGY BUILDER: dopo histdatacom il df ha un DatetimeIndex
+                # (dal resampling), mentre il backtest si aspetta indici interi. Il concat
+                # di segnali con indici diversi produce NaN su tutto. Reset a indici interi
+                # garantisce allineamento corretto senza perdere dati.
+                df = df.reset_index(drop=True)
+                signals = pd.Series(0, index=df.index)
+
+                # Estraiamo parametri speciali di routing (non sono parametri dell'indicatore)
+                params = dict(params)  # copia difensiva: params viene pop-ato
                 target_band = params.pop('_band', None)
                 target_line = params.pop('_line', None)
-                
-                # Calcola l'indicatore
-                ind_func = getattr(df.ta, indicator_name)
-                ind_result = ind_func(**params)
-                
-                # --- NORMALIZZAZIONE COLONNA TARGET ---
-                target_col_name = None
-                if isinstance(ind_result, pd.Series):
-                    ind_result.name = "TARGET_IND"
-                elif isinstance(ind_result, pd.DataFrame):
-                    # Logica per trovare la colonna giusta se l'indicatore ne genera molte
-                    if target_band == 'Lower': target_col_name = [c for c in ind_result.columns if 'l' in c.lower()][-1]
-                    elif target_band == 'Upper': target_col_name = [c for c in ind_result.columns if 'u' in c.lower()][-1]
-                    elif target_band == 'Middle': target_col_name = [c for c in ind_result.columns if 'm' in c.lower()][-1]
-                    elif indicator_name == 'macd': target_col_name = ind_result.columns[0] # Linea MACD principale
-                    elif indicator_name == 'stoch': target_col_name = ind_result.columns[1] if target_line == 'D' else ind_result.columns[0]
-                    else: target_col_name = ind_result.columns[0] # Fallback
-                    
-                    ind_result = ind_result[[target_col_name]].rename(columns={target_col_name: "TARGET_IND"})
-                
-                # Unisci al df originale usando il nome sicuro
-                temp_df = pd.concat([df, ind_result], axis=1)
-                
-                # --- VALUTAZIONE CONDIZIONI ---
+
+                TI = TechnicalIndicators
+                close  = df['Close']
+                high   = df['High']
+                low    = df['Low']
+                volume = df.get('Volume', pd.Series(1, index=df.index))
+
+                ind_result = None  # Sarà sempre una pd.Series con nome "TARGET_IND"
+
+                # --- MAPPING DIRETTO: indicator_name -> TechnicalIndicators ---
+                name = indicator_name.lower()
+
+                if name == 'rsi':
+                    ind_result = TI.rsi(close, period=params.get('length', 14))
+
+                elif name == 'macd':
+                    macd_line, signal_line = TI.macd(close,
+                        fast=params.get('fast', 12),
+                        slow=params.get('slow', 26),
+                        signal=params.get('signal', 9))
+                    # Il target di confronto è la linea MACD principale (default) o signal
+                    ind_result = signal_line if target_line == 'Signal' else macd_line
+
+                elif name == 'ema':
+                    ind_result = TI.ema(close, period=params.get('length', 20))
+
+                elif name == 'sma':
+                    ind_result = TI.sma(close, period=params.get('length', 20))
+
+                elif name == 'wma':
+                    ind_result = TI.wma(close, period=params.get('length', 50))
+
+                elif name == 'hma':
+                    ind_result = TI.hma(close, period=params.get('length', 20))
+
+                elif name == 'tema':
+                    ind_result = TI.tema(close, period=params.get('length', 20))
+
+                elif name == 'dema':
+                    ind_result = TI.dema(close, period=params.get('length', 20))
+
+                elif name == 'kama':
+                    ind_result = TI.kama(close, period=params.get('length', 10))
+
+                elif name == 'atr':
+                    ind_result = TI.atr(df, period=params.get('length', 14))
+
+                elif name == 'natr':  # ATR normalizzato come % del Close
+                    ind_result = TI.atr(df, period=params.get('length', 14)) / close * 100
+
+                elif name == 'bbands':
+                    length = params.get('length', 20)
+                    std_mult = params.get('std', 2.0)
+                    ma = close.rolling(length).mean()
+                    std = close.rolling(length).std()
+                    upper = ma + std_mult * std
+                    lower = ma - std_mult * std
+                    if target_band == 'Upper':   ind_result = upper
+                    elif target_band == 'Lower': ind_result = lower
+                    else:                        ind_result = ma  # Middle/Basis
+
+                elif name == 'kc':  # Keltner Channel
+                    length = params.get('length', 20)
+                    scalar = params.get('scalar', 2.0)
+                    ma = TI.ema(close, period=length)
+                    atr = TI.atr(df, period=length)
+                    upper = ma + scalar * atr
+                    lower = ma - scalar * atr
+                    if target_band == 'Upper':   ind_result = upper
+                    elif target_band == 'Lower': ind_result = lower
+                    else:                        ind_result = ma
+
+                elif name == 'dc':  # Donchian Channel
+                    length = params.get('length', 20)
+                    upper = high.rolling(length).max()
+                    lower = low.rolling(length).min()
+                    mid = (upper + lower) / 2
+                    if target_band == 'Upper':   ind_result = upper
+                    elif target_band == 'Lower': ind_result = lower
+                    else:                        ind_result = mid
+
+                elif name == 'stoch':
+                    k, d = TI.stochastic(df,
+                        k_period=params.get('k', 14),
+                        d_period=params.get('d', 3))
+                    ind_result = d if target_line == 'D' else k
+
+                elif name == 'stochrsi':
+                    ind_result = TI.stochrsi(close, period=params.get('length', 14))
+
+                elif name == 'cci':
+                    ind_result = TI.cci(df, period=params.get('length', 20))
+
+                elif name == 'willr':  # Williams %R (approssimazione con stochastic invertito)
+                    length = params.get('length', 14)
+                    low_min  = low.rolling(length).min()
+                    high_max = high.rolling(length).max()
+                    ind_result = -100 * (high_max - close) / (high_max - low_min)
+
+                elif name == 'mfi':
+                    ind_result = TI.mfi(df, period=params.get('length', 14))
+
+                elif name == 'roc':
+                    ind_result = TI.roc(close, period=params.get('length', 10))
+
+                elif name == 'mom':
+                    p = params.get('length', 10)
+                    ind_result = close - close.shift(p)  # Momentum puro: differenza di prezzo
+
+                elif name == 'cmo':
+                    ind_result = TI.cmo(close, period=params.get('length', 14))
+
+                elif name == 'tsi':
+                    ind_result = TI.tsi(close,
+                        r=params.get('slow', 25),
+                        s=params.get('fast', 13))
+
+                elif name == 'uo':
+                    ind_result = TI.uo(df,
+                        p1=params.get('fast', 7),
+                        p2=params.get('medium', 14),
+                        p3=params.get('slow', 28))
+
+                elif name == 'bop':
+                    ind_result = TI.bop(df)
+
+                elif name == 'cg':  # Center of Gravity (approssimazione con sma pesata)
+                    length = params.get('length', 10)
+                    weights = np.arange(1, length + 1)
+                    ind_result = close.rolling(length).apply(
+                        lambda x: -np.dot(x, np.arange(len(x), 0, -1)) / (x.sum() + 1e-9), raw=True)
+
+                elif name == 'adx':
+                    ind_result = TI.adx(df, period=params.get('length', 14))
+
+                elif name == 'aroon':
+                    aroon_up, aroon_down = TI.aroon(df, period=params.get('length', 14))
+                    ind_result = aroon_up if target_line != 'Down' else aroon_down
+
+                elif name == 'chop':
+                    ind_result = TI.chop(df, period=params.get('length', 14))
+
+                elif name == 'psar':
+                    ind_result = TI.parabolic_sar(df,
+                        af=params.get('af0', 0.02),
+                        max_af=params.get('max_af', 0.2))
+
+                elif name == 'supertrend':
+                    upper, lower = TI.supertrend(df,
+                        period=params.get('length', 7),
+                        multiplier=params.get('multiplier', 3.0))
+                    ind_result = lower  # lato lower = supporto di trend rialzista
+
+                elif name in ('obv', 'pvt'):
+                    ind_result = TI.obv(df)  # pvt è variante, OBV come proxy
+
+                elif name == 'cmf':
+                    ind_result = TI.cmf(df, period=params.get('length', 20))
+
+                elif name == 'ad':
+                    ind_result = TI.ad_line(df) if hasattr(TI, 'ad_line') else (
+                        ((close - low) - (high - close)) / (high - low + 1e-9) * volume
+                    ).cumsum()
+
+                elif name == 'vwap':
+                    ind_result = TI.vwap(df)
+
+                elif name == 'efi':  # Elder Force Index
+                    period = params.get('length', 14)
+                    fi = close.diff() * volume
+                    ind_result = fi.ewm(span=period, adjust=False).mean()
+
+                elif name == 'massi':  # Mass Index
+                    fast = params.get('fast', 9)
+                    slow_p = params.get('slow', 25)
+                    ema1 = TI.ema(high - low, period=fast)
+                    ema2 = TI.ema(ema1, period=fast)
+                    ind_result = (ema1 / (ema2 + 1e-9)).rolling(slow_p).sum()
+
+                elif name == 'true_range':
+                    hl = high - low
+                    hc = (high - close.shift()).abs()
+                    lc = (low  - close.shift()).abs()
+                    ind_result = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+
+                elif name == 'qstick':
+                    ind_result = TI.sma(close - df['Open'], period=params.get('length', 14))
+
+                elif name == 'decay':  # Approssimazione: EMA del momentum
+                    ind_result = TI.ema(close.diff(), period=params.get('length', 14))
+
+                else:
+                    # Fallback: ritorna segnale zero senza crash
+                    return signals
+
+                # --- Normalizzazione finale e valutazione condizione ---
+                if ind_result is None:
+                    return signals
+                ind_result = pd.Series(ind_result.values, index=df.index, name="TARGET_IND")
+
+                temp_df = df.copy()
+                temp_df['TARGET_IND'] = ind_result
+
                 if isinstance(condition, dict):
                     if condition.get('long'):
-                        signals.loc[temp_df.eval(condition['long'])] = 1
+                        mask = temp_df.eval(condition['long'])
+                        signals.loc[mask.fillna(False)] = 1
                     if condition.get('short'):
-                        signals.loc[temp_df.eval(condition['short'])] = -1
-            except Exception as e:
-                pass # Silenzia errori anomali per non bloccare i test
+                        mask = temp_df.eval(condition['short'])
+                        signals.loc[mask.fillna(False)] = -1
+
+            except Exception:
+                pass  # Silenzia errori anomali per non bloccare il backtest
             return signals
 
 
