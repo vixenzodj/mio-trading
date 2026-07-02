@@ -1048,6 +1048,42 @@ def display_macro_war_room():
             for s in sells: st.write(f"- {s}")
 
 # --- CORE QUANT ENGINE ---
+def find_gamma_flip_robust(gex_func, spot, args, max_widen=5):
+    """
+    Root-finder robusto per il livello di Zero Gamma. A differenza di un brentq con
+    bracket fisso (spot*0.50 - spot*1.50) che, se non trova un cambio di segno, veniva
+    catturato da un 'except: = spot' silenzioso, questa funzione allarga adattivamente
+    il bracket e, se anche al bordo massimo il segno non cambia (il book è in un regime
+    di gamma persistente - tutto positivo o tutto negativo, come durante un vero Gamma
+    Squeeze o un crollo con panic put buying), estrapola linearmente dal bordo più
+    vicino allo zero invece di restituire uno 'spot' non veritiero che finge un
+    crossing inesistente. Ritorna (livello, is_extrapolated).
+    """
+    lo_mult, hi_mult = 0.50, 1.50
+    f_lo = f_hi = None
+    for _ in range(max_widen):
+        lo, hi = spot * lo_mult, spot * hi_mult
+        try:
+            f_lo, f_hi = gex_func(lo, *args), gex_func(hi, *args)
+        except Exception:
+            return spot, True
+        if np.sign(f_lo) != np.sign(f_hi):
+            try:
+                return brentq(gex_func, lo, hi, args=args, xtol=1e-6), False
+            except Exception:
+                return spot, True
+        lo_mult *= 0.70
+        hi_mult *= 1.30
+
+    # Nessun crossing nemmeno nel bracket massimo allargato: regime di gamma
+    # persistente. Estrapoliamo linearmente dal bordo con |GEX| minore invece di
+    # affermare implicitamente "0G = spot".
+    edge, f_edge, other, f_other = (lo, f_lo, hi, f_hi) if abs(f_lo) < abs(f_hi) else (hi, f_hi, lo, f_lo)
+    slope = (f_other - f_edge) / (other - edge)
+    if abs(slope) < 1e-9:
+        return edge, True
+    return edge - f_edge / slope, True
+
 def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     """Calcolo GEX Statico Istituzionale (Normalizzazione Esatta S^2)"""
     K = df['strike'].values
@@ -1083,9 +1119,18 @@ def calculate_0g_dynamic(price, df, S0, r=DYNAMIC_R, q=0.0):
         
     iv_base = df['iv_smoothed'].values if 'iv_smoothed' in df.columns else (df['iv_working'].values if 'iv_working' in df.columns else df['impliedVolatility'].values)
     
-    # Espansione differenziale corretta rispetto allo Spot Iniziale (S0), senza floor empirici distorsivi
+    # FIX: l'espansione di Taylor skew_S*delta_spot è valida solo LOCALMENTE. Con il
+    # bracket di ricerca ora adattivo (find_gamma_flip_robust può allargarlo ben oltre
+    # +-50%), il vecchio termine lineare non saturato spingeva iv_dyn sotto zero per
+    # gran parte della chain ai bordi, facendola collassare sul floor 0.01 in modo
+    # innaturale e discontinuo - corrompendo proprio la forma di GEX(price) nella zona
+    # in cui il root-finder deve cercare. Saturiamo dolcemente (tanh) l'escursione
+    # relativa di prezzo usata nell'estrapolazione a un massimo equivalente di +-25%,
+    # lasciando comunque il root-finder libero di cercare oltre quella distanza.
     delta_spot = price - S0
-    iv_dyn = np.maximum(iv_base + skew_S * delta_spot, 0.01)
+    max_rel_move = 0.25
+    rel_move_sat = max_rel_move * np.tanh((delta_spot / S0) / max_rel_move)
+    iv_dyn = np.maximum(iv_base + skew_S * (rel_move_sat * S0), 0.01)
     
     oi_arr = df['openInterest'].fillna(0).values
     vol_arr = df['volume'].fillna(0).values
@@ -1149,7 +1194,8 @@ def fit_svi_slice(strikes, ivs, weights, S, T, r, q):
     """
     Fit della parametrizzazione SVI (Gatheral) sulla varianza totale, in log-moneyness
     FORWARD k=ln(K/F). Ritorna i 5 parametri (a,b,rho,m,sigma) o None se il fit fallisce
-    o produce una superficie con arbitraggio (validato con il test g(k)>=0 di Gatheral-Jacquier).
+    o produce una superficie con arbitraggio (validato con il test g(k)>=0 di Gatheral-Jacquier,
+    lo STESSO identico test usato in gatheral_risk_neutral_moments).
     """
     F = S * np.exp((r - q) * T)
     k = np.log(strikes / F)
@@ -1159,8 +1205,15 @@ def fit_svi_slice(strikes, ivs, weights, S, T, r, q):
         a, b, rho, m, sigma = p
         return a + b * (rho * (k_ - m) + np.sqrt((k_ - m) ** 2 + sigma ** 2))
 
+    # FIX (damping dei pesi): OI/Volume grezzi e lineari fanno sì che un singolo strike
+    # iper-liquido (tipicamente l'ATM) domini quasi per intero il minimi-quadrati,
+    # lasciando le code - da cui dipende proprio la kurtosi che vogliamo stimare - quasi
+    # prive di vincolo dai dati reali. La radice comprime il range di importanza (uno
+    # strike con 100x l'OI pesa ~10x, non 100x) senza annullare l'informazione di liquidità.
+    imp_weight = np.sqrt(np.asarray(weights, dtype=float))
+
     def resid(p):
-        return (svi_w(p, k) - w) * np.sqrt(weights)
+        return (svi_w(p, k) - w) * np.sqrt(imp_weight)
 
     a0 = max(np.min(w) * 0.85, 1e-6)
     p0 = [a0, 0.15, -0.3, 0.0, 0.15]
@@ -1171,9 +1224,24 @@ def fit_svi_slice(strikes, ivs, weights, S, T, r, q):
         if not res.success:
             return None
         a, b, rho, m, sigma = res.x
-        # Test di non-arbitraggio (Gatheral-Jacquier): varianza minima non negativa
+
+        # Test di non-arbitraggio SUL VERTICE (varianza minima non negativa)
         if a + b * sigma * np.sqrt(1 - rho ** 2) < -1e-7:
             return None
+
+        # FIX (vincolo asintotico mancante): il test sopra copre solo il vertice della
+        # smile. Mancava il vincolo sulle ALI (k->+-inf) - esattamente ciò che
+        # gatheral_risk_neutral_moments verifica poi con g(k)>=0 sulla griglia estesa.
+        # Senza controllarlo QUI, l'ottimizzatore restava libero di convergere (specie
+        # su smile ripide/skewed, tipiche di mercati in stress) su combinazioni b/rho
+        # che il controllo a valle rigettava SEMPRE, producendo Kurt(RN)=None in modo
+        # sistematico anche quando il fit "sembrava" riuscito. Bound derivato per via
+        # analitica dal limite di g(k) per k->+-infinito, applicato alla stessa identica
+        # formula g(k) usata sotto: g(+-inf) = 1/4 - [b(1+-rho)]^2/16 >= 0
+        # => b*(1+|rho|) <= 2.
+        if b * (1 + abs(rho)) > 2.0:
+            return None
+
         fitted = svi_w(res.x, k)
         rel_err = np.mean(np.abs(fitted - w) / (w + 1e-9))
         if rel_err > 0.30:  # fit troppo povero rispetto al rumore bid/ask reale: non fidarsi
@@ -1203,7 +1271,17 @@ def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000):
     Ritorna None se la superficie non passa il test di non-arbitraggio su tutta la griglia.
     """
     try:
-        k_grid = np.linspace(-k_range, k_range, n)
+        # FIX (griglia adattiva): un k_range fisso è tarato per scadenze "normali", ma la
+        # vera larghezza della distribuzione scala con sqrt(w). Su 0DTE (w microscopico)
+        # un range fisso di +-6 spreca quasi tutta la risoluzione in coda dove la densità
+        # è già zero per costruzione, sotto-campionando la massa di probabilità reale, che
+        # vive in una finestra molto più stretta. Scaliamo sulla std ATM effettiva, con un
+        # pavimento/tetto di sicurezza che preserva il comportamento precedente sulle
+        # scadenze normali/lunghe dove il valore fisso 6.0 era già adeguato.
+        w_atm, _, _ = _svi_w_and_derivs(svi_params, np.array([0.0]))
+        std_atm = np.sqrt(max(w_atm[0], 1e-10))
+        k_range_eff = float(np.clip(9.0 * std_atm, 1.5, k_range))
+        k_grid = np.linspace(-k_range_eff, k_range_eff, n)
         w, wp, wpp = _svi_w_and_derivs(svi_params, k_grid)
         w = np.maximum(w, 1e-10)
         g = (1 - (k_grid * wp) / (2 * w)) ** 2 - (wp ** 2 / 4) * (1 / w + 0.25) + wpp / 2
@@ -1311,15 +1389,28 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
         
     df['d_sigma_dk'] = 0.0
     S = float(S)
-    svi_by_dte = {}  # Salva i parametri SVI per scadenza: servono a valle per la kurtosi risk-neutral vera
+    # FIX ARCHITETTURALE (KURT RN sempre NaN): svi_by_dte era precedentemente chiavizzato sul
+    # valore FLOAT di dte_years. Quel valore viene prodotto da raw_data['exp'].apply(get_precise_dte),
+    # e get_precise_dte chiama datetime.utcnow() AD OGNI RIGA: su una chain con centinaia di righe
+    # per scadenza, l'esecuzione di .apply() richiede tempo non nullo, quindi anche righe con la
+    # STESSA identica scadenza logica ricevono un dte_years leggermente diverso all'ultima cifra
+    # decimale (confermato: 400/400 valori distinti su un test con 400 righe della stessa scadenza).
+    # Un dizionario Python richiede uguaglianza bit-esatta sulle chiavi: il lookup a valle (fatto
+    # ripescando dte_years una seconda volta da un'altra riga) fallisce quindi SEMPRE, senza mai
+    # sollevare un'eccezione (dict.get su chiave assente ritorna None silenziosamente) - da qui il
+    # fallimento sistematico e indipendente da orario/scadenza/mercato. Fix: chiave stabile 'exp'
+    # (stringa immutabile, mai ricalcolata) + T esatto salvato nello stesso dizionario, cosicché il
+    # chiamante non debba MAI ricalcolare independentemente il tempo a scadenza.
+    svi_by_dte = {}  # ora chiavizzato per stringa 'exp': {'2026-09-28': {'svi': {...}|None, 'T': 0.2493...}}
 
     # 2. VOLATILITY SMILE SMOOTHER & ANALYTICAL SKEW SLOPE
     # Tentativo primario: fit SVI (Gatheral) no-arbitrage. Fallback automatico al polinomio
     # pesato di 2° grado (collaudato) se il fit SVI fallisce o i punti liquidi sono insufficienti:
     # nessuna funzionalità esistente viene mai rimossa, solo affiancata da un metodo più rigoroso.
-    for dte_val in df['dte_years'].unique():
-        mask = df['dte_years'] == dte_val
+    for exp_val in df['exp'].unique():
+        mask = df['exp'] == exp_val
         sub_df = df[mask]
+        dte_val = sub_df['dte_years'].iloc[0]  # un solo valore per scadenza: preso una volta, mai ricalcolato
         r_local = get_term_structured_rate(dte_val)  # tasso della scadenza giusta, non sempre ^IRX
 
         # Filtro per isolare dati di volatilità reali ed evitare buchi a zero
@@ -1333,7 +1424,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
                                         weights, S, max(dte_val, 0.00005), r_local, q)
 
         if svi_params is not None:
-            svi_by_dte[dte_val] = svi_params
+            svi_by_dte[exp_val] = {'svi': svi_params, 'T': dte_val}
             smoothed_vals, deriv_vals = svi_iv_and_deriv_dK(svi_params, sub_df['strike'].values, S,
                                                              max(dte_val, 0.00005), r_local, q)
             min_bound = max(0.02, valid_pts['iv_smoothed'].min() * 0.5)
@@ -1342,7 +1433,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
             df.loc[mask, 'd_sigma_dk'] = deriv_vals
 
         elif len(valid_pts) >= 4:
-            svi_by_dte[dte_val] = None
+            svi_by_dte[exp_val] = {'svi': None, 'T': dte_val}
             # Ponderazione monetaria: gli strike liquidi (ATM e Near-the-Money) definiscono la struttura dello skew
             weights = (valid_pts['openInterest'].values + valid_pts['volume'].values + 1.0)
 
@@ -2927,15 +3018,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             skew_factor = p_iv / c_iv if c_iv > 0 else 1.0
             # ---------------------------------------------
 
-            # CALCOLO 0-GAMMA ORIGINALE (Ricerca Espansa al 50%)
-            try: z_gamma = brentq(calculate_gex_at_price, spot * 0.50, spot * 1.50, args=(raw_data, DYNAMIC_R, div_yield))
-            except: z_gamma = spot 
-
-            # CALCOLO 0-GAMMA DINAMICO (Ricerca Espansa al 50%)
-            try: z_gamma_dyn = brentq(calculate_0g_dynamic, spot * 0.50, spot * 1.50, args=(raw_data, spot, DYNAMIC_R, div_yield))
-            except: z_gamma_dyn = spot
-
+            # FIX (ordine di esecuzione): get_greeks_pro popola 'd_sigma_dk' (lo skew SVI di
+            # cui calculate_0g_dynamic ha bisogno per differenziarsi dallo Statico). Prima
+            # veniva chiamata DOPO il calcolo di 0-Gamma: calculate_0g_dynamic riceveva quindi
+            # una df priva della colonna, il suo termine di skew collassava a 0 ovunque, e
+            # Zero Gamma Dinamico finiva per calcolare la STESSA IDENTICA funzione di quello
+            # Statico (non un'approssimazione simile: bit-per-bit identica). Root cause della
+            # sovrapposizione "Statico=Dinamico" segnalata durante le fasi di stress.
             df, svi_by_dte = get_greeks_pro(raw_data, spot, r=DYNAMIC_R, q=div_yield)
+
+            # CALCOLO 0-GAMMA STATICO E DINAMICO (bracket adattivo, mai più fallback silenzioso su spot)
+            z_gamma, _ = find_gamma_flip_robust(calculate_gex_at_price, spot, (raw_data, DYNAMIC_R, div_yield))
+            z_gamma_dyn, _ = find_gamma_flip_robust(calculate_0g_dynamic, spot, (df, spot, DYNAMIC_R, div_yield))
             
             # --- LOGICA DI AGGREGAZIONE MATEMATICA (Binning Dinamico) ---
             # Usiamo floor division per forzare ogni contratto nel proprio bin matematico
@@ -3213,7 +3307,14 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 excess_kurt_rn = None
                 try:
                     near_dte_val = raw_data[raw_data['exp'] == target_dates[0]]['dte_years'].iloc[0]
-                    svi_near = svi_by_dte.get(near_dte_val)
+                    svi_entry = svi_by_dte.get(near_dte_val)
+                    # FIX: svi_by_dte[T] è un wrapper {'svi': array_5_parametri, 'T': dte},
+                    # non l'array nudo (vedi popolamento in get_greeks_pro). Passare il dict
+                    # intero a gatheral_risk_neutral_moments fa fallire SEMPRE lo spacchettamento
+                    # 'a,b,rho,m,sigma = params' dentro _svi_w_and_derivs (ValueError: not enough
+                    # values to unpack, 5 attesi contro 2 ricevuti) - indipendentemente da
+                    # scadenza, orario o condizioni di mercato. Root cause del Kurt(RN)=NaN.
+                    svi_near = svi_entry.get('svi') if svi_entry is not None else None
                     if svi_near is not None:
                         r_near = get_term_structured_rate(near_dte_val)
                         moments = gatheral_risk_neutral_moments(svi_near, spot, max(near_dte_val, 0.00005), r_near, div_yield)
@@ -3854,14 +3955,14 @@ elif menu == "🔥 SCANNER HOT TICKERS":
         px, df_scan, dte_years = data_pack
         
         try:
-            # Calcolo 0-G Statico e Dinamico
-            try: zg_val = brentq(calculate_gex_at_price, px*0.75, px*1.25, args=(df_scan,))
-            except: zg_val = px
-            try: zg_dyn = brentq(calculate_0g_dynamic, px*0.75, px*1.25, args=(df_scan, px))
-            except: zg_dyn = px
-
-            # Calcolo Greche Scanner
+            # FIX (stesso identico problema della Dashboard): get_greeks_pro spostata prima,
+            # cosi' calculate_0g_dynamic riceve 'd_sigma_dk' e non collassa sullo Statico.
             df_scan_greeks, _ = get_greeks_pro(df_scan, px)
+
+            # Calcolo 0-G Statico e Dinamico (bracket adattivo, mai fallback silenzioso su px)
+            zg_val, _ = find_gamma_flip_robust(calculate_gex_at_price, px, (df_scan,))
+            zg_dyn, _ = find_gamma_flip_robust(calculate_0g_dynamic, px, (df_scan_greeks, px))
+
             net_vanna_scan = df_scan_greeks['Vanna'].sum() if not df_scan_greeks.empty else 0
             net_charm_scan = df_scan_greeks['Charm'].sum() if not df_scan_greeks.empty else 0
             
