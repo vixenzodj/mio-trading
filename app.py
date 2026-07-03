@@ -22,7 +22,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy import stats
 from scipy.stats import norm
-from scipy.optimize import brentq, least_squares
+from scipy.optimize import brentq, least_squares, minimize_scalar
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, time as dt_time
 import time  # <-- Manteniamo l'import per il delay anti-ban
@@ -1048,41 +1048,62 @@ def display_macro_war_room():
             for s in sells: st.write(f"- {s}")
 
 # --- CORE QUANT ENGINE ---
-def find_gamma_flip_robust(gex_func, spot, args, max_widen=5):
+def find_gamma_flip_robust(gex_func, spot, args, n_grid=250):
     """
-    Root-finder robusto per il livello di Zero Gamma. A differenza di un brentq con
-    bracket fisso (spot*0.50 - spot*1.50) che, se non trova un cambio di segno, veniva
-    catturato da un 'except: = spot' silenzioso, questa funzione allarga adattivamente
-    il bracket e, se anche al bordo massimo il segno non cambia (il book è in un regime
-    di gamma persistente - tutto positivo o tutto negativo, come durante un vero Gamma
-    Squeeze o un crollo con panic put buying), estrapola linearmente dal bordo più
-    vicino allo zero invece di restituire uno 'spot' non veritiero che finge un
-    crossing inesistente. Ritorna (livello, is_extrapolated).
+    Root-finder per il livello di Zero Gamma, vincolato SEMPRE all'universo di strike
+    realmente quotati (mai un bracket fisso spot*0.50/1.50, mai un allargamento adattivo
+    oltre gli strike reali). Cercare oltre l'ultimo strike listato non ha senso
+    finanziario: il gamma di ogni opzione decade Gaussianamente a zero lontano dal
+    proprio strike (norm.pdf(d1) con d1 enorme), quindi il valore di GEX là fuori è
+    dominato da rumore numerico vicino allo zero macchina, la cui fluttuazione di segno
+    non riflette alcun regime di gamma persistente reale - un bracket allargato oltre gli
+    strike reali può "trovare" incroci di segno spuri in quel rumore, producendo livelli
+    aberranti (es. multipli dello spot su book reali di SPX/ETF).
+    Scansiona l'intera griglia di strike per TUTTI i cambi di segno, sceglie quello più
+    vicino allo spot corrente e lo rifinisce con brentq. Se non esiste alcun crossing
+    genuino nell'intero range tradabile (regime di gamma persistente - un fatto di
+    mercato reale sotto forte sbilanciamento Put/Call, non un errore), ritorna il punto
+    di minimo |GEX| nello stesso range: sempre ben definito, sempre dentro all'universo
+    tradabile, non extrapolato oltre.
+    Ritorna (livello, is_extrapolated: bool).
     """
-    lo_mult, hi_mult = 0.50, 1.50
-    f_lo = f_hi = None
-    for _ in range(max_widen):
-        lo, hi = spot * lo_mult, spot * hi_mult
-        try:
-            f_lo, f_hi = gex_func(lo, *args), gex_func(hi, *args)
-        except Exception:
-            return spot, True
-        if np.sign(f_lo) != np.sign(f_hi):
-            try:
-                return brentq(gex_func, lo, hi, args=args, xtol=1e-6), False
-            except Exception:
-                return spot, True
-        lo_mult *= 0.70
-        hi_mult *= 1.30
+    df = args[0]
+    strike_lo, strike_hi = float(df['strike'].min()), float(df['strike'].max())
+    if strike_lo >= strike_hi:
+        return spot, True
 
-    # Nessun crossing nemmeno nel bracket massimo allargato: regime di gamma
-    # persistente. Estrapoliamo linearmente dal bordo con |GEX| minore invece di
-    # affermare implicitamente "0G = spot".
-    edge, f_edge, other, f_other = (lo, f_lo, hi, f_hi) if abs(f_lo) < abs(f_hi) else (hi, f_hi, lo, f_lo)
-    slope = (f_other - f_edge) / (other - edge)
-    if abs(slope) < 1e-9:
-        return edge, True
-    return edge - f_edge / slope, True
+    grid = np.linspace(strike_lo, strike_hi, n_grid)
+    try:
+        gex_vals = np.array([gex_func(p, *args) for p in grid])
+    except Exception:
+        return spot, True
+
+    signs = np.sign(gex_vals)
+    sign_change_idx = np.where(np.diff(signs) != 0)[0]
+    if len(sign_change_idx) > 0:
+        # sceglie il crossing più vicino allo spot corrente, tra tutti quelli trovati
+        midpoints = (grid[sign_change_idx] + grid[sign_change_idx + 1]) / 2
+        best_i = sign_change_idx[np.argmin(np.abs(midpoints - spot))]
+        lo, hi = grid[best_i], grid[best_i + 1]
+        try:
+            return brentq(gex_func, lo, hi, args=args, xtol=1e-6), False
+        except Exception:
+            pass
+
+    # Nessun crossing genuino nell'intero range tradabile: il book è in un regime di
+    # gamma persistente. Il punto di minimo |GEX|, SEMPRE dentro al range di strike reali,
+    # è la risposta onesta - "il libro non si azzera, ma qui è dove ci si avvicina di più".
+    idx = np.argmin(np.abs(gex_vals))
+    best = grid[idx]
+    lo_r, hi_r = grid[max(idx - 1, 0)], grid[min(idx + 1, len(grid) - 1)]
+    if lo_r < hi_r:
+        try:
+            res = minimize_scalar(lambda p: abs(gex_func(p, *args)), bounds=(lo_r, hi_r), method='bounded')
+            if res.success:
+                best = res.x
+        except Exception:
+            pass
+    return best, True
 
 def calculate_gex_at_price(price, df, r=DYNAMIC_R, q=0.0):
     """Calcolo GEX Statico Istituzionale (Normalizzazione Esatta S^2)"""
@@ -1262,22 +1283,23 @@ def svi_iv_and_deriv_dK(svi_params, K, S, T, r, q):
     d_iv_dK = wp / (2 * np.sqrt(w * T)) / K
     return iv, d_iv_dK
 
-def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000):
+def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000, max_clipped_fraction=0.12):
     """
     Estrae media/std/skewness/excess-kurtosis RISK-NEUTRALE VERA del log-rendimento a scadenza,
     usando la formula chiusa di Gatheral-Jacquier (2014) applicata alla superficie SVI fittata.
     Verificata: coincide esattamente (rapporto 1.0000) con la derivata seconda simbolica pura
     di Breeden-Litzenberger sui prezzi Call. Nessuna differenza finita rumorosa è coinvolta.
-    Ritorna None se la superficie non passa il test di non-arbitraggio su tutta la griglia.
+    Dove g(k)<0 (violazione locale di non-arbitraggio) la densità implicita viene azzerata e
+    l'area rinormalizzata - prassi standard per superfici calibrate su dati reali rumorosi,
+    dove pretendere g(k)>=0 ovunque su un fit a 5 parametri è spesso irrealistico. Rigetta
+    interamente (None) solo se la violazione è ESTESA (la massa azzerata supera
+    max_clipped_fraction): a quel punto il fit è genuinamente inaffidabile, non solo imperfetto.
     """
     try:
-        # FIX (griglia adattiva): un k_range fisso è tarato per scadenze "normali", ma la
-        # vera larghezza della distribuzione scala con sqrt(w). Su 0DTE (w microscopico)
-        # un range fisso di +-6 spreca quasi tutta la risoluzione in coda dove la densità
-        # è già zero per costruzione, sotto-campionando la massa di probabilità reale, che
-        # vive in una finestra molto più stretta. Scaliamo sulla std ATM effettiva, con un
-        # pavimento/tetto di sicurezza che preserva il comportamento precedente sulle
-        # scadenze normali/lunghe dove il valore fisso 6.0 era già adeguato.
+        # Griglia adattiva: la vera larghezza della distribuzione scala con sqrt(w). Su 0DTE
+        # (w microscopico) un range fisso di +-6 spreca risoluzione in coda dove la densità è
+        # già zero per costruzione. Scaliamo sulla std ATM effettiva, con pavimento/tetto che
+        # preserva il comportamento precedente sulle scadenze normali/lunghe.
         w_atm, _, _ = _svi_w_and_derivs(svi_params, np.array([0.0]))
         std_atm = np.sqrt(max(w_atm[0], 1e-10))
         k_range_eff = float(np.clip(9.0 * std_atm, 1.5, k_range))
@@ -1285,14 +1307,19 @@ def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000):
         w, wp, wpp = _svi_w_and_derivs(svi_params, k_grid)
         w = np.maximum(w, 1e-10)
         g = (1 - (k_grid * wp) / (2 * w)) ** 2 - (wp ** 2 / 4) * (1 / w + 0.25) + wpp / 2
-        if np.min(g) < -1e-4:
-            return None  # superficie non arbitrage-free su questa griglia: non fidarsi del risultato
+
         d_minus = -k_grid / np.sqrt(w) - np.sqrt(w) / 2
-        dens = g / np.sqrt(2 * np.pi * w) * np.exp(-d_minus ** 2 / 2)
-        dens = np.clip(dens, 0, None)
+        dens_raw = g / np.sqrt(2 * np.pi * w) * np.exp(-d_minus ** 2 / 2)
+        dens = np.clip(dens_raw, 0, None)
+
+        area_raw_abs = _trapz_manual(np.abs(dens_raw), k_grid)
         area = _trapz_manual(dens, k_grid)
         if area <= 1e-8:
             return None
+        clipped_fraction = 1.0 - (area / max(area_raw_abs, 1e-12))
+        if clipped_fraction > max_clipped_fraction:
+            return None  # violazione estesa: fit genuinamente inaffidabile, non solo rumoroso
+
         dens = dens / area
         mean_k = _trapz_manual(k_grid * dens, k_grid)
         var_k = _trapz_manual((k_grid - mean_k) ** 2 * dens, k_grid)
@@ -1301,7 +1328,7 @@ def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000):
             return None
         skew_k = _trapz_manual((k_grid - mean_k) ** 3 * dens, k_grid) / std_k ** 3
         kurt_k = _trapz_manual((k_grid - mean_k) ** 4 * dens, k_grid) / std_k ** 4 - 3.0
-        return dict(skew=skew_k, excess_kurtosis=kurt_k, std=std_k)
+        return dict(skew=skew_k, excess_kurtosis=kurt_k, std=std_k, clipped_fraction=clipped_fraction)
     except Exception:
         return None
 
