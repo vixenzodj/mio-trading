@@ -1479,7 +1479,7 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
             # Calcolo analitico esatto della pendenza dello Skew rispetto allo strike: d_sigma / dK = 2aK + b
             df.loc[mask, 'd_sigma_dk'] = 2 * poly_coefs[0] * sub_df['strike'].values + poly_coefs[1]
         else:
-            svi_by_dte[dte_val] = None
+            svi_by_dte[exp_val] = None  # coerente con l'indicizzazione per stringa-scadenza usata sopra
             # Fallback strutturale protettivo per catene illiquide o scadenze lunghissime residuali
             df.loc[mask, 'iv_smoothed'] = df.loc[mask, 'iv_smoothed'].replace(0, 0.15).fillna(0.15)
 
@@ -3334,13 +3334,18 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 excess_kurt_rn = None
                 try:
                     near_dte_val = raw_data[raw_data['exp'] == target_dates[0]]['dte_years'].iloc[0]
-                    svi_entry = svi_by_dte.get(near_dte_val)
-                    # FIX: svi_by_dte[T] è un wrapper {'svi': array_5_parametri, 'T': dte},
-                    # non l'array nudo (vedi popolamento in get_greeks_pro). Passare il dict
-                    # intero a gatheral_risk_neutral_moments fa fallire SEMPRE lo spacchettamento
-                    # 'a,b,rho,m,sigma = params' dentro _svi_w_and_derivs (ValueError: not enough
-                    # values to unpack, 5 attesi contro 2 ricevuti) - indipendentemente da
-                    # scadenza, orario o condizioni di mercato. Root cause del Kurt(RN)=NaN.
+                    # FIX DEFINITIVO: svi_by_dte è indicizzato per STRINGA di scadenza
+                    # (exp_val, es. "2026-07-06" - vedi popolamento in get_greeks_pro), non
+                    # per il valore float di dte_years. Il lookup precedente cercava
+                    # svi_by_dte.get(near_dte_val) con una chiave di TIPO DIVERSO (float)
+                    # da quella con cui il dizionario è realmente popolato (stringa): un
+                    # confronto float==stringa è sempre False in Python, quindi .get()
+                    # restituiva SEMPRE None, indipendentemente da fit, mercato, ticker o
+                    # scadenza. Root cause definitiva, strutturale, del KURT(RN) sempre N/A -
+                    # mascherata fino ad ora perché ogni test di validazione costruiva il
+                    # dizionario simulato con lo stesso tipo (float) sia in scrittura che in
+                    # lettura, senza replicare l'indicizzazione reale per stringa.
+                    svi_entry = svi_by_dte.get(target_dates[0])
                     svi_near = svi_entry.get('svi') if svi_entry is not None else None
                     if svi_near is not None:
                         r_near = get_term_structured_rate(near_dte_val)
