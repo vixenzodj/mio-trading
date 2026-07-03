@@ -1263,8 +1263,19 @@ def fit_svi_slice(strikes, ivs, weights, S, T, r, q):
         if b * (1 + abs(rho)) > 2.0:
             return None
 
-        fitted = svi_w(res.x, k)
-        rel_err = np.mean(np.abs(fitted - w) / (w + 1e-9))
+        fitted_w = svi_w(res.x, k)
+        # FIX (soglia sistematicamente più severa sulle scadenze brevi): rel_err era
+        # calcolato sulla varianza totale w=IV^2*T. Per scadenze brevissime w è
+        # microscopico, quindi un errore assolutamente ragionevole in termini di IV (es.
+        # 7 punti percentuali) viene amplificato al quadrato e diviso per un w minuscolo,
+        # producendo un errore "relativo" artificialmente enorme (verificato: un errore
+        # IV del 27% diventa un errore su w del 69% su una scadenza a 3 giorni) - la
+        # soglia colpiva quindi in modo sistematico proprio le scadenze più vicine,
+        # quelle su cui il Kurt(RN) lavora sempre. Misuriamo l'errore direttamente in
+        # spazio IV (la stessa qualità di fit resta giudicata allo stesso modo,
+        # indipendentemente da quanto sia piccola la scadenza).
+        fitted_iv = np.sqrt(np.maximum(fitted_w, 1e-10) / T)
+        rel_err = np.mean(np.abs(fitted_iv - ivs) / np.maximum(ivs, 1e-4))
         if rel_err > 0.30:  # fit troppo povero rispetto al rumore bid/ask reale: non fidarsi
             return None
         return res.x
@@ -1416,6 +1427,28 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
         
     df['d_sigma_dk'] = 0.0
     S = float(S)
+
+    # RECUPERO IV DA BID/ASK (feed gratuito Yahoo, dato noto e documentato: il campo
+    # 'impliedVolatility' calcolato da Yahoo torna spesso ESATTAMENTE 0.0 - non NaN - per
+    # contratti poco scambiati di recente o con spread larghi, tipicamente più frequente
+    # sulle scadenze settimanali/vicine, proprio quelle su cui il fit SVI ha più bisogno
+    # di punti validi. Non sostituisce MAI un valore di Yahoo già valido: interviene solo
+    # dove quel valore è già inutilizzabile, recuperando informazione altrimenti persa
+    # tramite inversione Black-Scholes (find_iv, già usata altrove nel motore) sul
+    # prezzo medio bid/ask. Nessuna funzionalità esistente viene alterata, solo affiancata.
+    if all(c in df.columns for c in ('bid', 'ask', 'strike', 'dte_years', 'type')):
+        bad_iv_mask = df['iv_smoothed'].isna() | (df['iv_smoothed'] <= 0.01) | (df['iv_smoothed'] >= 3.0)
+        recoverable_mask = bad_iv_mask & (df['bid'] > 0) & (df['ask'] > 0) & (df['ask'] >= df['bid'])
+        if recoverable_mask.any():
+            recover_idx = df.index[recoverable_mask]
+            mid_price = (df.loc[recover_idx, 'bid'] + df.loc[recover_idx, 'ask']) / 2
+            for idx, price in zip(recover_idx, mid_price):
+                T_r = max(float(df.at[idx, 'dte_years']), 0.00005)
+                r_r = get_term_structured_rate(T_r)
+                iv_r = find_iv(float(price), S, float(df.at[idx, 'strike']), T_r, r_r, q, df.at[idx, 'type'])
+                if not np.isnan(iv_r) and 0.01 < iv_r < 3.0:
+                    df.at[idx, 'iv_smoothed'] = iv_r
+
     # FIX ARCHITETTURALE (KURT RN sempre NaN): svi_by_dte era precedentemente chiavizzato sul
     # valore FLOAT di dte_years. Quel valore viene prodotto da raw_data['exp'].apply(get_precise_dte),
     # e get_precise_dte chiama datetime.utcnow() AD OGNI RIGA: su una chain con centinaia di righe
@@ -1429,6 +1462,11 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # (stringa immutabile, mai ricalcolata) + T esatto salvato nello stesso dizionario, cosicché il
     # chiamante non debba MAI ricalcolare independentemente il tempo a scadenza.
     svi_by_dte = {}  # ora chiavizzato per stringa 'exp': {'2026-09-28': {'svi': {...}|None, 'T': 0.2493...}}
+
+    # Contatore diagnostico: quanti punti validi (post-recupero) per scadenza, esposto nel
+    # dizionario così la UI può mostrare la causa esatta di un eventuale fallimento SVI,
+    # invece di un N/A muto indistinguibile da qualunque altra causa.
+    svi_diag = {}
 
     # 2. VOLATILITY SMILE SMOOTHER & ANALYTICAL SKEW SLOPE
     # Tentativo primario: fit SVI (Gatheral) no-arbitrage. Fallback automatico al polinomio
@@ -1449,6 +1487,9 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
             weights = (valid_pts['openInterest'].values + valid_pts['volume'].values + 1.0)
             svi_params = fit_svi_slice(valid_pts['strike'].values, valid_pts['iv_smoothed'].values,
                                         weights, S, max(dte_val, 0.00005), r_local, q)
+
+        svi_diag[exp_val] = {'n_valid_pts': int(len(valid_pts)), 'n_tot_pts': int(len(sub_df)),
+                              'fit_tentato': len(valid_pts) >= 6, 'fit_riuscito': svi_params is not None}
 
         if svi_params is not None:
             svi_by_dte[exp_val] = {'svi': svi_params, 'T': dte_val}
@@ -1559,6 +1600,11 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
     # 8. SISTEMA ANTI-ALLUCINAZIONE VISIVA: NORMALIZZAZIONE A DURATION COSTANTE (30 GIORNI)
     # Permette la coesistenza visiva nei grafici tra l'esplosione delle 0DTE e l'architettura Swing a lungo termine
     df['GEX_Normalized'] = df['Gamma'] * np.sqrt(T / (30.0 / 365.25))
+
+    # Diagnosi esposta sotto una chiave riservata: non altera la firma di ritorno
+    # (df, svi_by_dte) usata da tutti i chiamanti esistenti, ma permette alla UI di
+    # mostrare la causa esatta di un eventuale fallimento SVI invece di un N/A muto.
+    svi_by_dte['__diag__'] = svi_diag
 
     return df, svi_by_dte
 
@@ -3294,6 +3340,7 @@ if menu == "🏟️ DASHBOARD SINGOLA":
             # --- FINE NUOVO HUD ---
 
             # --- CALCOLO STORICO E TAIL RISK (ISTITUZIONALE CON FILTRO LIQUIDITÀ) ---
+            kurt_diag = "blocco esterno non eseguito"
             try:
                 hist_1m = get_history_cached(current_ticker, '1mo')  # PATCH: prima era ticker_obj.history('1mo') senza cache
                 hv_20d = hist_1m['Close'].pct_change().std() * np.sqrt(252) * 100 if not hist_1m.empty else 0.0
@@ -3332,31 +3379,41 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                 # validata simbolicamente: vedi modulo SVI sopra). Usa i parametri SVI già fittati per la
                 # scadenza più vicina, se il fit è andato a buon fine; altrimenti N/A (nessun proxy improprio).
                 excess_kurt_rn = None
+                kurt_diag = "non eseguito"
                 try:
                     near_dte_val = raw_data[raw_data['exp'] == target_dates[0]]['dte_years'].iloc[0]
-                    # FIX DEFINITIVO: svi_by_dte è indicizzato per STRINGA di scadenza
-                    # (exp_val, es. "2026-07-06" - vedi popolamento in get_greeks_pro), non
-                    # per il valore float di dte_years. Il lookup precedente cercava
-                    # svi_by_dte.get(near_dte_val) con una chiave di TIPO DIVERSO (float)
-                    # da quella con cui il dizionario è realmente popolato (stringa): un
-                    # confronto float==stringa è sempre False in Python, quindi .get()
-                    # restituiva SEMPRE None, indipendentemente da fit, mercato, ticker o
-                    # scadenza. Root cause definitiva, strutturale, del KURT(RN) sempre N/A -
-                    # mascherata fino ad ora perché ogni test di validazione costruiva il
-                    # dizionario simulato con lo stesso tipo (float) sia in scrittura che in
-                    # lettura, senza replicare l'indicizzazione reale per stringa.
                     svi_entry = svi_by_dte.get(target_dates[0])
-                    svi_near = svi_entry.get('svi') if svi_entry is not None else None
-                    if svi_near is not None:
-                        r_near = get_term_structured_rate(near_dte_val)
-                        moments = gatheral_risk_neutral_moments(svi_near, spot, max(near_dte_val, 0.00005), r_near, div_yield)
-                        if moments is not None:
-                            excess_kurt_rn = moments['excess_kurtosis']
-                except Exception:
+                    if svi_entry is None:
+                        diag_info = svi_by_dte.get('__diag__', {}).get(target_dates[0])
+                        if diag_info is not None:
+                            kurt_diag = (f"nessuna entry SVI per '{target_dates[0]}' — punti validi: "
+                                         f"{diag_info['n_valid_pts']}/{diag_info['n_tot_pts']}, "
+                                         f"fit tentato: {diag_info['fit_tentato']}, riuscito: {diag_info['fit_riuscito']}")
+                        else:
+                            kurt_diag = f"nessuna entry SVI per '{target_dates[0]}' (chiavi disponibili: {[k for k in svi_by_dte.keys() if k != '__diag__']})"
+                    else:
+                        svi_near = svi_entry.get('svi')
+                        if svi_near is None:
+                            diag_info = svi_by_dte.get('__diag__', {}).get(target_dates[0], {})
+                            kurt_diag = (f"fit SVI non riuscito per questa scadenza — punti validi: "
+                                         f"{diag_info.get('n_valid_pts','?')}/{diag_info.get('n_tot_pts','?')} "
+                                         f"(soglia minima: 6; fallback polinomiale attivo per Greche/Gamma, ma senza SVI Kurt(RN) resta N/A)")
+                        else:
+                            r_near = get_term_structured_rate(near_dte_val)
+                            moments = gatheral_risk_neutral_moments(svi_near, spot, max(near_dte_val, 0.00005), r_near, div_yield)
+                            if moments is None:
+                                kurt_diag = "SVI fittato correttamente, ma la superficie ha una violazione di non-arbitraggio troppo estesa (>12% della massa) per essere affidabile"
+                            else:
+                                excess_kurt_rn = moments['excess_kurtosis']
+                                kurt_diag = f"OK — densità azzerata: {moments.get('clipped_fraction', 0)*100:.1f}%"
+                except Exception as e:
+                    kurt_diag = f"eccezione: {type(e).__name__}: {e}"
                     excess_kurt_rn = None
             except Exception as e:
                 hv_20d, kurt_pct, kurt_color = 0.0, 0, "gray"
                 excess_kurt_rn = None
+                kurt_diag = f"eccezione nel blocco esterno: {type(e).__name__}: {e}"
+
 
             # --- UI LAYOUT AGGIORNATO ---
             col_view, col_vol = st.columns([1.8, 1.2])
@@ -3397,6 +3454,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
+                if excess_kurt_rn is None:
+                    st.caption(f"ℹ️ KURT (RN) N/A — motivo: {kurt_diag}")
 
             # --- ANCORAGGIO VISIVO E FORMATTAZIONE STRUTTURALE SUFFISSI (SOLO GRAFICA) ---
             def get_visual_array(series):
