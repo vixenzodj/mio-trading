@@ -1343,6 +1343,34 @@ def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000, m
     except Exception:
         return None
 
+def get_kurt_rn_thresholds(T_years):
+    """
+    Soglie verde/giallo/rosso per KURT (RN), sensibili alla scadenza.
+    La kurtosi risk-neutral è un momento del 4° ordine normalizzato per la varianza
+    AL QUADRATO: su scadenze brevi la varianza totale è strutturalmente piccola, quindi
+    anche una smile del tutto ordinaria produce una lettura elevata - non per un
+    problema di mercato, ma per la matematica stessa della normalizzazione (stesso
+    principio già riscontrato per rel_err in fit_svi_slice). Verificato con due test
+    indipendenti in questa sessione (skew fissa e skew scalata con sqrt(T)): valori
+    9-16 in condizioni di calma per scadenze sotto l'anno sono la norma, non
+    l'eccezione, e scendono verso i valori "verdi" solo oltre 1-2 anni. Soglie fisse
+    (2/6, valide per scadenze lunghe) renderebbero il semaforo permanentemente rosso
+    sotto l'anno, quindi non informativo. Bucket empirici approssimati, non una legge
+    matematica esatta - il criterio guida è "insolito PER QUESTA scadenza", non un
+    valore assoluto universale.
+    """
+    T_days = T_years * 365
+    if T_days <= 30:
+        return 10.0, 20.0
+    elif T_days <= 90:
+        return 8.0, 16.0
+    elif T_days <= 180:
+        return 6.0, 13.0
+    elif T_days <= 365:
+        return 4.0, 9.0
+    else:
+        return 2.0, 6.0
+
 def estimate_implied_dividend(calls_df, puts_df, S, r, T, n_strikes=6):
     """
     Stima il dividend yield implicito dal mercato delle opzioni via Put-Call Parity,
@@ -3442,7 +3470,8 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                     """, unsafe_allow_html=True)
                 with v4:
                     if excess_kurt_rn is not None:
-                        ku_color = "#2ecc71" if excess_kurt_rn < 2 else ("#f1c40f" if excess_kurt_rn < 6 else "#e74c3c")
+                        ku_green, ku_yellow = get_kurt_rn_thresholds(near_dte_val)
+                        ku_color = "#2ecc71" if excess_kurt_rn < ku_green else ("#f1c40f" if excess_kurt_rn < ku_yellow else "#e74c3c")
                         ku_label = f"{excess_kurt_rn:.1f}"
                     else:
                         ku_color, ku_label = "gray", "N/A"
