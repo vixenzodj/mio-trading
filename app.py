@@ -1176,7 +1176,141 @@ Se la leadership settoriale **contraddice** il quadrante di regime in cima, è u
         st.markdown("---")
         st.header(f"🎯 Playbook Operativo — {regime_name}")
 
-        pb1, pb2 = st.columns([1.4, 1])
+        # ==================================================================
+        #  MAPPATURA CATEGORIE → ETF CONCRETI + AZIENDE REALI (con ticker)
+        #  Trasforma ogni categoria astratta del playbook in strumenti investibili
+        #  precisi, per un investitore che vuole sapere ESATTAMENTE cosa comprare.
+        # ==================================================================
+        # Struttura: "categoria": {"etf": [(ticker, nome)], "names": [(ticker, azienda)]}
+        asset_playbook_map = {
+            # --- AZIONARIO / GROWTH / TECH ---
+            "Azioni (specie Tech/Growth)": {
+                "etf": [("SPY", "S&P 500"), ("QQQ", "Nasdaq 100"), ("XLK", "Tech USA"), ("VGT", "Vanguard Tech")],
+                "names": [("NVDA", "Nvidia"), ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("GOOGL", "Alphabet/Google"), ("META", "Meta"), ("AMZN", "Amazon")],
+            },
+            "Tech / High Beta": {
+                "etf": [("XLK", "Tech USA"), ("QQQ", "Nasdaq 100"), ("SOXX", "Semiconduttori"), ("SMH", "Semiconduttori VanEck")],
+                "names": [("NVDA", "Nvidia"), ("AMD", "AMD"), ("AVGO", "Broadcom"), ("MSFT", "Microsoft"), ("PLTR", "Palantir"), ("TSLA", "Tesla")],
+            },
+            "Small Caps": {
+                "etf": [("IWM", "Russell 2000"), ("IJR", "S&P Small Cap 600"), ("VB", "Vanguard Small Cap")],
+                "names": [("BE", "Bloom Energy"), ("FN", "Fabrinet"), ("CDE", "Coeur Mining"), ("CRDO", "Credo Technology"), ("IONQ", "IonQ")],
+            },
+            "Azioni value": {
+                "etf": [("VTV", "Vanguard Value"), ("IWD", "Russell 1000 Value"), ("SCHD", "Dividend Value"), ("VYM", "High Dividend")],
+                "names": [("BRK-B", "Berkshire Hathaway"), ("JPM", "JPMorgan"), ("JNJ", "Johnson & Johnson"), ("XOM", "ExxonMobil"), ("PG", "Procter & Gamble")],
+            },
+            "Ciclici": {
+                "etf": [("XLI", "Industriali"), ("XLY", "Consumi Voluttuari"), ("XLB", "Materiali")],
+                "names": [("CAT", "Caterpillar"), ("DE", "John Deere"), ("BA", "Boeing"), ("HD", "Home Depot"), ("GE", "GE Aerospace")],
+            },
+            "Finanziari": {
+                "etf": [("XLF", "Finanziari USA"), ("KRE", "Banche Regionali"), ("KBE", "Banche")],
+                "names": [("BRK-B", "Berkshire Hathaway"), ("JPM", "JPMorgan"), ("V", "Visa"), ("MA", "Mastercard"), ("BAC", "Bank of America"), ("WFC", "Wells Fargo")],
+            },
+            "Materiali": {
+                "etf": [("XLB", "Materiali USA"), ("XME", "Metals & Mining"), ("PICK", "Global Miners")],
+                "names": [("LIN", "Linde"), ("FCX", "Freeport-McMoRan"), ("NEM", "Newmont"), ("SHW", "Sherwin-Williams"), ("NUE", "Nucor")],
+            },
+            # --- CREDITO ---
+            "Credito HY": {
+                "etf": [("HYG", "High Yield Corp"), ("JNK", "Junk Bonds"), ("BKLN", "Bank Loans")],
+                "names": [("HYG", "iShares High Yield"), ("JNK", "SPDR High Yield"), ("SJNK", "Short-Term High Yield"), ("ANGL", "Fallen Angels")],
+            },
+            # --- CRYPTO ---
+            "Crypto / Speculativo": {
+                "etf": [("IBIT", "Bitcoin ETF iShares"), ("FBTC", "Bitcoin ETF Fidelity"), ("ETHA", "Ethereum ETF")],
+                "names": [("BTC-USD", "Bitcoin"), ("ETH-USD", "Ethereum"), ("COIN", "Coinbase"), ("MSTR", "MicroStrategy")],
+            },
+            "Crypto": {
+                "etf": [("IBIT", "Bitcoin ETF iShares"), ("FBTC", "Bitcoin ETF Fidelity"), ("ETHA", "Ethereum ETF")],
+                "names": [("BTC-USD", "Bitcoin"), ("ETH-USD", "Ethereum"), ("COIN", "Coinbase"), ("MSTR", "MicroStrategy")],
+            },
+            # --- COMMODITY & ENERGIA ---
+            "Commodity": {
+                "etf": [("DBC", "Commodity Broad"), ("PDBC", "Commodity No-K1"), ("GSG", "GS Commodity")],
+                "names": [("DBC", "Invesco Commodity"), ("DBA", "Agricoltura"), ("DBB", "Metalli Base"), ("USO", "Petrolio")],
+            },
+            "Energia": {
+                "etf": [("XLE", "Energia USA"), ("XOP", "Explor.&Prod."), ("VDE", "Vanguard Energy")],
+                "names": [("XOM", "ExxonMobil"), ("CVX", "Chevron"), ("COP", "ConocoPhillips"), ("SLB", "Schlumberger"), ("EOG", "EOG Resources")],
+            },
+            # --- METALLI PREZIOSI ---
+            "Oro": {
+                "etf": [("GLD", "Oro fisico"), ("IAU", "Oro iShares"), ("GDX", "Gold Miners")],
+                "names": [("NEM", "Newmont"), ("GOLD", "Barrick Gold"), ("AEM", "Agnico Eagle"), ("FNV", "Franco-Nevada")],
+            },
+            "Argento": {
+                "etf": [("SLV", "Argento fisico"), ("SIL", "Silver Miners"), ("SILJ", "Junior Silver")],
+                "names": [("WPM", "Wheaton Precious"), ("PAAS", "Pan American Silver"), ("HL", "Hecla Mining"), ("CDE", "Coeur Mining")],
+            },
+            # --- INFLAZIONE / RIFUGIO ---
+            "Materie prime agricole": {
+                "etf": [("DBA", "Agri Broad"), ("MOO", "Agribusiness"), ("WEAT", "Grano"), ("CORN", "Mais")],
+                "names": [("ADM", "Archer-Daniels"), ("BG", "Bunge"), ("MOS", "Mosaic"), ("CF", "CF Industries"), ("DE", "John Deere")],
+            },
+            "TIPS": {
+                "etf": [("TIP", "TIPS iShares"), ("VTIP", "TIPS Breve"), ("SCHP", "TIPS Schwab")],
+                "names": [("TIP", "iShares TIPS"), ("STIP", "TIPS 0-5 anni"), ("LTPZ", "TIPS Lunghi")],
+            },
+            # --- DIFENSIVI / RIFUGIO ---
+            "Difensivi (Utilities/Staples)": {
+                "etf": [("XLU", "Utilities"), ("XLP", "Beni Prima Nec."), ("XLV", "Sanità")],
+                "names": [("PG", "Procter & Gamble"), ("KO", "Coca-Cola"), ("PEP", "PepsiCo"), ("NEE", "NextEra Energy"), ("JNJ", "Johnson & Johnson")],
+            },
+            "Azioni difensive": {
+                "etf": [("XLP", "Beni Prima Nec."), ("XLU", "Utilities"), ("XLV", "Sanità"), ("USMV", "Min Volatility")],
+                "names": [("PG", "Procter & Gamble"), ("KO", "Coca-Cola"), ("WMT", "Walmart"), ("JNJ", "Johnson & Johnson"), ("MRK", "Merck")],
+            },
+            # --- BOND & CASH & DOLLARO ---
+            "Bond lunghi (TLT)": {
+                "etf": [("TLT", "Treasury 20+ anni"), ("EDV", "Treasury Extended"), ("VGLT", "Treasury Lunghi")],
+                "names": [("TLT", "iShares 20+ Treasury"), ("IEF", "Treasury 7-10 anni"), ("ZROZ", "Zero-Coupon Lunghi")],
+            },
+            "Bond difensivi lunghi": {
+                "etf": [("TLT", "Treasury 20+ anni"), ("IEF", "Treasury 7-10 anni"), ("BND", "Bond Aggregate")],
+                "names": [("TLT", "iShares 20+ Treasury"), ("GOVT", "Treasury Broad"), ("VGLT", "Vanguard Long Treasury")],
+            },
+            "Dollaro (UUP)": {
+                "etf": [("UUP", "Bullish Dollaro"), ("USDU", "Dollaro WisdomTree")],
+                "names": [("UUP", "Invesco DB USD Bull"), ("SHY", "Treasury Breve (proxy cash USD)")],
+            },
+            "Cash": {
+                "etf": [("BIL", "T-Bill 1-3 mesi"), ("SHV", "Treasury Breve"), ("SGOV", "T-Bill 0-3 mesi")],
+                "names": [("BIL", "SPDR T-Bill"), ("SGOV", "iShares 0-3m Treasury"), ("USFR", "Floating Rate Treasury")],
+            },
+            # --- CATEGORIE "CON" (da ridurre) ---
+            "Tech ad alta duration": {
+                "etf": [("XLK", "Tech USA"), ("QQQ", "Nasdaq 100"), ("ARKK", "Innovation ARK")],
+                "names": [("NVDA", "Nvidia"), ("TSLA", "Tesla"), ("PLTR", "Palantir"), ("CRM", "Salesforce")],
+            },
+            "Tech": {
+                "etf": [("XLK", "Tech USA"), ("QQQ", "Nasdaq 100"), ("VGT", "Vanguard Tech")],
+                "names": [("NVDA", "Nvidia"), ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("AVGO", "Broadcom")],
+            },
+            "Real Estate": {
+                "etf": [("VNQ", "Real Estate"), ("IYR", "US Real Estate"), ("XLRE", "Real Estate SPDR")],
+                "names": [("PLD", "Prologis"), ("AMT", "American Tower"), ("EQIX", "Equinix"), ("SPG", "Simon Property")],
+            },
+            "Bond nominali lunghi": {
+                "etf": [("TLT", "Treasury 20+ anni"), ("VGLT", "Treasury Lunghi"), ("LQD", "Corporate IG")],
+                "names": [("TLT", "iShares 20+ Treasury"), ("LQD", "Corporate Investment Grade"), ("VCLT", "Corporate Lunghi")],
+            },
+        }
+
+        def render_asset_detail(category):
+            """Espande una categoria astratta in ETF concreti + aziende reali con ticker."""
+            info = asset_playbook_map.get(category)
+            if not info:
+                return f"- **{category}**"
+            etf_str = " · ".join([f"`{tk}` ({nm})" for tk, nm in info["etf"]])
+            names_str = " · ".join([f"`{tk}` ({nm})" for tk, nm in info["names"]])
+            block = f"**{category}**\n\n"
+            block += f"&nbsp;&nbsp;📦 *ETF pronti all'uso:* {etf_str}\n\n"
+            block += f"&nbsp;&nbsp;🏢 *Aziende principali:* {names_str}"
+            return block
+
+        pb1 = st.container()
         with pb1:
             if regime_name.endswith("GOLDILOCKS"):
                 st.success("### 🚀 GOLDILOCKS — Espansione Ideale")
@@ -1193,16 +1327,34 @@ Se la leadership settoriale **contraddice** il quadrante di regime in cima, è u
 
             st.markdown(f"**Nel contesto attuale, il Systemic Health Score è {health:.0f}/100** → allocazione **{alloc_regime}**.")
 
-        with pb2:
-            st.markdown("#### ✅ FOCUS ACCUMULO")
+        # --- FOCUS ACCUMULO / RIDUZIONE con ETF concreti e aziende reali (larghezza piena) ---
+        st.markdown("")
+        st.markdown("### 📋 Cosa comprare e cosa ridurre — nel concreto")
+        st.caption("Ogni categoria del regime è tradotta in strumenti realmente investibili: gli **ETF** pronti all'uso (il modo più semplice e diversificato per esporsi a un tema) e le **principali aziende** che li compongono, ciascuna col suo ticker. Gli ETF sono la scelta più adatta se non vuoi selezionare singole azioni; i nomi servono a capire *cosa* c'è dentro e a costruire eventuali posizioni mirate.")
+
+        acc_col, red_col = st.columns(2)
+        with acc_col:
+            st.success("#### ✅ FOCUS ACCUMULO — asset da privilegiare")
             for a in regime_assets_pro.split(", "):
-                st.markdown(f"- {a}")
-            st.markdown("#### ❌ FOCUS RIDUZIONE")
+                st.markdown(render_asset_detail(a))
+                st.markdown("")
+        with red_col:
+            st.error("#### ❌ FOCUS RIDUZIONE — asset da alleggerire")
             for a in regime_assets_con.split(", "):
-                st.markdown(f"- {a}")
+                st.markdown(render_asset_detail(a))
+                st.markdown("")
+
+        with st.expander("❓ Come uso questa lista se non sono un esperto?"):
+            st.write("""**Passo per passo:**
+1. **Parti dagli ETF** (riga 📦). Un ETF è un unico titolo che contiene decine o centinaia di aziende di quel tema: comprando `IWM` ti esponi a ~2000 small cap americane in un colpo solo, senza dover scegliere. È il modo più semplice e diversificato per seguire il regime.
+2. **Le aziende** (riga 🏢) sono i principali componenti di quegli ETF: servono a capire *cosa* stai comprando e, se vuoi, a costruire posizioni mirate su singoli nomi (più rischioso, meno diversificato).
+3. **Il ticker** tra virgolette (es. `NVDA`) è il codice esatto da cercare sul tuo broker o su TradingView per trovare lo strumento.
+4. **Accumulo vs Riduzione**: la colonna verde elenca ciò che il regime attuale tende a favorire; la rossa ciò che tende a penalizzare. Non è un ordine di acquisto/vendita, ma una bussola di posizionamento coerente con il quadrante macro in cima.
+
+⚠️ *Questi sono esempi illustrativi dei componenti tipici di ogni categoria, non una raccomandazione personalizzata: le composizioni degli ETF cambiano nel tempo e ogni decisione va valutata sulla tua situazione.*""")
 
         st.markdown("---")
-        st.caption("⚠️ Questo cruscotto sintetizza il posizionamento macro aggregato del mercato secondo framework istituzionali consolidati (regime quadrant di Dalio/Hedgeye, RORO della Fed di Kansas City, Financial Conditions Index). Non costituisce consulenza finanziaria: è un contesto probabilistico da confermare con la propria analisi. Dati da feed pubblico (Yahoo Finance), con i limiti di latenza e qualità che ne conseguono.")
+        st.caption("⚠️ Questo cruscotto sintetizza il posizionamento macro aggregato del mercato secondo framework istituzionali consolidati (regime quadrant di Dalio/Hedgeye, RORO della Fed di Kansas City, Financial Conditions Index). Non costituisce consulenza finanziaria: è un contesto probabilistico da confermare con la propria analisi. I nomi di ETF e aziende sono esempi illustrativi dei componenti tipici di ciascuna categoria, non raccomandazioni personalizzate. Dati da feed pubblico (Yahoo Finance), con i limiti di latenza e qualità che ne conseguono.")
 
 # --- CORE QUANT ENGINE ---
 def find_gamma_flip_robust(gex_func, spot, args, n_grid=250):
