@@ -9379,9 +9379,21 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 # --- END INSTITUTIONAL TREND ANALYSIS ---
                     
             with t2:
-                fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
-                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
+                try:
+                    hist_df = data.get("history")
+                    if hist_df is not None and not hist_df.empty and all(c in hist_df.columns for c in ['Open', 'High', 'Low', 'Close']):
+                        fig = go.Figure(data=[go.Candlestick(x=hist_df.index, open=hist_df['Open'], high=hist_df['High'], low=hist_df['Low'], close=hist_df['Close'])])
+                        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif hist_df is not None and not hist_df.empty and 'Close' in hist_df.columns:
+                        # Fallback: alcuni ETF/indici restituiscono solo il prezzo di chiusura → grafico a linea
+                        fig = go.Figure(data=[go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', line=dict(color='#00BFFF', width=2))])
+                        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, title="Prezzo di chiusura (dati OHLC non disponibili per questo strumento)")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("📈 Dati storici di prezzo non disponibili per questo strumento sul feed Yahoo Finance.")
+                except Exception as e:
+                    st.warning(f"Impossibile generare il grafico dei prezzi per questo strumento: {e}")
 
             with t3:
                 st.header("🐋 Whales & Insider Intelligence")
@@ -9511,6 +9523,9 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                             """, unsafe_allow_html=True)
                 else:
                     st.info("In attesa di nuovi aggiornamenti dal mercato...")
+        else:
+            st.error(f"⚠️ Impossibile recuperare i dati per '{t_code}'. Verifica che il ticker sia corretto (es. AAPL, MSFT, SPY, ^GSPC) o riprova tra qualche istante: il feed Yahoo Finance potрebbe essere temporaneamente non disponibile per questo strumento.")
+            st.caption("Suggerimento: per gli indici usa il prefisso ^ (es. ^GSPC per S&P 500, ^IXIC per Nasdaq). Per gli ETF e le azioni usa il ticker semplice (es. SPY, QQQ, BLK, BRK-B).")
 
 elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.title("🏛️ Global Alpha Engine (Massive Database)")
