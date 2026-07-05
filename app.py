@@ -451,6 +451,16 @@ def display_macro_war_room():
         "EWJ", "INDA", "EWY", "EWT", "EIDO", "VNM", "EPHE",
         # EMERGING
         "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK",
+        # === SCREENING GRANULARE PER SINGOLO ASSET (V6) ===
+        # Energia: futures + prodotti raffinati + segmenti/temi
+        "BZ=F", "RB=F", "HO=F", "UGA", "FCG", "CRAK", "AMLP", "NLR", "URNM", "TAN", "ICLN", "PBW", "VDE",
+        # Metalli preziosi: fisici + miner (senior/junior)
+        "PPLT", "PALL", "GDXJ", "SIL", "SILJ", "RING", "SGDM", "NUGT",
+        # Metalli industriali & critici / terre rare / batterie / AI
+        "CPER", "JJC", "LIT", "XME", "PICK", "SETM", "BATT", "NLR",
+        # Agricoltura: futures + prodotti + agribusiness
+        "ZS=F", "ZW=F", "ZC=F", "KC=F", "CC=F", "SB=F", "CT=F", "LE=F",
+        "SOYB", "CANE", "JO", "NIB", "COW", "MOO", "VEGI", "WOOD",
     ]
 
     with st.spinner("Sincronizzazione rete macro globale..."):
@@ -776,13 +786,29 @@ Il punto **◉ SEI QUI** è calcolato aggregando gli Z-score dei pilastri Cresci
         #  HELPER per widget-metrica uniforme (valore + Z + sparkline + help)
         # ==================================================================
         def metric_widget(col, label, value_str, series, z, help_text, invert=False, delta_str=None):
-            """Renderizza un widget metrica coerente: titolo semaforico, valore, delta,
-            sparkline colorata, Z-score e box di aiuto espandibile."""
+            """Renderizza un widget metrica coerente: titolo semaforico, valore, delta
+            colorato in modo coerente col semaforo, sparkline colorata, Z-score e aiuto.
+            La logica del colore è UNIFICATA in z_to_color: emoji, sparkline e delta
+            raccontano sempre la stessa storia (verde = favorevole, rosso = sfavorevole),
+            tenendo conto di 'invert' (per metriche dove un valore alto è negativo, es. VIX)."""
             with col:
                 color = z_to_color(z, invert=invert)
                 emoji = "🟢" if color == "#2ecc71" else ("🟡" if color == "#f1c40f" else "🔴")
-                st.metric(f"{emoji} {label}", value_str, delta=delta_str if delta_str else f"Z: {z:+.2f}σ",
-                          delta_color="off" if delta_str is None else ("inverse" if (z < 0) != invert else "normal"))
+                # Il "bene/male" dipende dal segnale corretto per l'invert, non dal segno grezzo di z.
+                signal = -z if invert else z
+                # delta_color di Streamlit: "normal" = verde se freccia su. Costruiamo una freccia
+                # il cui verso rispecchia il SEGNALE (su = favorevole), così il colore è coerente
+                # con emoji e sparkline in ogni caso.
+                if delta_str is not None:
+                    shown_delta = delta_str
+                    dcolor = "normal"
+                else:
+                    arrow = "▲" if signal >= 0 else "▼"
+                    shown_delta = f"{arrow} Z: {z:+.2f}σ"
+                    # signal>=0 -> vogliamo verde -> "normal" con freccia ▲ (Streamlit rende verde)
+                    # signal<0  -> vogliamo rosso -> "normal" con freccia ▼ (Streamlit rende rosso)
+                    dcolor = "normal"
+                st.metric(f"{emoji} {label}", value_str, delta=shown_delta, delta_color=dcolor)
                 if series is not None and len(series.dropna()) > 3:
                     st.plotly_chart(spark(series.dropna()[-90:], color), use_container_width=True)
                 with st.expander("❓ Cosa significa"):
@@ -828,6 +854,7 @@ Il punto **◉ SEI QUI** è calcolato aggregando gli Z-score dei pilastri Cresci
         st.markdown("---")
         st.header("🔥 Pilastro 2 · Inflazione")
         st.caption("Il mercato prezza pressioni inflazionistiche in aumento o in calo? L'inflazione determina la politica delle banche centrali e la rotazione tra asset a lunga e corta duration.")
+        st.info("🔎 **Convenzione semaforica di questo pilastro:** qui il verde 🟢 segnala **pressione inflazionistica in aumento** (la forza che l'indicatore misura), il rosso 🔴 pressione in calo. Non è un giudizio 'bene/male': se l'inflazione sia favorevole o meno dipende dal tuo posizionamento (positiva per commodity/reflation, negativa per bond/tech). Il regime nel quadrante in cima traduce già questo nel contesto operativo.")
 
         i1, i2, i3 = st.columns(3)
         metric_widget(i1, "Breakeven Inflation (TIP/IEF)", f"{gv('TIP')/gv('IEF'):.4f}" if gv('IEF') else "N/D",
@@ -1025,6 +1052,123 @@ Il punto **◉ SEI QUI** è calcolato aggregando gli Z-score dei pilastri Cresci
 - **Deflation/Risk-off**: Utilities, Sanità e Beni di Prima Necessità (difensivi) sovraperformano.
 
 Se la leadership settoriale **contraddice** il quadrante di regime in cima, è un segnale di transizione o di incoerenza da approfondire con cautela.""")
+
+        # ==================================================================
+        #  SEZIONE 6 — SCREENING GRANULARE PER SINGOLO ASSET (Commodity Deep-Dive)
+        #  Stessa struttura del drill-down geografico: tab + istogrammi ranked,
+        #  ma per ogni singolo asset dei complessi che muovono l'economia reale.
+        # ==================================================================
+        st.markdown("---")
+        st.header("🛰️ Radar Materie Prime — Screening per Singolo Asset")
+        st.caption("Se la Mappa Macro ti dice *dove* sta andando l'economia globale, questo radar ti dice *cosa* la sta muovendo, asset per asset. Le materie prime — energia, metalli, terre rare, agricoltura — sono l'input diretto dell'inflazione e del ciclo industriale: leggerle nel dettaglio anticipa i movimenti dell'azionario. Ogni asset è ancorato al suo Z-score (60g): semaforo verde = forza inusuale, rosso = debolezza inusuale.")
+        st.info("🔎 **Come leggere il semaforo qui:** verde 🟢 = quell'asset è **insolitamente forte** rispetto alla sua media recente (Z-score positivo), rosso 🔴 = insolitamente debole. È una misura di *momentum relativo*, non un giudizio di valore: un metallo verde ha forza, ma se sia un bene o un male per il tuo portafoglio dipende dal regime macro (es. energia forte = spinta inflazionistica, favorevole in Reflation ma ostile in Deflation).")
+
+        # --- Sintesi dei 4 complessi (semaforo Z-score aggregato) ---
+        # Ogni complesso è sintetizzato dallo Z-score medio dei suoi asset rappresentativi.
+        complex_baskets = {
+            "Energia": ["CL=F", "BZ=F", "NG=F", "RB=F", "XLE", "XOP"],
+            "Metalli Preziosi": ["GC=F", "SI=F", "PL=F", "PA=F", "GDX", "SIL"],
+            "Critici & Terre Rare": ["HG=F", "REMX", "LIT", "URA", "COPX", "XME"],
+            "Agricoltura": ["DBA", "ZW=F", "ZC=F", "ZS=F", "KC=F", "MOO"],
+        }
+        complex_z = {}
+        for cname, tks in complex_baskets.items():
+            zs = []
+            for tk in tks:
+                if tk in df.columns:
+                    zz = zscore(df[tk].dropna())
+                    if not pd.isna(zz): zs.append(zz)
+            complex_z[cname] = np.nanmean(zs) if zs else 0.0
+
+        cs1, cs2, cs3, cs4 = st.columns(4)
+        complex_help = {
+            "Energia": "Petrolio, gas e raffinati. L'energia è l'input più sistemico dell'economia: un rialzo agisce come una tassa sui consumi e alimenta l'inflazione, spesso anticipando rallentamenti. Semaforo verde = complesso energetico in forza (spinta reflazionistica/inflazionistica); rosso = energia debole (disinflazione o domanda in calo).",
+            "Metalli Preziosi": "Oro, argento, platino, palladio e i loro miner. Beni rifugio e riserva di valore: salgono con la paura, l'inflazione e la svalutazione monetaria. Semaforo verde = forza dei preziosi (domanda di protezione o liquidità abbondante); rosso = debolezza (propensione al rischio o dollaro forte).",
+            "Critici & Terre Rare": "Rame, litio, uranio, terre rare e metalli strategici. Sono il cuore fisico dell'elettrificazione, dei data center AI e della transizione energetica. Il rame ('Dr. Copper') è anche il barometro industriale globale. Semaforo verde = domanda strutturale forte (crescita/AI/energia); rosso = rallentamento industriale.",
+            "Agricoltura": "Grano, mais, soia, caffè, zucchero e agribusiness. L'inflazione alimentare colpisce direttamente il potere d'acquisto e ha forti implicazioni sociali, specie negli emergenti. Semaforo verde = pressione inflazionistica dai beni agricoli; rosso = prezzi in raffreddamento.",
+        }
+        for col, (cname, cz) in zip([cs1, cs2, cs3, cs4], complex_z.items()):
+            with col:
+                ccolor = z_to_color(cz)
+                cemoji = "🟢" if ccolor == "#2ecc71" else ("🟡" if ccolor == "#f1c40f" else "🔴")
+                arrow = "▲" if cz >= 0 else "▼"
+                st.metric(f"{cemoji} {cname}", f"Z: {cz:+.2f}σ", delta=f"{arrow} forza relativa", delta_color="normal")
+                with st.expander("❓ Cosa significa"):
+                    st.write(complex_help[cname])
+
+        # --- Tab dettagliati per singolo asset (istogrammi ranked, come il drill-down geo) ---
+        st.markdown("#### 🔬 Dettaglio per Singolo Asset (perf. 1 mese, ordinata)")
+        tab_en, tab_pm, tab_cr, tab_ag = st.tabs([
+            "⛽ Energia", "🥇 Metalli Preziosi", "🔋 Critici & Terre Rare", "🌾 Agricoltura"])
+
+        def asset_drill(ticker_dict, title, scale='RdYlGn'):
+            """Istogramma ranked identico al drill-down geografico, per singoli asset."""
+            fig = ranked_bars(ticker_dict, 21, title=title, height=max(280, 26*len(ticker_dict)), scale=scale)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Dati non disponibili per questo gruppo (feed Yahoo).")
+
+        with tab_en:
+            st.markdown("**Materie prime energetiche (futures & prodotti)**")
+            asset_drill({
+                "Petrolio WTI (CL)": "CL=F", "Petrolio Brent (BZ)": "BZ=F", "Gas Naturale (NG)": "NG=F",
+                "Benzina RBOB (RB)": "RB=F", "Gasolio/Heating (HO)": "HO=F",
+                "Benzina ETF (UGA)": "UGA", "Petrolio ETF (USO)": "USO", "Gas ETF (UNG)": "UNG",
+            }, "Commodity Energetiche Pure", scale='Tropic')
+            st.markdown("**Segmenti azionari & temi energetici**")
+            asset_drill({
+                "Energia Broad (XLE)": "XLE", "Explor.&Prod. (XOP)": "XOP", "Gas Naturale Eq. (FCG)": "FCG",
+                "Raffinazione (CRAK)": "CRAK", "Midstream/MLP (AMLP)": "AMLP", "Vanguard Energy (VDE)": "VDE",
+                "Nucleare (NLR)": "NLR", "Uranio Miners (URNM)": "URNM", "Solare (TAN)": "TAN",
+                "Clean Energy (ICLN)": "ICLN",
+            }, "Segmenti & Temi Energetici", scale='Tropic')
+            with st.expander("❓ Come si legge il complesso Energia"):
+                st.write("Confronta le **materie prime pure** (futures su petrolio, gas, raffinati) con i **segmenti azionari** che vi sono esposti. Divergenze rivelano molto: se il greggio sale ma i titoli E&P (XOP) no, il mercato dubita della durata del rialzo. Il nucleare (NLR/URNM) e il solare (TAN/ICLN) catturano il tema della **domanda energetica dei data center AI**, uno dei driver strutturali più forti del momento.")
+
+        with tab_pm:
+            st.markdown("**Metalli preziosi fisici (futures)**")
+            asset_drill({
+                "Oro (GC)": "GC=F", "Argento (SI)": "SI=F", "Platino (PL)": "PL=F", "Palladio (PA)": "PA=F",
+                "Oro ETF (GLD)": "GLD", "Argento ETF (SLV)": "SLV", "Platino ETF (PPLT)": "PPLT", "Palladio ETF (PALL)": "PALL",
+            }, "Preziosi Fisici", scale='Bluered_r')
+            st.markdown("**Miner di preziosi (senior & junior)**")
+            asset_drill({
+                "Gold Miners (GDX)": "GDX", "Junior Gold (GDXJ)": "GDXJ", "Silver Miners (SIL)": "SIL",
+                "Junior Silver (SILJ)": "SILJ", "Gold Miners Intl (RING)": "RING", "Sprott Gold (SGDM)": "SGDM",
+            }, "Miner di Preziosi", scale='Bluered_r')
+            with st.expander("❓ Come si legge il complesso Metalli Preziosi"):
+                st.write("I **miner amplificano** i movimenti del metallo sottostante (leva operativa): quando i miner sovraperformano il metallo fisico, è un segnale rialzista di conferma; quando restano indietro, il rally del metallo è più fragile. **Oro** = paura e svalutazione monetaria; **argento** = metà rifugio, metà industriale; **platino/palladio** = fortemente industriali (catalizzatori auto). Il rapporto Oro/Argento è un classico indicatore di stress (sale nella paura).")
+
+        with tab_cr:
+            st.markdown("**Metalli industriali & critici (futures & ETF puri)**")
+            asset_drill({
+                "Rame (HG)": "HG=F", "Rame ETF (CPER)": "CPER", "Rame Miners (COPX)": "COPX",
+                "Litio & Batterie (LIT)": "LIT", "Uranio (URA)": "URA", "Batterie EV (BATT)": "BATT",
+            }, "Metalli Critici Puri", scale='Viridis')
+            st.markdown("**Terre rare, strategici & mining diversificato**")
+            asset_drill({
+                "Terre Rare/Strateg. (REMX)": "REMX", "Metals & Mining (XME)": "XME",
+                "Global Miners (PICK)": "PICK", "Critical Materials (SETM)": "SETM",
+                "Nucleare/Uranio (NLR)": "NLR",
+            }, "Terre Rare & Strategici", scale='Viridis')
+            with st.expander("❓ Come si legge il complesso Critici & Terre Rare"):
+                st.write("Questo è il complesso **più strategico e geopoliticamente sensibile**. Il **rame** è il barometro industriale per eccellenza (sale con la crescita reale). **Litio e uranio** guidano rispettivamente le batterie e il nucleare. Le **terre rare** (REMX) sono critiche per magneti permanenti, EV e — sempre di più — l'hardware dell'intelligenza artificiale; sono anche il fulcro della guerra commerciale USA-Cina sui controlli all'export. Forza diffusa qui = fiducia nella domanda strutturale di elettrificazione e AI.")
+
+        with tab_ag:
+            st.markdown("**Materie prime agricole (futures)**")
+            asset_drill({
+                "Grano (ZW)": "ZW=F", "Mais (ZC)": "ZC=F", "Soia (ZS)": "ZS=F", "Caffè (KC)": "KC=F",
+                "Cacao (CC)": "CC=F", "Zucchero (SB)": "SB=F", "Cotone (CT)": "CT=F", "Bestiame (LE)": "LE=F",
+            }, "Commodity Agricole Pure", scale='YlOrBr_r')
+            st.markdown("**Prodotti agricoli & agribusiness (ETF)**")
+            asset_drill({
+                "Agri Broad (DBA)": "DBA", "Grano (WEAT)": "WEAT", "Mais (CORN)": "CORN", "Soia (SOYB)": "SOYB",
+                "Zucchero (CANE)": "CANE", "Caffè (JO)": "JO", "Cacao (NIB)": "NIB",
+                "Bestiame (COW)": "COW", "Agribusiness (MOO)": "MOO", "Agri Equities (VEGI)": "VEGI", "Legname (WOOD)": "WOOD",
+            }, "Prodotti & Agribusiness", scale='YlOrBr_r')
+            with st.expander("❓ Come si legge il complesso Agricoltura"):
+                st.write("Le **soft commodities** hanno driver spesso indipendenti dal ciclo economico (meteo, raccolti, geopolitica), il che le rende un diversificatore prezioso. L'**inflazione alimentare** è la più socialmente sensibile e colpisce duramente gli emergenti. Distingui le **commodity pure** (futures/ETF sul prezzo) dall'**agribusiness** (MOO, VEGI: aziende di fertilizzanti, macchinari, sementi), che si comporta più come un settore azionario ciclico che come la materia prima.")
 
         # ==================================================================
         #  SEZIONE FINALE — PLAYBOOK OPERATIVO DEL REGIME
