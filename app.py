@@ -174,40 +174,12 @@ st.set_page_config(layout="wide", page_title="SENTINEL GEX V63 - FULL PRO", init
 @st.cache_data(ttl=900, show_spinner=False)
 def calc_fund_metrics_v3(ticker_symbol, _t_data):
     try:
-        # Download dati 5 anni per Fondo e Benchmark (SPY). yfinance può restituire il
-        # risultato con colonne MultiIndex (ticker, campo) oppure un DataFrame a colonna
-        # singola invece di una Series: normalizziamo esplicitamente a Series 1-D, altrimenti
-        # il concat sotto fallisce e la funzione ritorna None (ETF = 'Dati Insufficienti').
-        def _extract_close(sym):
-            raw = yf.download(sym, period="5y", interval="1d", progress=False, auto_adjust=True)
-            if raw is None or len(raw) == 0:
-                return None
-            # Se MultiIndex sulle colonne, seleziona il livello 'Close'
-            if isinstance(raw.columns, pd.MultiIndex):
-                if 'Close' in raw.columns.get_level_values(0):
-                    close = raw['Close']
-                else:
-                    return None
-            elif 'Close' in raw.columns:
-                close = raw['Close']
-            else:
-                return None
-            # close può ancora essere DataFrame (una colonna) → prendi la prima colonna
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-            return close
-
-        df_f = _extract_close(ticker_symbol)
-        df_b = _extract_close("SPY")
-        if df_f is None or df_b is None:
-            return None
+        # Download dati 5 anni per Fondo e Benchmark (SPY)
+        df_f = yf.download(ticker_symbol, period="5y", interval="1d")['Close']
+        df_b = yf.download("SPY", period="5y", interval="1d")['Close']
         data = pd.concat([df_f, df_b], axis=1).dropna()
-        if data.shape[0] < 30 or data.shape[1] < 2:
-            return None
         data.columns = ['Fund', 'Bench']
         rets = data.pct_change().dropna()
-        if rets.empty:
-            return None
 
         # 1. CAGR 5Y
         cagr = (data['Fund'].iloc[-1] / data['Fund'].iloc[0]) ** (1/5) - 1
@@ -218,9 +190,8 @@ def calc_fund_metrics_v3(ticker_symbol, _t_data):
         # 4. Max Drawdown
         dd = (data['Fund'] / data['Fund'].cummax() - 1).min()
         # 5. Beta & 6. Alpha
-        var_b = np.var(rets['Bench'])
         cov = np.cov(rets['Fund'], rets['Bench'])[0][1]
-        beta = cov / var_b if var_b != 0 else 0
+        beta = cov / np.var(rets['Bench'])
         alpha = cagr - (0.02 + beta * (rets['Bench'].mean()*252 - 0.02))
         # 7. Tracking Error
         te = (rets['Fund'] - rets['Bench']).std() * np.sqrt(252)
@@ -8701,19 +8672,6 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
             
             # 1. INIZIALIZZAZIONE DI SICUREZZA
             z_val, f_score, m_score, val_dcf, margin_graham, ev_val, roic, wacc, roic_wacc_spread, eps_growth, final_rating, magic_ey, ev_ebitda, tr_eps = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.0, 0, 0, 1
-            # FIX SCHERMO NERO SU ETF/FONDI/INDICI: quote_type e fund_metrics venivano
-            # definite SOLO dentro il blocco try del calcolo istituzionale, ma usate anche
-            # fuori (nel rendering di header e tab). Per un ETF/fondo i dati di bilancio
-            # (Net Income, Total Assets, ecc.) non esistono, quindi il calcolo poteva
-            # sollevare un'eccezione PRIMA di assegnare quote_type; il blocco except non la
-            # reinizializzava, causando un NameError a valle (schermo nero) sul rendering.
-            # Le azioni ordinarie funzionavano perché per loro il calcolo arrivava in fondo.
-            # Inizializzandole qui, PRIMA del try, esistono sempre in ogni percorso.
-            quote_type = inf.get('quoteType', 'EQUITY').upper()
-            if 'fund_metrics' not in st.session_state:
-                st.session_state.fund_metrics = None
-            if 'score' not in st.session_state:
-                st.session_state.score = 1.0
             
             # --- NUOVO BLOCCO CALCOLO ISTITUZIONALE ---
             try:
@@ -9379,21 +9337,9 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                 # --- END INSTITUTIONAL TREND ANALYSIS ---
                     
             with t2:
-                try:
-                    hist_df = data.get("history")
-                    if hist_df is not None and not hist_df.empty and all(c in hist_df.columns for c in ['Open', 'High', 'Low', 'Close']):
-                        fig = go.Figure(data=[go.Candlestick(x=hist_df.index, open=hist_df['Open'], high=hist_df['High'], low=hist_df['Low'], close=hist_df['Close'])])
-                        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
-                        st.plotly_chart(fig, use_container_width=True)
-                    elif hist_df is not None and not hist_df.empty and 'Close' in hist_df.columns:
-                        # Fallback: alcuni ETF/indici restituiscono solo il prezzo di chiusura → grafico a linea
-                        fig = go.Figure(data=[go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', line=dict(color='#00BFFF', width=2))])
-                        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, title="Prezzo di chiusura (dati OHLC non disponibili per questo strumento)")
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("📈 Dati storici di prezzo non disponibili per questo strumento sul feed Yahoo Finance.")
-                except Exception as e:
-                    st.warning(f"Impossibile generare il grafico dei prezzi per questo strumento: {e}")
+                fig = go.Figure(data=[go.Candlestick(x=data["history"].index, open=data["history"]['Open'], high=data["history"]['High'], low=data["history"]['Low'], close=data["history"]['Close'])])
+                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
 
             with t3:
                 st.header("🐋 Whales & Insider Intelligence")
@@ -9523,9 +9469,6 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
                             """, unsafe_allow_html=True)
                 else:
                     st.info("In attesa di nuovi aggiornamenti dal mercato...")
-        else:
-            st.error(f"⚠️ Impossibile recuperare i dati per '{t_code}'. Verifica che il ticker sia corretto (es. AAPL, MSFT, SPY, ^GSPC) o riprova tra qualche istante: il feed Yahoo Finance potрebbe essere temporaneamente non disponibile per questo strumento.")
-            st.caption("Suggerimento: per gli indici usa il prefisso ^ (es. ^GSPC per S&P 500, ^IXIC per Nasdaq). Per gli ETF e le azioni usa il ticker semplice (es. SPY, QQQ, BLK, BRK-B).")
 
 elif menu == "🔍 GLOBAL SCANNER (Alpha)":
     st.title("🏛️ Global Alpha Engine (Massive Database)")
