@@ -415,637 +415,650 @@ def display_macro_correlation_page():
         st.plotly_chart(fig_line, use_container_width=True)
 
 def display_macro_war_room():
-    st.title("🌐 QUANTUM MACRO COMMAND CENTER V4.0")
-    st.info("Sistema Istituzionale Unificato: Economia Reale, Mappa Geopolitica, Flussi Ombra e Asset Allocation.")
+    # ============================================================================
+    #  QUANTUM MACRO COMMAND CENTER V5.0 - Struttura Istituzionale a 4 Assi
+    #  (Growth / Inflation / Financial Conditions / Risk Sentiment) + Regime Quadrant
+    # ============================================================================
+    st.title("🌐 QUANTUM MACRO COMMAND CENTER V5.0")
+    st.caption("Framework istituzionale a 4 pilastri (Crescita · Inflazione · Condizioni Finanziarie · Sentiment di Rischio) con classificazione di regime macro e allocazione dinamica. Ogni metrica ha una spiegazione espandibile.")
 
-    # --- 1. MOTORE DATI (Sentinelle Espanse) ---
+    # --- MOTORE DATI (sentinelle estese con i proxy istituzionali mancanti) ---
     sentinels = [
-        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM", "IWM",
-        "TLT", "IEF", "^TNX", "^FVX", "HYG", "BND", "^IRX",
-        "GC=F", "SI=F", "PL=F", "HG=F", "CL=F", "NG=F", "XOP",
-        "TIP", "DBA", "XLE", "UUP", "GLD", "SLV", "GDX", "ITB",
-        "REMX", "VNQ", "BTC-USD", "USDJPY=X", 
-        "^VIX", "^VIX3M", "RSP", "XLK", "XLU", "XLY", "XLP",
-        # EUROPA ESPANSA
-        "EWG", "EWQ", "EWI", "EWP", "EWN", "EWD", "EWL",
-        # DEVELOPED EX-US & EX-EU
-        "EWU", "EWC", "EWA", "EWS", "EWH",
-        # ASIA ESPANSA
+        # Azionario globale
+        "^GSPC", "^IXIC", "^GDAXI", "MCHI", "VGK", "EEM", "IWM", "RSP", "ACWX", "EFA",
+        # Settori USA (per rotazione ciclici/difensivi)
+        "XLK", "XLY", "XLP", "XLU", "XLE", "XLF", "XLV", "XLI", "XLB", "ITB",
+        # Rates & Bonds
+        "TLT", "IEF", "SHY", "^TNX", "^FVX", "^IRX", "^TYX", "BND", "TIP", "MBB",
+        # Credit
+        "HYG", "LQD", "JNK", "EMB", "BKLN",
+        # Commodities & Metalli
+        "GC=F", "SI=F", "PL=F", "HG=F", "PA=F", "CL=F", "NG=F", "DBA", "DBC", "URA",
+        "XOP", "XLE", "GLD", "SLV", "GDX", "REMX", "COPX", "USO", "UNG", "WEAT", "CORN",
+        # FX & Dollaro
+        "UUP", "FXY", "FXF", "FXE", "FXC", "FXA", "FXB", "USDJPY=X", "EURUSD=X", "CEW",
+        # Volatilità
+        "^VIX", "^VIX3M", "^VVIX", "^OVX", "^MOVE",
+        # Crypto & Rischio speculativo
+        "BTC-USD", "ETH-USD",
+        # Real Estate
+        "VNQ", "IYR", "REZ",
+        # EUROPA (drill-down)
+        "EWG", "EWQ", "EWI", "EWP", "EWN", "EWD", "EWL", "EWU",
+        # DEVELOPED ex-US/EU
+        "EWC", "EWA", "EWS", "EWH",
+        # ASIA
         "EWJ", "INDA", "EWY", "EWT", "EIDO", "VNM", "EPHE",
-        # EMERGING ESPANSI
-        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK", "ERUS"
+        # EMERGING
+        "EWZ", "EWW", "EZA", "KSA", "TUR", "ECH", "GREK",
     ]
 
-    with st.spinner("Sincronizzazione Rete Quantistica Globale..."):
-        df = safe_get_adj_close(sentinels, period="1y")
+    with st.spinner("Sincronizzazione rete macro globale..."):
+        df = safe_get_adj_close(sentinels, period="2y")
         if df.empty:
             st.error("Errore nel recupero dati. Verifica la connessione ai ticker.")
             return
 
-        def get_stat(ticker, st_type="curr"):
+        # ----------------------------- HELPERS -----------------------------
+        def gv(ticker, kind="curr"):
+            """get value: current / prev(21g) / ma50 / ma200 di un ticker."""
             if ticker not in df.columns: return np.nan
             s = df[ticker].dropna()
             if s.empty: return np.nan
-            if st_type == "curr": return s.iloc[-1]
-            if st_type == "prev": return s.iloc[-21] if len(s) > 20 else s.iloc[0]
-            if st_type == "ma50": return s.rolling(50).mean().iloc[-1] if len(s) >= 50 else s.mean()
+            if kind == "curr": return s.iloc[-1]
+            if kind == "prev": return s.iloc[-21] if len(s) > 21 else s.iloc[0]
+            if kind == "prev5": return s.iloc[-5] if len(s) > 5 else s.iloc[0]
+            if kind == "ma50": return s.rolling(50).mean().iloc[-1] if len(s) >= 50 else s.mean()
+            if kind == "ma200": return s.rolling(200).mean().iloc[-1] if len(s) >= 200 else s.mean()
+            return np.nan
 
-        # --- HELPER: SPARKLINE GENERATOR ---
-        def draw_sparkline(series, color="#2ecc71"):
-            fig = go.Figure(go.Scatter(y=series, mode='lines', line=dict(color=color, width=2.5)))
-            fig.update_layout(
-                height=50, margin=dict(l=0, r=0, t=0, b=0),
-                xaxis=dict(visible=False), yaxis=dict(visible=False),
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
-            )
+        def zscore(series, window=120):
+            """Z-score dell'ultimo valore rispetto alla finestra (default ~6 mesi)."""
+            s = series.dropna()
+            if len(s) < 20: return 0.0
+            w = min(window, len(s))
+            mean = s.rolling(w).mean().iloc[-1]
+            std = s.rolling(w).std().iloc[-1]
+            return float((s.iloc[-1] - mean) / std) if std and std != 0 else 0.0
+
+        def ratio_series(num, den):
+            """Serie storica del rapporto tra due ticker (allineata, pulita)."""
+            if num not in df.columns or den not in df.columns: return pd.Series(dtype=float)
+            r = (df[num] / df[den]).dropna()
+            return r
+
+        def perf(ticker, lookback=21):
+            """Performance percentuale su lookback giorni."""
+            if ticker not in df.columns: return np.nan
+            s = df[ticker].dropna()
+            if len(s) <= lookback: return np.nan
+            return float((s.iloc[-1] / s.iloc[-lookback]) - 1)
+
+        def spark(series, color="#2ecc71", height=50):
+            fig = go.Figure(go.Scatter(y=series, mode='lines', line=dict(color=color, width=2.2)))
+            fig.update_layout(height=height, margin=dict(l=0, r=0, t=0, b=0),
+                              xaxis=dict(visible=False), yaxis=dict(visible=False),
+                              paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             return fig
 
-        def draw_ranked_bars(ticker_map, title, period=20):
+        def ranked_bars(ticker_map, lookback=21, title="", height=300, scale='RdYlGn'):
             data = []
-            for name, ticker in ticker_map.items():
-                if ticker in df.columns:
-                    series = df[ticker].dropna()
-                    if len(series) >= period:
-                        perf = (series.iloc[-1] / series.iloc[-period]) - 1
-                        data.append({"Asset": name, "Performance": perf})
-            
+            for name, tk in ticker_map.items():
+                p = perf(tk, lookback)
+                if not pd.isna(p):
+                    data.append({"Asset": name, "Perf": p})
             if not data: return None
-            df_plot = pd.DataFrame(data).sort_values("Performance", ascending=True)
-            
-            fig = px.bar(df_plot, x="Performance", y="Asset", orientation='h',
-                         title=title, color="Performance",
-                         color_continuous_scale='RdYlGn', text_auto='.2%')
-            fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10),
+            dfp = pd.DataFrame(data).sort_values("Perf", ascending=True)
+            fig = px.bar(dfp, x="Perf", y="Asset", orientation='h', title=title,
+                         color="Perf", color_continuous_scale=scale, text_auto='.2%')
+            fig.update_layout(height=height, margin=dict(l=10, r=10, t=40 if title else 10, b=10),
                               showlegend=False, coloraxis_showscale=False,
-                              xaxis_title="Perf. Relativa", yaxis_title="")
+                              xaxis_title="", yaxis_title="")
             return fig
 
-        def calculate_z_score(series, window=60):
-            if len(series) < window: return 0.0
-            mean = series.rolling(window=window).mean().iloc[-1]
-            std = series.rolling(window=window).std().iloc[-1]
-            return (series.iloc[-1] - mean) / std if std != 0 else 0.0
+        def z_to_color(z, invert=False):
+            """Mappa uno z-score a un colore semaforo. invert=True: z alto = male."""
+            zz = -z if invert else z
+            if zz > 0.5: return "#2ecc71"
+            if zz > -0.5: return "#f1c40f"
+            return "#e74c3c"
 
-        # --- 2. ELABORAZIONE QUANTISTICA DELLE METRICHE ---
-        
-        # Livello Base (Prezzi Correnti e Medie)
-        us_curr, us_ma = get_stat("^GSPC"), get_stat("^GSPC", "ma50")
-        re_curr, re_ma = get_stat("VNQ"), get_stat("VNQ", "ma50")
-        china_curr, china_ma = get_stat("MCHI"), get_stat("MCHI", "ma50")
-        eur_curr, eur_ma = get_stat("^GDAXI"), get_stat("^GDAXI", "ma50")
-        eem_curr, eem_ma = get_stat("EEM"), get_stat("EEM", "ma50")
-        
-        # Metalli e Barometro
-        hg_curr, gc_curr = get_stat("HG=F"), get_stat("GC=F")
-        hg_ma, gc_ma = get_stat("HG=F", "ma50"), get_stat("GC=F", "ma50")
-        cu_au_ratio = hg_curr / gc_curr if gc_curr > 0 else 0
-        cu_au_ma = hg_ma / gc_ma if gc_ma > 0 else 0
-        ind_growth = cu_au_ratio > cu_au_ma
+        # ==================================================================
+        #  CALCOLO DEI 4 PILASTRI (ognuno normalizzato in z-score composito)
+        # ==================================================================
 
-        # Flussi e Salute
-        breadth_ratio = get_stat("RSP") / get_stat("^GSPC")
-        breadth_ma = get_stat("RSP", "ma50") / get_stat("^GSPC", "ma50")
-        is_healthy_breadth = breadth_ratio > breadth_ma
+        # --- PILASTRO 1: CRESCITA (Growth) ---
+        # Rame/Oro (barometro industriale), breadth, ciclici vs difensivi, small caps,
+        # credito HY vs Treasury (propensione al rischio di credito = fiducia nel ciclo)
+        s_cu_au = ratio_series("HG=F", "GC=F")
+        s_breadth = ratio_series("RSP", "^GSPC")
+        s_cyc_def = ratio_series("XLY", "XLP")
+        s_smallcap = ratio_series("IWM", "^GSPC")
+        s_hy_ief = ratio_series("HYG", "IEF")
+        s_copper_ind = ratio_series("COPX", "^GSPC")
 
-        bnd_curr, bnd_ma = get_stat("BND"), get_stat("BND", "ma50")
-        bond_stress = bnd_curr < bnd_ma  # Prezzi bond giù = tassi su = stress
-        
-        inf_expect_ratio = get_stat("TIP") / get_stat("IEF")
-        inf_expect_ma = get_stat("TIP", "ma50") / get_stat("IEF", "ma50")
-        inflation_fear = inf_expect_ratio > inf_expect_ma
-
-        vix_ratio = get_stat("^VIX") / get_stat("^VIX3M")
-        usdjpy_curr, usdjpy_prev = get_stat("USDJPY=X"), get_stat("USDJPY=X", "prev")
-        carry_trade_risk = usdjpy_curr < usdjpy_prev
-        btc_curr, btc_ma = get_stat("BTC-USD"), get_stat("BTC-USD", "ma50")
-        btc_liq = btc_curr > btc_ma
-
-        # --- 3. LIVELLO 1: MAPPA MACRO GLOBALE (I 5 Pilastri) ---
-        st.header("🗺️ Mappa Macro Globale (Fisica)")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1:
-            delta_us = ((us_curr / us_ma) - 1) * 100
-            st.metric("Azionario USA", f"{us_curr:,.0f}", delta=f"{delta_us:+.2f}% vs MA50", delta_color="normal" if us_curr > us_ma else "inverse")
-        with c2:
-            delta_re = ((re_curr / re_ma) - 1) * 100
-            st.metric("Real Estate", f"${re_curr:.2f}", delta=f"{delta_re:+.2f}% vs MA50", delta_color="normal" if re_curr > re_ma else "inverse")
-        with c3:
-            delta_ind = ((cu_au_ratio / cu_au_ma) - 1) * 100 if cu_au_ma > 0 else 0
-            st.metric("Barom. Ind. (Cu/Au)", f"{cu_au_ratio:.4f}", delta=f"{delta_ind:+.2f}% Crescita", delta_color="normal" if ind_growth else "inverse")
-        with c4:
-            delta_ch = ((china_curr / china_ma) - 1) * 100
-            st.metric("Cina (MCHI)", f"${china_curr:.2f}", delta=f"{delta_ch:+.2f}% vs MA50", delta_color="normal" if china_curr > china_ma else "inverse")
-        with c5:
-            delta_eu = ((eur_curr / eur_ma) - 1) * 100
-            st.metric("Europa (DAX)", f"{eur_curr:,.0f}", delta=f"{delta_eu:+.2f}% vs MA50", delta_color="normal" if eur_curr > eur_ma else "inverse")
-
-        # --- LIVELLO 2.6: GLOBAL RELATIVE STRENGTH (20D) ---
-        st.markdown("#### 🌍 Classifica Forza Relativa Globale (20gg)")
-        equity_map = {
-            "USA (S&P500)": "^GSPC", "USA Tech (NDX)": "^IXIC", "USA Small Caps (IWM)": "IWM",
-            "Europa (VGK)": "VGK", "Germania (DAX)": "^GDAXI", "Cina (MCHI)": "MCHI", "Emergenti (EEM)": "EEM"
+        z_growth_components = {
+            "Rame/Oro (barometro industriale)": zscore(s_cu_au),
+            "Market Breadth (RSP/SPX)": zscore(s_breadth),
+            "Ciclici/Difensivi (XLY/XLP)": zscore(s_cyc_def),
+            "Small Caps rel. (IWM/SPX)": zscore(s_smallcap),
+            "Credito HY/Treasury (HYG/IEF)": zscore(s_hy_ief),
         }
-        data_equity = []
-        for name, tk in equity_map.items():
-            if tk in df.columns:
-                perf = (df[tk].iloc[-1] / df[tk].iloc[-20]) - 1
-                data_equity.append({"Mercato": name, "Performance": perf})
-        
-        df_equity = pd.DataFrame(data_equity).sort_values("Performance", ascending=False)
-        fig_eq = px.bar(df_equity, x="Performance", y="Mercato", orientation='h', 
-                        color="Performance", color_continuous_scale='RdYlGn', text_auto='.2%')
-        fig_eq.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
-        st.plotly_chart(fig_eq, use_container_width=True)
+        growth_z = np.nanmean(list(z_growth_components.values()))
 
-        st.markdown("#### 🚀 Settori Lead, Breadth & Risk-Appetite")
-        
-        # Calcolo Metriche
-        m_breadth = (get_stat("RSP") / get_stat("^GSPC")) - 1
-        m_tech = (get_stat("XLK") / get_stat("^GSPC")) - 1
-        m_risk = (get_stat("XLY") / get_stat("XLP")) - 1
-        
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric(f"{'🟢' if m_breadth > 0 else '🔴'} Market Breadth", f"{m_breadth:.2%}", help="RSP vs SPY")
-        with c2:
-            st.metric(f"{'🟢' if m_tech > 0 else '🔴'} Tech Leadership", f"{m_tech:.2%}", help="XLK vs SPY")
-        with c3:
-            st.metric(f"{'🟢' if m_risk > 0 else '🔴'} Risk Appetite", f"{m_risk:.2%}", help="XLY vs XLP")
+        # --- PILASTRO 2: INFLAZIONE (Inflation) ---
+        # Breakeven proxy (TIP/IEF), commodity broad, energia, rame, dollaro (inverso)
+        s_breakeven = ratio_series("TIP", "IEF")
+        s_commod = df["DBC"].dropna() if "DBC" in df.columns else pd.Series(dtype=float)
+        s_energy = df["CL=F"].dropna() if "CL=F" in df.columns else pd.Series(dtype=float)
+        s_agri = df["DBA"].dropna() if "DBA" in df.columns else pd.Series(dtype=float)
+        s_dxy = df["UUP"].dropna() if "UUP" in df.columns else pd.Series(dtype=float)
 
-        # Istogramma Settori Lead
-        lead_data = pd.DataFrame([
-            {"Settore": "Market Breadth", "Valore": m_breadth},
-            {"Settore": "Tech Leadership", "Valore": m_tech},
-            {"Settore": "Risk Appetite", "Valore": m_risk}
-        ])
-        fig_lead = px.bar(lead_data, x="Valore", y="Settore", orientation='h', 
-                          color="Valore", color_continuous_scale='Geyser', text_auto='.2%')
-        fig_lead.update_layout(height=200, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_lead, use_container_width=True)
-
-        st.markdown("#### 🏗️ Real Estate, Builders & Alpha Sectors")
-        alpha_map = {
-            "Real Estate (VNQ)": "VNQ", "Homebuilders (ITB)": "ITB", 
-            "Small Caps (IWM)": "IWM", "Gold Miners (GDX)": "GDX"
+        z_infl_components = {
+            "Breakeven proxy (TIP/IEF)": zscore(s_breakeven),
+            "Commodity broad (DBC)": zscore(s_commod),
+            "Energia (WTI)": zscore(s_energy),
+            "Agricoltura (DBA)": zscore(s_agri),
+            "Dollaro (UUP, inverso)": -zscore(s_dxy),
         }
-        data_alpha = []
-        for name, tk in alpha_map.items():
-            if tk in df.columns:
-                perf = (df[tk].iloc[-1] / df[tk].iloc[-50]) - 1 # Forza relativa 50gg
-                data_alpha.append({"Settore": name, "Forza": perf})
-        
-        df_alpha = pd.DataFrame(data_alpha).sort_values("Forza", ascending=False)
-        fig_alpha = px.bar(df_alpha, x="Forza", y="Settore", orientation='h', 
-                           color="Forza", color_continuous_scale='Viridis', text_auto='.2%')
-        fig_alpha.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig_alpha, use_container_width=True)
+        infl_z = np.nanmean(list(z_infl_components.values()))
 
-        st.markdown("#### 🛢️ Energy Complex & Hard Assets")
-        energy_map = {
-            "Oil & Gas Exp (XOP)": "XOP", "Crude Oil (WTI)": "CL=F", 
-            "Natural Gas": "NG=F", "Energy ETF (XLE)": "XLE"
+        # --- PILASTRO 3: CONDIZIONI FINANZIARIE & LIQUIDITÀ ---
+        # FCI sintetico: credito (HY spread inverso), volatilità (VIX inverso),
+        # equity (SPX), dollaro (inverso), tassi reali (TIP proxy)
+        # Uno z alto = condizioni ACCOMODANTI (favorevoli agli asset di rischio)
+        s_vix = df["^VIX"].dropna() if "^VIX" in df.columns else pd.Series(dtype=float)
+        s_hy_spread = ratio_series("HYG", "LQD")   # HY vs IG: compressione = condizioni facili
+        s_spx = df["^GSPC"].dropna() if "^GSPC" in df.columns else pd.Series(dtype=float)
+        s_move = df["^MOVE"].dropna() if "^MOVE" in df.columns else pd.Series(dtype=float)
+        s_liq_proxy = ratio_series("GLD", "UUP")   # oro/dollaro: proxy liquidità/svalutazione
+
+        z_fci_components = {
+            "Volatilità azionaria (VIX, inverso)": -zscore(s_vix),
+            "Spread credito HY/IG (compressione)": zscore(s_hy_spread),
+            "Trend azionario (SPX)": zscore(s_spx),
+            "Volatilità bond (MOVE, inverso)": -zscore(s_move) if not s_move.empty else np.nan,
+            "Liquidità proxy (GLD/UUP)": zscore(s_liq_proxy),
         }
-        data_energy = []
-        for name, tk in energy_map.items():
-            if tk in df.columns:
-                perf = (df[tk].iloc[-1] / df[tk].iloc[-20]) - 1
-                data_energy.append({"Asset": name, "Performance": perf})
-        
-        df_energy = pd.DataFrame(data_energy).sort_values("Performance", ascending=False)
-        fig_energy = px.bar(df_energy, x="Performance", y="Asset", orientation='h', 
-                            color="Performance", color_continuous_scale='Tropic', text_auto='.2%')
-        fig_energy.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig_energy, use_container_width=True)
+        fci_z = np.nanmean([v for v in z_fci_components.values() if not pd.isna(v)])
 
-        st.markdown("---")
+        # --- PILASTRO 4: SENTIMENT DI RISCHIO (RORO composito) ---
+        # Basato sul RORO index della Fed di Kansas City, adattato con proxy ETF Yahoo.
+        # Uno z alto = RISK-ON (propensione al rischio).
+        s_spy_tlt = ratio_series("^GSPC", "TLT")   # azioni vs safe haven bond
+        s_jnk_tlt = ratio_series("JNK", "TLT")     # junk vs treasury
+        s_yen = df["USDJPY=X"].dropna() if "USDJPY=X" in df.columns else pd.Series(dtype=float)  # USDJPY su = risk-on
+        s_gold_spy = ratio_series("GLD", "^GSPC")  # oro/azioni: su = risk-off (invertito)
+        s_btc = df["BTC-USD"].dropna() if "BTC-USD" in df.columns else pd.Series(dtype=float)
+        s_vix_ts = ratio_series("^VIX", "^VIX3M")  # term structure VIX: >1 = stress (invertito)
 
-        # --- NUOVO LIVELLO 1.5: MAPPA SETTORIALE E GEOPOLITICA ---
-        st.header("🌍 Geopolitica & Asset Class (Chi guida l'economia?)")
-        geo1, geo2, geo3, geo4 = st.columns(4)
-        
-        def status_widget(name, curr, ma, suffix=""):
-            if pd.isna(curr) or pd.isna(ma) or ma == 0: return f"⚪ {name}: N/D"
-            delta = ((curr / ma) - 1) * 100
-            emj = "🟢" if curr > ma else "🔴"
-            return f"{emj} **{name}**: {curr:.2f}{suffix} ({delta:+.2f}%)"
-
-        with geo1:
-            st.markdown("#### 🗺️ Geopolitica")
-            st.markdown(status_widget("USA (S&P)", us_curr, us_ma))
-            st.markdown(status_widget("Europa", eur_curr, eur_ma))
-            st.markdown(status_widget("Cina", china_curr, china_ma))
-            st.markdown(status_widget("Emergenti (BRICS)", eem_curr, eem_ma))
-        with geo2:
-            st.markdown("#### 🛢️ Energia & Hard Assets")
-            st.markdown(status_widget("Petrolio (WTI)", get_stat("CL=F"), get_stat("CL=F", "ma50"), "$"))
-            st.markdown(status_widget("Titoli Energetici", get_stat("XLE"), get_stat("XLE", "ma50"), "$"))
-            st.markdown(status_widget("Agricoltura (DBA)", get_stat("DBA"), get_stat("DBA", "ma50"), "$"))
-        with geo3:
-            st.markdown("#### ⛏️ Metalli")
-            st.markdown(status_widget("Oro (Rifugio)", gc_curr, gc_ma, "$"))
-            st.markdown(status_widget("Rame (Industria)", hg_curr, hg_ma, "$"))
-            st.markdown(status_widget("Terre Rare (Tech)", get_stat("REMX"), get_stat("REMX", "ma50"), "$"))
-        with geo4:
-            st.markdown("#### ⚖️ Forza Relativa")
-            usa_vs_china = us_curr / china_curr if china_curr > 0 else 1
-            usa_vs_china_ma = us_ma / china_ma if china_ma > 0 else 1
-            st.markdown(f"**USA vs Cina Ratio:** {usa_vs_china:.2f}")
-            if usa_vs_china > usa_vs_china_ma:
-                st.success("🇺🇸 Capitali verso USA")
-            else:
-                st.error("🇨🇳 Capitali verso Oriente")
-
-        st.markdown("#### ⚡ Gerarchia delle Asset Class & Hard Assets")
-        c_rank3, c_rank4, c_rank5 = st.columns(3)
-        with c_rank3:
-            mkt_geopol = {"Risk-ON (Nasdaq)": "^IXIC", "Safe Haven (Gold)": "GC=F", "Dollar Index": "UUP", "Bitcoin": "BTC-USD", "Bonds": "TLT"}
-            st.plotly_chart(draw_ranked_bars(mkt_geopol, "Ranking Geopolitico/Asset"), use_container_width=True)
-        with c_rank4:
-            mkt_energy = {"Petrolio WTI": "CL=F", "Gas Naturale": "NG=F", "Oil & Gas (XOP)": "XOP", "Energy (XLE)": "XLE"}
-            st.plotly_chart(draw_ranked_bars(mkt_energy, "Energia & Hard Assets"), use_container_width=True)
-        with c_rank5:
-            mkt_metals = {"Oro": "GC=F", "Argento": "SI=F", "Rame": "HG=F", "Platino": "PL=F"}
-            st.plotly_chart(draw_ranked_bars(mkt_metals, "Metalli Ranking"), use_container_width=True)
-
-        st.markdown("#### ⛏️ Metals Ranking & Relative Strength")
-        metal_map = {
-            "Oro (GC=F)": "GC=F", 
-            "Argento (SI=F)": "SI=F", 
-            "Platino (PL=F)": "PL=F",
-            "Rame (HG=F)": "HG=F"
+        z_roro_components = {
+            "Azioni/Bond (SPX/TLT)": zscore(s_spy_tlt),
+            "Junk/Treasury (JNK/TLT)": zscore(s_jnk_tlt),
+            "Carry USD/JPY": zscore(s_yen),
+            "Oro/Azioni (inverso)": -zscore(s_gold_spy),
+            "Bitcoin (liquidità speculativa)": zscore(s_btc),
+            "VIX term structure (inverso)": -zscore(s_vix_ts),
         }
-        data_metals = []
-        for name, tk in metal_map.items():
-            if tk in df.columns:
-                perf = (df[tk].iloc[-1] / df[tk].iloc[-20]) - 1
-                data_metals.append({"Metallo": name, "Performance": perf})
-        
-        df_metals = pd.DataFrame(data_metals).sort_values("Performance", ascending=False)
-        fig_m = px.bar(df_metals, x="Performance", y="Metallo", orientation='h', 
-                       color="Performance", color_continuous_scale='Bluered', text_auto='.2%')
-        fig_m.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig_m, use_container_width=True)
+        roro_z = np.nanmean(list(z_roro_components.values()))
 
+        # ==================================================================
+        #  CLASSIFICAZIONE DI REGIME (Quadrante Growth × Inflation)
+        # ==================================================================
+        growth_up = growth_z > 0
+        infl_up = infl_z > 0
+
+        if growth_up and not infl_up:
+            regime_name = "🟢 GOLDILOCKS"
+            regime_desc = "Crescita in accelerazione, inflazione contenuta. Il regime più favorevole per l'azionario, in particolare growth/tech."
+            regime_assets_pro = "Azioni (specie Tech/Growth), Small Caps, Credito HY, Crypto"
+            regime_assets_con = "Oro, Cash, Bond difensivi lunghi"
+            regime_color = "#2ecc71"
+        elif growth_up and infl_up:
+            regime_name = "🟠 REFLATION"
+            regime_desc = "Crescita e inflazione in accelerazione simultanea. Fase 'risk-on ciclica': beneficiano commodity e settori ciclici, i bond soffrono."
+            regime_assets_pro = "Commodity, Energia, Materiali, Finanziari, Ciclici, Azioni value"
+            regime_assets_con = "Bond lunghi (TLT), Tech ad alta duration"
+            regime_color = "#e67e22"
+        elif not growth_up and infl_up:
+            regime_name = "🔴 STAGFLATION"
+            regime_desc = "Crescita in rallentamento con inflazione persistente. Il regime più ostile: capitale in preservazione, oro come miglior relativo."
+            regime_assets_pro = "Oro, Argento, Materie prime agricole, TIPS, Cash"
+            regime_assets_con = "Tech, Real Estate, Bond nominali lunghi, Ciclici"
+            regime_color = "#c0392b"
+        else:
+            regime_name = "🔵 DEFLATION"
+            regime_desc = "Crescita e inflazione in rallentamento. Fase risk-off classica: dominano duration lunga, dollaro e beni rifugio."
+            regime_assets_pro = "Bond lunghi (TLT), Dollaro (UUP), Difensivi (Utilities/Staples), Oro"
+            regime_assets_con = "Commodity, Ciclici, Small Caps, Crypto"
+            regime_color = "#3498db"
+
+        # ==================================================================
+        #  SEZIONE 0 — IL VERDETTO (in cima: regime + rischio + allocazione)
+        # ==================================================================
         st.markdown("---")
+        st.header("🧭 Il Verdetto Macro")
 
-        # --- 4. LIVELLO 2: SALUTE E FLUSSI OMBRA (CON GRAFICI E SEMAFORI) ---
-        st.header("🧬 Analisi Molecolare e Flussi Invisibili")
-        
-        # Preparazione serie storiche per i grafici
-        hist_breadth = (df["RSP"] / df["^GSPC"]).dropna()
-        hist_bnd = df["BND"].dropna()
-        hist_inf = (df["TIP"] / df["IEF"]).dropna()
-        hist_btc = df["BTC-USD"].dropna()
-        hist_yen = df["USDJPY=X"].dropna()
-        hist_vix = (df["^VIX"] / df["^VIX3M"]).dropna()
-        
-        # Calcolo Z-Score
-        z_br = calculate_z_score(hist_breadth)
-        z_bnd = calculate_z_score(hist_bnd)
-        z_inf = calculate_z_score(hist_inf)
-        z_btc = calculate_z_score(hist_btc)
-        z_yen = calculate_z_score(hist_yen)
-        z_vix = calculate_z_score(hist_vix)
+        verdict_col1, verdict_col2 = st.columns([1, 1])
 
-        r1, r2, r3 = st.columns(3)
-        with r1:
-            br_delta = breadth_ratio - breadth_ma
-            tit_br = "Market Breadth 🟢" if is_healthy_breadth else "Market Breadth 🔴"
-            st.metric(tit_br, f"{breadth_ratio:.3f}", delta=f"{br_delta:+.3f} vs Media", delta_color="normal" if is_healthy_breadth else "inverse")
-            st.plotly_chart(draw_sparkline(hist_breadth[-60:], "#2ecc71" if is_healthy_breadth else "#e74c3c"), use_container_width=True)
-            st.caption(f"Z-Score (60gg): {z_br:.2f}σ")
-            with st.expander("Cos'è e come si legge?"): 
-                st.write("Indica se il mercato sale in modo sano. **Sopra la media (Verde)**: Molte aziende salgono. **Sotto (Rosso)**: Pochi giganti tengono su l'indice.")
-        with r2:
-            bnd_delta = ((bnd_curr / bnd_ma) - 1) * 100
-            tit_bnd = "Stress Debito 🔴 ALTO" if bond_stress else "Stress Debito 🟢 BASSO"
-            st.metric(tit_bnd, f"${bnd_curr:.2f}", delta=f"{bnd_delta:+.2f}%", delta_color="normal" if not bond_stress else "inverse")
-            st.plotly_chart(draw_sparkline(hist_bnd[-60:], "#e74c3c" if bond_stress else "#2ecc71"), use_container_width=True)
-            st.caption(f"Z-Score (60gg): {z_bnd:.2f}σ")
-            with st.expander("Cos'è e come si legge?"): 
-                st.write("Mostra la salute del debito globale. Prezzo sotto la media (**Rosso**) = tassi in aumento, forte stress sistemico.")
-        with r3:
-            inf_delta = inf_expect_ratio - inf_expect_ma
-            tit_inf = "Inflazione Attesa 🔴 ALTA" if inflation_fear else "Inflazione Attesa 🟢 OK"
-            st.metric(tit_inf, f"{inf_expect_ratio:.3f}", delta=f"{inf_delta:+.3f} Spinta", delta_color="inverse" if inflation_fear else "normal")
-            st.plotly_chart(draw_sparkline(hist_inf[-60:], "#e74c3c" if inflation_fear else "#2ecc71"), use_container_width=True)
-            st.caption(f"Z-Score (60gg): {z_inf:.2f}σ")
-            with st.expander("Cos'è e come si legge?"): 
-                st.write("Previsioni del mercato obbligazionario. Se sale (**Rosso**), i capitali temono un ritorno dell'inflazione (Tassi più alti a lungo).")
+        with verdict_col1:
+            # Quadrante visuale Growth × Inflation
+            fig_quad = go.Figure()
+            # sfondo dei 4 quadranti
+            quad_colors = {
+                (1, 1): "#e67e22",   # reflation (alto dx)
+                (-1, 1): "#c0392b",  # stagflation (basso dx)
+                (1, -1): "#2ecc71",  # goldilocks (alto sx)
+                (-1, -1): "#3498db", # deflation (basso sx)
+            }
+            for (gx, iy), col in quad_colors.items():
+                fig_quad.add_shape(type="rect",
+                    x0=0 if gx > 0 else -3, x1=3 if gx > 0 else 0,
+                    y0=0 if iy > 0 else -3, y1=3 if iy > 0 else 0,
+                    fillcolor=col, opacity=0.16, line=dict(width=0), layer="below")
+            # etichette quadranti
+            fig_quad.add_annotation(x=1.5, y=2.6, text="REFLATION", showarrow=False, font=dict(size=11, color="#e67e22"))
+            fig_quad.add_annotation(x=-1.5, y=2.6, text="GOLDILOCKS", showarrow=False, font=dict(size=11, color="#2ecc71"))
+            fig_quad.add_annotation(x=1.5, y=-2.6, text="STAGFLATION", showarrow=False, font=dict(size=11, color="#c0392b"))
+            fig_quad.add_annotation(x=-1.5, y=-2.6, text="DEFLATION", showarrow=False, font=dict(size=11, color="#3498db"))
+            # posizione attuale
+            fig_quad.add_trace(go.Scatter(
+                x=[growth_z], y=[infl_z], mode="markers+text",
+                marker=dict(size=22, color=regime_color, line=dict(color="white", width=2)),
+                text=["◉ SEI QUI"], textposition="top center", textfont=dict(size=13, color="white")))
+            fig_quad.update_layout(
+                height=360, margin=dict(l=10, r=10, t=30, b=10),
+                xaxis=dict(title="← Crescita in calo   |   Crescita in salita →", range=[-3, 3], zeroline=True, zerolinecolor="rgba(255,255,255,0.3)", gridcolor="rgba(255,255,255,0.05)"),
+                yaxis=dict(title="← Inflazione in calo   |   Inflazione in salita →", range=[-3, 3], zeroline=True, zerolinecolor="rgba(255,255,255,0.3)", gridcolor="rgba(255,255,255,0.05)"),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="white"),
+                title=dict(text="Mappa dei Regimi Macro", font=dict(size=15)))
+            st.plotly_chart(fig_quad, use_container_width=True)
+            with st.expander("❓ Come si legge la Mappa dei Regimi"):
+                st.write("""L'intero universo macro si riduce a due domande: **la crescita sta accelerando o rallentando?** e **l'inflazione sta salendo o scendendo?** Le combinazioni danno 4 stagioni:
+- **Goldilocks** (crescita su, inflazione giù): il paradiso dell'azionario growth.
+- **Reflation** (entrambe su): boom ciclico, vincono commodity e value.
+- **Stagflation** (crescita giù, inflazione su): il peggiore, vince solo l'oro/cash.
+- **Deflation** (entrambe giù): risk-off, vincono bond lunghi e dollaro.
 
-        r4, r5, r6 = st.columns(3)
-        with r4:
-            btc_delta = ((btc_curr / btc_ma) - 1) * 100
-            tit_btc = "Bitcoin Proxy 🟢 RISK-ON" if btc_liq else "Bitcoin Proxy 🔴 RISK-OFF"
-            st.metric(tit_btc, f"${btc_curr:,.0f}", delta=f"{btc_delta:+.2f}%", delta_color="normal" if btc_liq else "inverse")
-            st.plotly_chart(draw_sparkline(hist_btc[-60:], "#2ecc71" if btc_liq else "#e74c3c"), use_container_width=True)
-            st.caption(f"Z-Score (60gg): {z_btc:.2f}σ")
-            with st.expander("Cos'è e come si legge?"): 
-                st.write("Sensore di liquidità speculativa globale. **Verde** = Nuovo denaro entra nel sistema. **Rosso** = Denaro in fuga.")
-        with r5:
-            yen_delta = usdjpy_curr - usdjpy_prev
-            tit_yen = "Yen Carry Trade 🔴 FUGA" if carry_trade_risk else "Yen Carry Trade 🟢 STABILE"
-            st.metric(tit_yen, f"¥{usdjpy_curr:.2f}", delta=f"{yen_delta:+.2f} ¥ vs Mese", delta_color="normal" if not carry_trade_risk else "inverse")
-            st.plotly_chart(draw_sparkline(hist_yen[-60:], "#e74c3c" if carry_trade_risk else "#2ecc71"), use_container_width=True)
-            st.caption(f"Z-Score (60gg): {z_yen:.2f}σ")
-            with st.expander("Cos'è e come si legge?"): 
-                st.write("Leva globale. Se lo Yen si rafforza e il grafico crolla (**Rosso**), i fondi vendono azioni per ripagare debiti. Crash in arrivo.")
-        with r6:
-            vix_delta = vix_ratio - 1.0
-            vix_panic = vix_ratio > 1.0
-            tit_vix = "VIX Ratio (Spot/3M) 🔴 PANICO" if vix_panic else "VIX Ratio 🟢 CALMA"
-            st.metric(tit_vix, f"{vix_ratio:.2f}", delta=f"{vix_delta:+.2f} (Soglia 1)", delta_color="inverse" if vix_panic else "normal")
-            st.plotly_chart(draw_sparkline(hist_vix[-60:], "#e74c3c" if vix_panic else "#2ecc71"), use_container_width=True)
-            st.caption(f"Z-Score (60gg): {z_vix:.2f}σ")
-            with st.expander("Cos'è e come si legge?"): 
-                st.write("Se supera 1.0 (**Rosso**), le banche d'affari stanno pagando un sovrapprezzo disperato per assicurarsi contro un crollo immediato.")
+Il punto **◉ SEI QUI** è calcolato aggregando gli Z-score dei pilastri Crescita e Inflazione qui sotto. Più è lontano dal centro, più il regime è marcato.""")
 
-        # --- NUOVO LIVELLO 2.5: RADAR CORRELAZIONI ISTITUZIONALI (LIE DETECTOR) ---
+        with verdict_col2:
+            st.markdown(f"### Regime attuale: {regime_name}")
+            st.markdown(f"<div style='padding:12px; border-radius:8px; background:rgba(255,255,255,0.04); border-left:4px solid {regime_color};'>{regime_desc}</div>", unsafe_allow_html=True)
+            st.markdown("")
+            rp1, rp2 = st.columns(2)
+            with rp1:
+                st.markdown("**✅ Asset favoriti**")
+                st.markdown(f"<span style='color:#2ecc71; font-size:13px;'>{regime_assets_pro}</span>", unsafe_allow_html=True)
+            with rp2:
+                st.markdown("**❌ Asset penalizzati**")
+                st.markdown(f"<span style='color:#e74c3c; font-size:13px;'>{regime_assets_con}</span>", unsafe_allow_html=True)
+
+            st.markdown("")
+            # Score dei 4 pilastri in barre compatte
+            st.markdown("**Sintesi dei 4 Pilastri (Z-score)**")
+            pillar_data = pd.DataFrame([
+                {"Pilastro": "Crescita", "Z": growth_z},
+                {"Pilastro": "Inflazione", "Z": infl_z},
+                {"Pilastro": "Cond. Finanz.", "Z": fci_z},
+                {"Pilastro": "Risk Sentiment", "Z": roro_z},
+            ])
+            fig_pil = px.bar(pillar_data, x="Z", y="Pilastro", orientation="h",
+                             color="Z", color_continuous_scale="RdYlGn", range_color=[-2, 2], text_auto='.2f')
+            fig_pil.update_layout(height=200, margin=dict(l=10, r=10, t=6, b=6),
+                                  showlegend=False, coloraxis_showscale=False,
+                                  xaxis=dict(title="", range=[-2.5, 2.5], zeroline=True, zerolinecolor="rgba(255,255,255,0.3)"), yaxis_title="")
+            st.plotly_chart(fig_pil, use_container_width=True)
+
+        # --- SYSTEMIC HEALTH SCORE (0-100) + Allocazione dinamica ---
+        # Composito dei 4 pilastri + fattori di stress dedicati
+        health = 50.0
+        health += growth_z * 8
+        health += fci_z * 8
+        health += roro_z * 6
+        health -= abs(infl_z) * 3  # inflazione estrema (alta o volatile) penalizza la stabilità
+
+        # Fattori di stress "hard" (override di sicurezza)
+        curve_slope = (gv("^TNX") - gv("^IRX")) if (not pd.isna(gv("^TNX")) and not pd.isna(gv("^IRX"))) else 0.0
+        vix_ts_now = (gv("^VIX") / gv("^VIX3M")) if gv("^VIX3M") else 1.0
+        z_credit = zscore(ratio_series("HYG", "IEF"))
+        if curve_slope < 0: health -= 8
+        if vix_ts_now > 1.0: health -= 10
+        if z_credit < -1.5: health -= 10
+        yen_falling = gv("USDJPY=X") < gv("USDJPY=X", "prev")
+        if yen_falling: health -= 6
+
+        health = max(0, min(100, health))
+
+        if health < 35:
+            alloc_regime = "🔴 RISK-OFF (Preservazione Capitale)"
+            weights = {'Cash / USD': 45, 'Bond lunghi (TLT)': 25, 'Oro (rifugio)': 20, 'Azioni difensive': 10}
+            alloc_color_seq = px.colors.sequential.Reds_r
+        elif health < 65:
+            alloc_regime = "🟡 NEUTRAL (Transizione / Stock Picking)"
+            weights = {'Cash / USD': 20, 'Bond (TLT/IEF)': 25, 'Oro / Commodity': 15, 'Azioni broad (SPY)': 40}
+            alloc_color_seq = px.colors.sequential.YlOrBr
+        else:
+            alloc_regime = "🟢 RISK-ON (Espansione)"
+            weights = {'Cash / USD': 5, 'Bond (TLT/IEF)': 15, 'Azioni broad (SPY)': 45, 'Tech / High Beta': 25, 'Crypto / Speculativo': 10}
+            alloc_color_seq = px.colors.sequential.Greens_r
+
+        st.markdown("")
+        health_col1, health_col2 = st.columns([1, 1])
+        with health_col1:
+            fig_health = go.Figure(go.Indicator(
+                mode="gauge+number", value=health,
+                title={'text': "Systemic Health Score", 'font': {'size': 18}},
+                gauge={'axis': {'range': [0, 100], 'tickcolor': "white"},
+                       'bar': {'color': "white", 'thickness': 0.25},
+                       'bgcolor': "rgba(0,0,0,0)",
+                       'steps': [{'range': [0, 35], 'color': "rgba(231,76,60,0.75)"},
+                                 {'range': [35, 65], 'color': "rgba(241,196,15,0.75)"},
+                                 {'range': [65, 100], 'color': "rgba(46,204,113,0.75)"}]}))
+            fig_health.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=10),
+                                     paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
+            st.plotly_chart(fig_health, use_container_width=True)
+            with st.expander("❓ Cos'è il Systemic Health Score"):
+                st.write("Un punteggio 0-100 che sintetizza la salute complessiva del sistema finanziario, combinando i 4 pilastri (Crescita, Condizioni Finanziarie, Risk Sentiment con peso maggiore; inflazione estrema come penalità) e sovrapponendo fattori di stress 'hard' (curva dei tassi invertita, VIX in backwardation, stress creditizio, Yen carry). **Sotto 35** = preservazione capitale; **35-65** = transizione; **sopra 65** = espansione. È deliberatamente conservativo: gli stress sistemici pesano più dei segnali positivi.")
+
+        with health_col2:
+            fig_pie = px.pie(names=list(weights.keys()), values=list(weights.values()), hole=0.42,
+                             title=f"Allocazione Suggerita — {alloc_regime}", color_discrete_sequence=alloc_color_seq)
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label',
+                                  marker=dict(line=dict(color='#000000', width=1.5)))
+            fig_pie.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=10),
+                                  paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"}, showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+            with st.expander("❓ Come si legge l'Allocazione"):
+                st.write("L'allocazione suggerita si adatta automaticamente al Systemic Health Score. **Non è un consiglio di investimento** ma una traduzione meccanica del regime in pesi di portafoglio, secondo i principi dell'asset allocation basata su regimi (Dalio 'All Weather', Hedgeye). Il regime del quadrante sopra ti dice *quali* asset all'interno di ogni classe favorire.")
+
+        # ==================================================================
+        #  HELPER per widget-metrica uniforme (valore + Z + sparkline + help)
+        # ==================================================================
+        def metric_widget(col, label, value_str, series, z, help_text, invert=False, delta_str=None):
+            """Renderizza un widget metrica coerente: titolo semaforico, valore, delta,
+            sparkline colorata, Z-score e box di aiuto espandibile."""
+            with col:
+                color = z_to_color(z, invert=invert)
+                emoji = "🟢" if color == "#2ecc71" else ("🟡" if color == "#f1c40f" else "🔴")
+                st.metric(f"{emoji} {label}", value_str, delta=delta_str if delta_str else f"Z: {z:+.2f}σ",
+                          delta_color="off" if delta_str is None else ("inverse" if (z < 0) != invert else "normal"))
+                if series is not None and len(series.dropna()) > 3:
+                    st.plotly_chart(spark(series.dropna()[-90:], color), use_container_width=True)
+                with st.expander("❓ Cosa significa"):
+                    st.write(help_text)
+
+        # ==================================================================
+        #  SEZIONE 1 — ASSE CRESCITA
+        # ==================================================================
         st.markdown("---")
-        st.header("🔗 Radar Correlazioni (Macchina della Verità)")
-        st.write("Gli istituzionali usano queste correlazioni rolling (20gg) per scoprire se il mercato sta nascondendo un'anomalia sistemica.")
-        
-        # Calcoli correlazione mobile a 20 giorni (Versione Blindata Anti-Crash)
-        corr_eq_bnd = df["^GSPC"].rolling(20).corr(df["TLT"]).iloc[-1] if "^GSPC" in df.columns and "TLT" in df.columns else 0.0
-        corr_cu_au = df["HG=F"].rolling(20).corr(df["GC=F"]).iloc[-1] if "HG=F" in df.columns and "GC=F" in df.columns else 0.0
-        corr_usd_oil = df["UUP"].rolling(20).corr(df["CL=F"]).iloc[-1] if "UUP" in df.columns and "CL=F" in df.columns else 0.0
+        st.header("📈 Pilastro 1 · Crescita Economica")
+        st.caption("Il mercato sta prezzando un'economia in accelerazione o in rallentamento? Questi indicatori leggono la domanda reale, la partecipazione e la propensione al rischio ciclico.")
 
-        corr1, corr2, corr3 = st.columns(3)
-        
-        # 1. Rischio Sistemico (Azioni vs Bond)
-        with corr1:
-            is_sys_risk = corr_eq_bnd > 0.3
-            st.markdown(f"**Azioni (S&P) vs Bond (TLT)**")
-            st.metric("Correlazione 20gg", f"{corr_eq_bnd:.2f}", delta="🔴 CRISI LIQUIDITÀ" if is_sys_risk else "🟢 NORMALE", delta_color="inverse" if is_sys_risk else "normal")
-            st.caption("Normalmente decorrelati. Se salgono/scendono insieme (rosso), le banche centrali hanno perso il controllo (Stagflazione/Liquidity Crunch).")
-            
-        # 2. Salute Industriale (Rame vs Oro)
-        with corr2:
-            is_ind_risk = corr_cu_au < -0.3
-            st.markdown(f"**Rame (Industria) vs Oro (Paura)**")
-            st.metric("Correlazione 20gg", f"{corr_cu_au:.2f}", delta="🔴 RECESSIONE REALE" if is_ind_risk else "🟢 CRESCITA/INFLAZIONE", delta_color="inverse" if is_ind_risk else "normal")
-            st.caption("Se sono fortemente inversi (Rame crolla, Oro vola), il mercato prezza una recessione industriale profonda e imminente.")
-            
-        # 3. Shock Inflattivo (Dollaro vs Petrolio)
-        with corr3:
-            is_inf_shock = corr_usd_oil > 0.3
-            st.markdown(f"**Dollaro (USD) vs Petrolio (WTI)**")
-            st.metric("Correlazione 20gg", f"{corr_usd_oil:.2f}", delta="🔴 SHOCK INFLATTIVO/EMERGENTI" if is_inf_shock else "🟢 DINAMICA FX NORMALE", delta_color="inverse" if is_inf_shock else "normal")
-            st.caption("Normalmente inversi. Se salgono insieme (rosso), estremo dolore per l'Europa e mercati emergenti. Costi dell'energia insostenibili.")
+        g1, g2, g3 = st.columns(3)
+        metric_widget(g1, "Barometro Rame/Oro", f"{gv('HG=F')/gv('GC=F'):.4f}" if gv('GC=F') else "N/D",
+                      s_cu_au, z_growth_components["Rame/Oro (barometro industriale)"],
+                      "Il rame ('Dr. Copper') è usato in tutta l'industria: sale quando l'economia reale accelera. L'oro è il bene rifugio. Il **rapporto Rame/Oro in salita segnala crescita e ripresa ciclica**; in discesa segnala paura e rallentamento. È uno dei barometri macro più seguiti dai desk perché anticipa i dati ufficiali.")
+        metric_widget(g2, "Market Breadth (RSP/SPX)", f"{gv('RSP')/gv('^GSPC'):.4f}" if gv('^GSPC') else "N/D",
+                      s_breadth, z_growth_components["Market Breadth (RSP/SPX)"],
+                      "Confronta l'S&P equipesato (RSP, dove ogni azienda conta uguale) con quello normale (dominato dai giganti). **In salita = il rialzo è ampio e sano**, molte aziende partecipano. In discesa = solo pochi mega-cap tengono su l'indice, segnale di fragilità sotto la superficie.")
+        metric_widget(g3, "Ciclici/Difensivi (XLY/XLP)", f"{gv('XLY')/gv('XLP'):.4f}" if gv('XLP') else "N/D",
+                      s_cyc_def, z_growth_components["Ciclici/Difensivi (XLY/XLP)"],
+                      "Consumi voluttuari (XLY: Amazon, Tesla, viaggi) contro beni di prima necessità (XLP: cibo, detersivi). Quando gli investitori comprano ciclici e vendono difensivi (**rapporto in salita**), scommettono su un'economia forte. Il contrario segnala posizionamento difensivo pre-rallentamento.")
 
-        # --- LIVELLO 2.8: GLOBAL MACRO, LIQUIDITÀ & REGIONAL DRILL-DOWN ---
+        g4, g5, g6 = st.columns(3)
+        metric_widget(g4, "Small Caps rel. (IWM/SPX)", f"{gv('IWM')/gv('^GSPC'):.4f}" if gv('^GSPC') else "N/D",
+                      s_smallcap, z_growth_components["Small Caps rel. (IWM/SPX)"],
+                      "Le small cap (IWM) sono più sensibili al ciclo economico interno e alle condizioni di credito rispetto ai grandi indici. **Forza relativa delle small cap = fiducia nella crescita domestica** e nell'accesso al credito. Debolezza = timori di stretta creditizia o recessione.")
+        metric_widget(g5, "Credito HY/Treasury (HYG/IEF)", f"{gv('HYG')/gv('IEF'):.4f}" if gv('IEF') else "N/D",
+                      s_hy_ief, z_growth_components["Credito HY/Treasury (HYG/IEF)"],
+                      "Obbligazioni ad alto rendimento ('spazzatura', HYG) contro Treasury sicuri (IEF). Quando gli investitori accettano il rischio di credito delle aziende più fragili (**rapporto in salita**), c'è fiducia nel ciclo. Un crollo di questo rapporto anticipa spesso lo stress creditizio e le recessioni.")
+        with g6:
+            st.markdown("**🌍 Crescita Globale (perf. 1 mese)**")
+            growth_map = {"USA (SPX)": "^GSPC", "Europa (VGK)": "VGK", "Cina (MCHI)": "MCHI",
+                          "Emergenti (EEM)": "EEM", "Giappone (EWJ)": "EWJ"}
+            fig_gg = ranked_bars(growth_map, 21, height=230)
+            if fig_gg: st.plotly_chart(fig_gg, use_container_width=True)
+            with st.expander("❓ Cosa significa"):
+                st.write("Forza relativa dei principali blocchi azionari mondiali nell'ultimo mese. Mostra **dove sta fluendo il capitale globale**: quale regione il mercato considera più promettente in termini di crescita.")
+
+        # ==================================================================
+        #  SEZIONE 2 — ASSE INFLAZIONE
+        # ==================================================================
         st.markdown("---")
-        st.header("🌐 Global Macro, Liquidità & Migrazione Capitali")
+        st.header("🔥 Pilastro 2 · Inflazione")
+        st.caption("Il mercato prezza pressioni inflazionistiche in aumento o in calo? L'inflazione determina la politica delle banche centrali e la rotazione tra asset a lunga e corta duration.")
 
-        # 1. Calcoli Istituzionali (Liquidità & Propensione al Rischio)
-        # Liquidità Reale Proxy: (Oro / Dollaro) / Tassi Reali
-        liq_proxy = (get_stat("GLD") / get_stat("UUP")) / get_stat("TIP") if get_stat("TIP") > 0 else 1
-        liq_proxy_ma = (get_stat("GLD", "ma50") / get_stat("UUP", "ma50")) / get_stat("TIP", "ma50") if get_stat("TIP", "ma50") > 0 else 1
-        is_liq_expanding = liq_proxy > liq_proxy_ma
+        i1, i2, i3 = st.columns(3)
+        metric_widget(i1, "Breakeven Inflation (TIP/IEF)", f"{gv('TIP')/gv('IEF'):.4f}" if gv('IEF') else "N/D",
+                      s_breakeven, z_infl_components["Breakeven proxy (TIP/IEF)"],
+                      "Confronta i bond protetti dall'inflazione (TIP) con i Treasury nominali (IEF). Il rapporto è un **proxy delle aspettative di inflazione** del mercato obbligazionario: in salita = i bond prezzano più inflazione futura (quindi tassi più alti a lungo); in discesa = aspettative in raffreddamento. È il termometro inflazionistico più diretto disponibile con dati pubblici.")
+        metric_widget(i2, "Commodity Broad (DBC)", f"${gv('DBC'):.2f}" if not pd.isna(gv('DBC')) else "N/D",
+                      s_commod, z_infl_components["Commodity broad (DBC)"],
+                      "Paniere ampio di materie prime (energia, metalli, agricoltura). Le commodity sono un **input diretto dell'inflazione**: quando salgono, i costi di produzione aumentano e si trasferiscono ai prezzi al consumo. Un forte trend rialzista qui è un segnale precoce di pressione inflazionistica.")
+        metric_widget(i3, "Energia (WTI)", f"${gv('CL=F'):.2f}" if not pd.isna(gv('CL=F')) else "N/D",
+                      s_energy, z_infl_components["Energia (WTI)"],
+                      "Il petrolio è la commodity più sistemica: influenza trasporti, produzione e psicologia dell'inflazione. **Un rialzo rapido del greggio è storicamente il più potente shock inflazionistico** e spesso precede rallentamenti economici (l'energia cara agisce come una tassa sui consumi).")
 
-        # Risk Appetite: Beni Voluttuari (XLY) vs Beni di Necessità (XLP)
-        xly_xlp = get_stat("XLY") / get_stat("XLP")
-        xly_xlp_ma = get_stat("XLY", "ma50") / get_stat("XLP", "ma50")
-        is_risk_on = xly_xlp > xly_xlp_ma
+        i4, i5, i6 = st.columns(3)
+        metric_widget(i4, "Agricoltura (DBA)", f"${gv('DBA'):.2f}" if not pd.isna(gv('DBA')) else "N/D",
+                      s_agri, z_infl_components["Agricoltura (DBA)"],
+                      "Materie prime agricole (grano, mais, soia, zucchero). L'inflazione alimentare colpisce direttamente il potere d'acquisto e ha un forte impatto sociale/politico, specie nei mercati emergenti. Un trend rialzista qui segnala **pressione inflazionistica dal lato dei beni di prima necessità**.")
+        metric_widget(i5, "Dollaro USA (UUP)", f"${gv('UUP'):.2f}" if not pd.isna(gv('UUP')) else "N/D",
+                      s_dxy, z_infl_components["Dollaro (UUP, inverso)"],
+                      "L'indice del dollaro. Poiché le commodity sono quotate in dollari, **un dollaro forte tende a raffreddare l'inflazione globale** (materie prime più care per il resto del mondo, meno domanda), mentre un dollaro debole la alimenta. Qui è mostrato invertito: dollaro debole = pressione inflazionistica (semaforo verso il rosso).", invert=True)
+        with i6:
+            st.markdown("**⛽ Complesso Inflazionistico (perf. 1 mese)**")
+            infl_map = {"Energia (XLE)": "XLE", "Petrolio (WTI)": "CL=F", "Oro (GC)": "GC=F",
+                        "Rame (HG)": "HG=F", "Agri (DBA)": "DBA", "Uranio (URA)": "URA"}
+            fig_ii = ranked_bars(infl_map, 21, height=230, scale='Tropic')
+            if fig_ii: st.plotly_chart(fig_ii, use_container_width=True)
+            with st.expander("❓ Cosa significa"):
+                st.write("Performance recente dei principali asset legati all'inflazione. Se questo blocco è diffusamente verde, il mercato sta **abbracciando il trade inflazionistico** (reflation); se è rosso, le aspettative si stanno raffreddando (disinflazione).")
 
-        c_mac1, c_mac2 = st.columns(2)
-        with c_mac1:
-            st.metric("Liquidità Globale Netta (GLD/UUP/TIP)", "ESPANSIONE 🟢" if is_liq_expanding else "CONTRAZIONE 🔴", 
-                      delta="Stampa Denaro / Svalutazione" if is_liq_expanding else "Stretta Monetaria", delta_color="normal" if is_liq_expanding else "inverse")
-            st.caption("Se in espansione, le Banche Centrali stanno immettendo liquidità segreta. Fortemente Bullish per Crypto e Azioni.")
-        with c_mac2:
-            st.metric("Risk-Appetite Istituzionale (XLY/XLP)", "RISCHIO 🟢" if is_risk_on else "DIFESA 🔴",
-                      delta="Acquisto Voluttuari" if is_risk_on else "Fuga verso Beni Rifugio", delta_color="normal" if is_risk_on else "inverse")
-            st.caption("Il 'Smart Money' sta comprando Amazon/Tesla (Rischio) o Walmart/P&G (Difesa)? Anticipa i crolli azionari.")
+        # ==================================================================
+        #  SEZIONE 3 — CONDIZIONI FINANZIARIE & LIQUIDITÀ
+        # ==================================================================
+        st.markdown("---")
+        st.header("💧 Pilastro 3 · Condizioni Finanziarie & Liquidità")
+        st.caption("Quanto è 'facile' o 'stretto' l'ambiente finanziario? Le condizioni finanziarie anticipano l'economia reale: quando si irrigidiscono (credito caro, spread larghi, volatilità alta), la crescita rallenta con qualche mese di ritardo.")
 
-        # 2. Interactive Regional Drill-Down (La Mappa a Schede)
-        st.markdown("#### 🗺️ Esplorazione Geografica (Drill-Down)")
-        st.write("Clicca su una regione per vedere esattamente quali nazioni stanno assorbendo o perdendo capitali (Performance 20gg).")
-        
+        f1, f2, f3 = st.columns(3)
+        metric_widget(f1, "Credit Spread HY/IG (HYG/LQD)", f"{gv('HYG')/gv('LQD'):.4f}" if gv('LQD') else "N/D",
+                      s_hy_spread, z_fci_components["Spread credito HY/IG (compressione)"],
+                      "Rapporto tra credito ad alto rendimento (HYG) e investment-grade (LQD). Misura l'**appetito per il rischio di credito**: quando il rapporto sale (spread compressi), le condizioni sono accomodanti e le aziende rischiose si finanziano facilmente. Un crollo = allargamento degli spread, primo segnale di stretta creditizia e stress.")
+        metric_widget(f2, "Curva dei Tassi (10Y-3M)", f"{curve_slope:+.2f}%",
+                      (df["^TNX"] - df["^IRX"]).dropna() if ("^TNX" in df.columns and "^IRX" in df.columns) else None,
+                      zscore((df["^TNX"] - df["^IRX"]).dropna()) if ("^TNX" in df.columns and "^IRX" in df.columns) else 0.0,
+                      "Differenza tra il rendimento del Treasury a 10 anni e quello a 3 mesi. **Una curva invertita (valore negativo) ha preceduto praticamente tutte le recessioni USA degli ultimi 50 anni**: segnala che il mercato si aspetta tagli dei tassi futuri per contrastare un rallentamento. Positiva e ripida = economia sana in espansione.")
+        vix_now = gv("^VIX")
+        metric_widget(f3, "Volatilità Azionaria (VIX)", f"{vix_now:.1f}" if not pd.isna(vix_now) else "N/D",
+                      s_vix, z_fci_components["Volatilità azionaria (VIX, inverso)"],
+                      "Il 'termometro della paura'. Misura la volatilità attesa a 30 giorni sull'S&P 500. **Sotto 15-20 = mercato calmo e compiacente; sopra 25-30 = stress e vendite di panico**. Un VIX in aumento irrigidisce le condizioni finanziarie perché aumenta il costo della copertura e riduce la propensione al rischio.", invert=True)
+
+        f4, f5, f6 = st.columns(3)
+        move_now = gv("^MOVE")
+        move_z = z_fci_components.get("Volatilità bond (MOVE, inverso)", 0.0)
+        if pd.isna(move_z): move_z = 0.0
+        metric_widget(f4, "Volatilità Bond (MOVE)", f"{move_now:.0f}" if not pd.isna(move_now) else "N/D",
+                      s_move if not s_move.empty else None, move_z,
+                      "Il 'VIX del mercato obbligazionario': misura la volatilità attesa sui Treasury. È un indicatore di stress sistemico spesso sottovalutato: **quando il MOVE esplode, i fondi che usano i bond come collaterale devono vendere asset (anche azioni) per coprire i margini**, propagando lo stress a tutto il sistema. Se il dato non è disponibile su Yahoo, il widget resta neutro.", invert=True)
+        metric_widget(f5, "Liquidità Netta (GLD/UUP)", f"{gv('GLD')/gv('UUP'):.3f}" if gv('UUP') else "N/D",
+                      s_liq_proxy, z_fci_components["Liquidità proxy (GLD/UUP)"],
+                      "Proxy della liquidità globale e della svalutazione monetaria: oro (GLD) rispetto al dollaro (UUP). Quando le banche centrali immettono liquidità o svalutano, **l'oro tende a salire più del dollaro**. In espansione = ambiente favorevole per asset di rischio e crypto; in contrazione = stretta monetaria, denaro che si ritira dal sistema.")
+        with f6:
+            st.markdown("**💳 Salute del Credito (perf. 1 mese)**")
+            credit_map = {"HY Corp (HYG)": "HYG", "Junk (JNK)": "JNK", "IG Corp (LQD)": "LQD",
+                          "EM Bond (EMB)": "EMB", "Bank Loans (BKLN)": "BKLN"}
+            fig_cc = ranked_bars(credit_map, 21, height=230, scale='RdYlGn')
+            if fig_cc: st.plotly_chart(fig_cc, use_container_width=True)
+            with st.expander("❓ Cosa significa"):
+                st.write("Il credito è il sangue del sistema: **si irrigidisce sempre prima dell'azionario**. Se questi strumenti (specie HY e Junk) sono in caduta mentre le azioni tengono, è un potente segnale d'allarme anticipato di stress in arrivo.")
+
+        # ==================================================================
+        #  SEZIONE 4 — SENTIMENT DI RISCHIO & STRESS (RORO composito)
+        # ==================================================================
+        st.markdown("---")
+        st.header("⚡ Pilastro 4 · Sentiment di Rischio & Stress Sistemico")
+        st.caption("Il 'mood' aggregato del mercato: gli investitori stanno abbracciando il rischio (risk-on) o correndo verso i beni rifugio (risk-off)? Basato sul framework RORO della Fed di Kansas City, adattato con proxy ETF.")
+
+        s1, s2, s3 = st.columns(3)
+        metric_widget(s1, "Azioni/Bond (SPX/TLT)", f"{gv('^GSPC')/gv('TLT'):.3f}" if gv('TLT') else "N/D",
+                      s_spy_tlt, z_roro_components["Azioni/Bond (SPX/TLT)"],
+                      "Il rapporto risk-on più basilare: azioni (S&P 500) contro il rifugio per eccellenza (Treasury lunghi, TLT). **In salita = capitale che si sposta dal sicuro al rischioso** (risk-on); in discesa = fuga verso la sicurezza. Uno dei componenti principali di qualsiasi indice Risk-On/Risk-Off istituzionale.")
+        metric_widget(s2, "Carry USD/JPY", f"¥{gv('USDJPY=X'):.2f}" if not pd.isna(gv('USDJPY=X')) else "N/D",
+                      s_yen, z_roro_components["Carry USD/JPY"],
+                      "Lo yen giapponese finanzia gran parte della leva speculativa globale (carry trade: ci si indebita in yen a tasso zero per comprare asset più redditizi). **Quando l'USD/JPY sale, il carry trade è attivo e il rischio è 'on'**. Un rafforzamento improvviso dello yen (USD/JPY in crollo) costringe a chiudere le posizioni a leva, innescando vendite forzate globali — uno dei meccanismi di crash più temuti.")
+        metric_widget(s3, "VIX Term Structure", f"{vix_ts_now:.3f}",
+                      s_vix_ts, z_roro_components["VIX term structure (inverso)"],
+                      "Rapporto tra VIX spot e VIX a 3 mesi. In condizioni normali è **sotto 1** (i mercati prezzano più incertezza a lungo termine che nell'immediato). **Quando supera 1 (backwardation), c'è panico acuto immediato**: le banche d'affari pagano un sovrapprezzo disperato per coprirsi da un crollo imminente. È uno dei segnali di stress a brevissimo termine più affidabili.", invert=True)
+
+        s4, s5, s6 = st.columns(3)
+        metric_widget(s4, "Junk/Treasury (JNK/TLT)", f"{gv('JNK')/gv('TLT'):.3f}" if gv('TLT') else "N/D",
+                      s_jnk_tlt, z_roro_components["Junk/Treasury (JNK/TLT)"],
+                      "Variante creditizia del sentiment: obbligazioni spazzatura (JNK) contro Treasury lunghi. **In salita = appetito per il rischio di credito** (risk-on); in discesa = fuga verso la qualità. Conferma o smentisce il segnale azionario: quando azioni e credito divergono, il credito ha di solito ragione.")
+        metric_widget(s5, "Bitcoin (liquidità speculativa)", f"${gv('BTC-USD'):,.0f}" if not pd.isna(gv('BTC-USD')) else "N/D",
+                      s_btc, z_roro_components["Bitcoin (liquidità speculativa)"],
+                      "Bitcoin è diventato un sensore puro della **liquidità speculativa globale e della propensione al rischio estrema**. Essendo l'asset più a lunga duration e senza flussi di cassa, è ipersensibile alle condizioni di liquidità: sale quando c'è denaro fresco e appetito per il rischio, crolla per primo quando la liquidità si ritira.")
+        with s6:
+            st.markdown("**🌡️ Termometro Risk-On/Risk-Off**")
+            # Gauge del RORO composito normalizzato -100..+100
+            roro_display = float(np.clip(roro_z * 40, -100, 100))
+            fig_roro = go.Figure(go.Indicator(
+                mode="gauge+number", value=roro_display,
+                number={'suffix': "", 'font': {'size': 26}},
+                gauge={'axis': {'range': [-100, 100], 'tickcolor': "white"},
+                       'bar': {'color': "white", 'thickness': 0.25},
+                       'bgcolor': "rgba(0,0,0,0)",
+                       'steps': [{'range': [-100, -33], 'color': "rgba(231,76,60,0.75)"},
+                                 {'range': [-33, 33], 'color': "rgba(241,196,15,0.75)"},
+                                 {'range': [33, 100], 'color': "rgba(46,204,113,0.75)"}]}))
+            fig_roro.update_layout(height=200, margin=dict(l=10, r=10, t=10, b=10),
+                                   paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
+            st.plotly_chart(fig_roro, use_container_width=True)
+            with st.expander("❓ Cosa significa"):
+                st.write("Sintesi di tutti i componenti risk-on/risk-off in un unico indice (-100 = panico totale, +100 = euforia). Aggrega azioni/bond, carry, credito, oro/azioni, Bitcoin e term structure VIX in un solo numero: il **mood aggregato del capitale globale**.")
+
+        # --- RADAR CORRELAZIONI (Lie Detector) ---
+        st.markdown("#### 🔗 Radar Correlazioni (Macchina della Verità)")
+        st.caption("Le correlazioni rolling a 20 giorni rivelano anomalie sistemiche nascoste: quando relazioni normalmente stabili si rompono, spesso c'è qualcosa che 'non torna' sotto la superficie.")
+
+        def rolling_corr(a, b, window=20):
+            if a in df.columns and b in df.columns:
+                c = df[a].pct_change().rolling(window).corr(df[b].pct_change()).iloc[-1]
+                return float(c) if not pd.isna(c) else 0.0
+            return 0.0
+
+        corr_eq_bond = rolling_corr("^GSPC", "TLT")
+        corr_cu_au = rolling_corr("HG=F", "GC=F")
+        corr_usd_oil = rolling_corr("UUP", "CL=F")
+
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            is_sys = corr_eq_bond > 0.3
+            st.metric(f"{'🔴' if is_sys else '🟢'} Azioni vs Bond (S&P/TLT)", f"{corr_eq_bond:+.2f}",
+                      delta="CRISI LIQUIDITÀ" if is_sys else "Normale", delta_color="inverse" if is_sys else "normal")
+            with st.expander("❓ Cosa significa"):
+                st.write("Azioni e Treasury sono **normalmente decorrelati** (quando le azioni scendono, i bond salgono come rifugio). Se iniziano a muoversi insieme e la correlazione diventa positiva (>0.3), significa che **le banche centrali hanno perso il controllo**: è il segno di stress da liquidità/stagflazione, dove nessun asset protegge (come nel 2022).")
+        with cc2:
+            is_ind = corr_cu_au < -0.3
+            st.metric(f"{'🔴' if is_ind else '🟢'} Rame vs Oro (industria/paura)", f"{corr_cu_au:+.2f}",
+                      delta="RECESSIONE" if is_ind else "Crescita/Inflaz.", delta_color="inverse" if is_ind else "normal")
+            with st.expander("❓ Cosa significa"):
+                st.write("Rame (industria) e oro (paura) normalmente si muovono insieme quando è l'inflazione a guidare. Se diventano **fortemente inversi** (rame crolla mentre l'oro vola), il mercato sta prezzando una **recessione industriale profonda**: il rame anticipa il calo della domanda reale, l'oro corre verso il rifugio.")
+        with cc3:
+            is_shock = corr_usd_oil > 0.3
+            st.metric(f"{'🔴' if is_shock else '🟢'} Dollaro vs Petrolio", f"{corr_usd_oil:+.2f}",
+                      delta="SHOCK INFLATTIVO" if is_shock else "FX Normale", delta_color="inverse" if is_shock else "normal")
+            with st.expander("❓ Cosa significa"):
+                st.write("Dollaro e petrolio sono **normalmente inversi** (dollaro forte = commodity più care = domanda in calo). Se salgono insieme (correlazione >0.3), è uno **shock inflattivo da offerta** (es. crisi geopolitica energetica): dolore estremo per Europa e mercati emergenti, che importano energia cara pagandola in dollari forti.")
+
+        # ==================================================================
+        #  SEZIONE 5 — DRILL-DOWN GEOGRAFICO (Migrazione dei Capitali)
+        # ==================================================================
+        st.markdown("---")
+        st.header("🗺️ Migrazione dei Capitali Globali (Drill-Down)")
+        st.caption("Esplora quali nazioni stanno assorbendo o perdendo capitali. La forza relativa a 1 mese rivela dove il denaro istituzionale si sta spostando, regione per regione.")
+
         tab_eu, tab_dev, tab_as, tab_em, tab_us = st.tabs([
-            "🇪🇺 Europa (EU)", "🇬🇧 Developed (ex-US)", "🌏 Asia", "🌍 Emergenti", "🇺🇸 USA"
-        ])
+            "🇪🇺 Europa", "🌍 Developed ex-US", "🌏 Asia", "🌐 Emergenti", "🇺🇸 USA interno"])
 
-        def plot_drilldown(ticker_dict, title):
-            data = []
-            for name, ticker in ticker_dict.items():
-                if ticker in df.columns:
-                    perf = (df[ticker].iloc[-1] / df[ticker].iloc[-20]) - 1
-                    if pd.isna(perf): perf = 0.0
-                    data.append({"Nazione": name, "Forza Relativa": perf})
-            if not data: return None
-            dff = pd.DataFrame(data).sort_values("Forza Relativa", ascending=True)
-            fig = px.bar(dff, x="Forza Relativa", y="Nazione", orientation='h', title=title, color="Forza Relativa", color_continuous_scale='RdYlGn', text_auto='.2%')
-            fig.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="Performance 1 Mese", yaxis_title="")
-            return fig
+        def drill(ticker_dict, title):
+            fig = ranked_bars(ticker_dict, 21, title=title, height=280, scale='RdYlGn')
+            if fig: st.plotly_chart(fig, use_container_width=True)
 
         with tab_eu:
-            eu_list = {
-                "Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI", 
-                "Spagna (EWP)": "EWP", "Olanda (EWN)": "EWN", "Svezia (EWD)": "EWD", 
-                "Indice Area (VGK)": "VGK"
-            }
-            st.plotly_chart(plot_drilldown(eu_list, "Matrice Europea Core & Periferia"), use_container_width=True)
-
+            drill({"Germania (EWG)": "EWG", "Francia (EWQ)": "EWQ", "Italia (EWI)": "EWI",
+                   "Spagna (EWP)": "EWP", "Olanda (EWN)": "EWN", "Svezia (EWD)": "EWD",
+                   "Svizzera (EWL)": "EWL", "UK (EWU)": "EWU"}, "Europa Core & Periferia")
         with tab_dev:
-            dev_list = {
-                "UK (EWU)": "EWU", "Canada (EWC)": "EWC", "Australia (EWA)": "EWA", 
-                "Svizzera (EWL)": "EWL", "Singapore (EWS)": "EWS", "Hong Kong (EWH)": "EWH"
-            }
-            st.plotly_chart(plot_drilldown(dev_list, "Commonwealth & Developed Hubs"), use_container_width=True)
-
+            drill({"Canada (EWC)": "EWC", "Australia (EWA)": "EWA", "Singapore (EWS)": "EWS",
+                   "Hong Kong (EWH)": "EWH", "Giappone (EWJ)": "EWJ"}, "Mercati Sviluppati ex-US")
         with tab_as:
-            as_list = {
-                "Giappone (EWJ)": "EWJ", "Cina (MCHI)": "MCHI", "India (INDA)": "INDA", 
-                "Corea (EWY)": "EWY", "Taiwan (EWT)": "EWT", "Indonesia (EIDO)": "EIDO", 
-                "Vietnam (VNM)": "VNM", "Filippine (EPHE)": "EPHE"
-            }
-            st.plotly_chart(plot_drilldown(as_list, "Forza Relativa Asiatica"), use_container_width=True)
-
+            drill({"Giappone (EWJ)": "EWJ", "Cina (MCHI)": "MCHI", "India (INDA)": "INDA",
+                   "Corea (EWY)": "EWY", "Taiwan (EWT)": "EWT", "Indonesia (EIDO)": "EIDO",
+                   "Vietnam (VNM)": "VNM", "Filippine (EPHE)": "EPHE"}, "Forza Relativa Asiatica")
         with tab_em:
-            em_list = {
-                "Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA", 
-                "Arabia Saudita (KSA)": "KSA", "Turchia (TUR)": "TUR", "Cile (ECH)": "ECH", 
-                "Grecia (GREK)": "GREK", "Russia (ERUS)": "ERUS", "Indice Broad (EEM)": "EEM"
-            }
-            st.plotly_chart(plot_drilldown(em_list, "Mercati Emergenti & Frontiera"), use_container_width=True)
+            drill({"Brasile (EWZ)": "EWZ", "Messico (EWW)": "EWW", "Sud Africa (EZA)": "EZA",
+                   "Arabia S. (KSA)": "KSA", "Turchia (TUR)": "TUR", "Cile (ECH)": "ECH",
+                   "Grecia (GREK)": "GREK", "India (INDA)": "INDA"}, "Emergenti & Frontiera")
         with tab_us:
-            st.plotly_chart(plot_drilldown({"S&P 500 (SPY)": "^GSPC", "Nasdaq 100 (Tech)": "^IXIC", "Small Caps (Rischio)": "RSP", "Real Estate (VNQ)": "VNQ"}, "Dinamica USA Interna"), use_container_width=True)
+            drill({"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "Small Caps (IWM)": "IWM",
+                   "Real Estate (VNQ)": "VNQ", "Finanziari (XLF)": "XLF", "Tech (XLK)": "XLK",
+                   "Energia (XLE)": "XLE", "Difensivi (XLP)": "XLP"}, "Rotazione Settoriale USA")
 
-        # --- LIVELLO 2.9: CREDIT & SYSTEMIC FRAGILITY (L'ULTIMA DIFESA) ---
+        # --- Rotazione settoriale completa (11 settori GICS) ---
+        st.markdown("#### 🧩 Rotazione Settoriale USA Completa (perf. 1 mese)")
+        sector_map = {
+            "Tech (XLK)": "XLK", "Consumi Volut. (XLY)": "XLY", "Finanziari (XLF)": "XLF",
+            "Industriali (XLI)": "XLI", "Energia (XLE)": "XLE", "Materiali (XLB)": "XLB",
+            "Sanità (XLV)": "XLV", "Beni Prima Nec. (XLP)": "XLP", "Utilities (XLU)": "XLU",
+            "Real Estate (VNQ)": "VNQ",
+        }
+        fig_sect = ranked_bars(sector_map, 21, height=340, scale='RdYlGn')
+        if fig_sect: st.plotly_chart(fig_sect, use_container_width=True)
+        with st.expander("❓ Come si legge la rotazione settoriale"):
+            st.write("""La leadership settoriale conferma o smentisce il regime macro. Ogni fase premia settori diversi:
+- **Goldilocks**: Tech e Consumi Voluttuari guidano.
+- **Reflation**: Energia, Materiali, Finanziari, Industriali in testa.
+- **Stagflation**: Energia e Beni di Prima Necessità resistono, il resto soffre.
+- **Deflation/Risk-off**: Utilities, Sanità e Beni di Prima Necessità (difensivi) sovraperformano.
+
+Se la leadership settoriale **contraddice** il quadrante di regime in cima, è un segnale di transizione o di incoerenza da approfondire con cautela.""")
+
+        # ==================================================================
+        #  SEZIONE FINALE — PLAYBOOK OPERATIVO DEL REGIME
+        # ==================================================================
         st.markdown("---")
-        st.header("🏗️ Credit & Systemic Fragility (I nervi del sistema)")
-        
-        # Calcoli Tecnici (Esistenti)
-        hist_hy_spread = (df["HYG"] / df["IEF"]).dropna()
-        hy_ratio = hist_hy_spread.iloc[-1]
-        z_credit = calculate_z_score(hist_hy_spread)
-        
-        yield_10y = get_stat("^TNX")
-        yield_3m = get_stat("^IRX")
-        curve_slope = (yield_10y - yield_3m) if (yield_10y and yield_3m) else 0
-        
-        hist_tlt_vol = df["TLT"].pct_change().rolling(20).std() * np.sqrt(252) * 100
-        bond_vol_curr = hist_tlt_vol.iloc[-1]
-        bond_vol_ma = hist_tlt_vol.rolling(60).mean().iloc[-1]
+        st.header(f"🎯 Playbook Operativo — {regime_name}")
 
-        # --- NUOVA LOGICA SEMAFORICA ---
-        status_hy = "🟢" if z_credit > -0.5 else "🟡" if z_credit > -1.5 else "🔴"
-        status_curve = "🟢" if curve_slope > 0.5 else "🟡" if curve_slope >= 0 else "🔴"
-        status_move = "🟢" if bond_vol_curr < bond_vol_ma else "🟡" if bond_vol_curr < (bond_vol_ma * 1.15) else "🔴"
-
-        c_frag1, c_frag2, c_frag3 = st.columns(3)
-        
-        with c_frag1:
-            st.metric(f"{status_hy} High Yield Spread 🛡️", f"{hy_ratio:.3f}", 
-                      delta=f"Z-Score: {z_credit:.2f}σ", 
-                      delta_color="normal" if z_credit > -1 else "inverse")
-            st.plotly_chart(draw_sparkline(hist_hy_spread[-60:], "#2ecc71" if status_hy=="🟢" else "#f1c40f" if status_hy=="🟡" else "#e74c3c"), use_container_width=True)
-            st.caption("Se lo Z-Score scende sotto -1.5, le aziende High Yield sono in difficoltà: rischio fallimenti in aumento.")
-
-        with c_frag2:
-            st.metric(f"{status_curve} Yield Curve (10Y-3M) 📉", f"{curve_slope:.2f}%", 
-                      delta="INVERSIONE" if curve_slope < 0 else "NORMALE", 
-                      delta_color="inverse" if curve_slope < 0 else "normal")
-            hist_curve = (df["^TNX"] - df["^IRX"]).dropna()
-            st.plotly_chart(draw_sparkline(hist_curve[-60:], "#2ecc71" if status_curve=="🟢" else "#f1c40f" if status_curve=="🟡" else "#e74c3c"), use_container_width=True)
-            st.caption("La curva invertita (negativa) ha previsto il 100% delle ultime recessioni.")
-
-        with c_frag3:
-            st.metric(f"{status_move} Bond Volatility (MOVE) ⚡", f"{bond_vol_curr:.1f}%", 
-                      delta="ALERT" if bond_vol_curr > bond_vol_ma else "STABILE", 
-                      delta_color="inverse" if bond_vol_curr > bond_vol_ma else "normal")
-            st.plotly_chart(draw_sparkline(hist_tlt_vol[-60:].dropna(), "#2ecc71" if status_move=="🟢" else "#f1c40f" if status_move=="🟡" else "#e74c3c"), use_container_width=True)
-            st.caption("VIX dei Bond. Se esplode, i fondi pensione vendono azioni per coprire i margini sui bond.")
-
-        # --- 5. LIVELLO 3: IL CERVELLO CIO (ASSET ALLOCATION QUANTISTICA) ---
-        st.markdown("---")
-        st.header("🎯 Strategia Operativa Suggerita (CIO View Integrata)")
-        
-        # --- CALCOLO SYSTEMIC HEALTH SCORE (0-100) AGGIORNATO ---
-        health_score = 50 # Base Neutral
-        
-        # 1. Macro, Liquidità & Flussi Istituzionali (NUOVO)
-        if is_liq_expanding: health_score += 10
-        else: health_score -= 10
-        if is_risk_on: health_score += 10
-        else: health_score -= 10
-        
-        # 2. Analisi Molecolare & Flussi Ombra
-        if is_healthy_breadth: health_score += 5
-        else: health_score -= 10
-        if not bond_stress: health_score += 5
-        else: health_score -= 10
-        if not inflation_fear: health_score += 5
-        if btc_liq: health_score += 5
-        if carry_trade_risk: health_score -= 15
-        else: health_score += 5
-        if vix_ratio > 1: health_score -= 15
-        else: health_score += 5
-            
-        # 3. Analisi Mappa Fisica & Correlazioni
-        if ind_growth: health_score += 10
-        if is_sys_risk: health_score -= 10
-        if is_ind_risk: health_score -= 10
-        
-        # 4. Analisi Nervi del Sistema (Fragility)
-        if z_credit < -1.5: health_score -= 10
-        elif z_credit > 0: health_score += 5
-        if curve_slope < 0: health_score -= 10
-        if bond_vol_curr > bond_vol_ma: health_score -= 10
-
-        # 5. Fattori Aggiuntivi (CIO View Finale)
-        dev_tickers = ["EWC", "EWA", "EWL", "EWU"]
-        dev_perfs = [(get_stat(tk) / get_stat(tk, "ma50")) - 1 for tk in dev_tickers if get_stat(tk, "ma50") > 0]
-        if dev_perfs and sum(dev_perfs)/len(dev_perfs) > 0:
-            health_score += 5  # Developed Strength
-            
-        re_perf_cio = (get_stat("VNQ") / get_stat("VNQ", "ma50")) - 1 if get_stat("VNQ", "ma50") > 0 else 0
-        if re_perf_cio < 0:
-            health_score -= 10  # Real Estate Stress
-            
-        # Normalizzazione Score (0-100)
-        health_score = max(0, min(100, health_score))
-        
-        # --- ASSET ALLOCATION DINAMICA (RISK MANAGER) ---
-        if health_score < 35:
-            regime = "🔴 RISK-OFF (Preservation)"
-            weights = {'Cash / USD': 50, 'Bonds (TLT/IEF)': 30, 'Gold (Safe Haven)': 15, 'Defensive Equity': 5}
-            color_seq = px.colors.sequential.Reds_r
-        elif health_score < 65:
-            regime = "🟡 NEUTRAL (Transition)"
-            weights = {'Cash / USD': 20, 'Bonds (TLT/IEF)': 30, 'Gold / Commodities': 10, 'Broad Equity (SPY)': 40}
-            color_seq = px.colors.sequential.YlOrBr
-        else:
-            regime = "🟢 RISK-ON (Expansion)"
-            weights = {'Cash / USD': 5, 'Bonds (TLT/IEF)': 15, 'Broad Equity (SPY)': 45, 'Tech / High Beta': 25, 'Crypto / Speculative': 10}
-            color_seq = px.colors.sequential.Greens_r
-
-        # --- RENDERIZZAZIONE DASHBOARD CIO ---
-        col_charts1, col_charts2 = st.columns(2)
-        
-        with col_charts1:
-            # Gauge / Istogramma Salute Sistemica
-            fig_health = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = health_score,
-                title = {'text': "Systemic Health Score", 'font': {'size': 20}},
-                gauge = {
-                    'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
-                    'bar': {'color': "white", 'thickness': 0.2},
-                    'bgcolor': "rgba(0,0,0,0)",
-                    'steps': [
-                        {'range': [0, 35], 'color': "rgba(231, 76, 60, 0.8)"},
-                        {'range': [35, 65], 'color': "rgba(241, 196, 15, 0.8)"},
-                        {'range': [65, 100], 'color': "rgba(46, 204, 113, 0.8)"}],
-                }
-            ))
-            fig_health.update_layout(height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
-            st.plotly_chart(fig_health, use_container_width=True)
-
-        with col_charts2:
-            # Grafico a Torta (Risk Manager Portfolio)
-            labels = list(weights.keys())
-            values = list(weights.values())
-            fig_pie = px.pie(names=labels, values=values, hole=0.4, title=f"Allocazione Portafoglio Suggerita", color_discrete_sequence=color_seq)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#000000', width=2)))
-            fig_pie.update_layout(height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"}, showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-        # --- SUGGERIMENTI OPERATIVI E TESTUALI ---
-        st.markdown(f"### Valutazione di Mercato Attuale: **{regime}**")
-        
-        strat_col, list_col = st.columns([1.5, 1])
-        with strat_col:
-            if health_score < 35:
-                st.error("### 🚨 DE-LEVERAGING / CRASH RISK")
-                st.write("**Diagnosi Integrata:** Le metriche indicano stress grave. I rendimenti sono invertiti, lo Yen prezza deleverage, o c'è panico nei bond. Liquidità in fuga.")
-                buys = ["Cash (Dollari - UUP)", "Bond a breve scadenza (SHY)", "Indici Volatilità (VIX)"]
-                sells = ["Tutto l'azionario (USA, EU, Cina)", "Bitcoin e Crypto", "Real Estate (VNQ)", "Titoli Growth ad alto Beta"]
-            
-            elif health_score < 65:
-                if inflation_fear and not ind_growth:
-                    st.warning("### 🏗️ TRAPPOLA STAGFLATTIVA (Stagflation)")
-                    st.write("**Diagnosi Integrata:** L'economia reale rallenta ma l'inflazione attesa sale. Scenario pessimo per l'azionario tradizionale.")
-                    buys = ["Metalli Preziosi (Oro, Argento)", "Materia Prima Agricola (DBA)", "Bond indicizzati all'inflazione (TIP)"]
-                    sells = ["Tecnologia USA (XLK)", "Real Estate (VNQ)", "Bond tradizionali a lungo termine (TLT)"]
-                else:
-                    st.info("### ⚖️ FASE DI TRANSIZIONE (Stock Picking Market)")
-                    st.write("**Diagnosi Integrata:** Le metriche si annullano a vicenda. Assenza di trend macro chiaro. Rotazione continua tra settori.")
-                    buys = ["Aziende Value con dividendi sicuri", "Settori difensivi (Utilities, Staples)", "Mercati esteri sottovalutati"]
-                    sells = ["Asset iper-comprati a livello tecnico", "Aziende fortemente indebitate"]
-
+        pb1, pb2 = st.columns([1.4, 1])
+        with pb1:
+            if regime_name.endswith("GOLDILOCKS"):
+                st.success("### 🚀 GOLDILOCKS — Espansione Ideale")
+                st.write("**Diagnosi:** Crescita in accelerazione con inflazione sotto controllo. Le banche centrali possono restare accomodanti. È lo scenario più favorevole per gli asset di rischio a lunga duration. Il denaro cerca rendimento e lo trova nella crescita.")
+            elif regime_name.endswith("REFLATION"):
+                st.warning("### 🔥 REFLATION — Boom Ciclico")
+                st.write("**Diagnosi:** Crescita e inflazione salgono insieme. Fase di 'animal spirits' in cui l'economia si surriscalda ma le banche centrali non hanno ancora stretto in modo aggressivo. Vincono gli asset reali e i ciclici; i bond lunghi iniziano a soffrire per l'aumento dei rendimenti.")
+            elif regime_name.endswith("STAGFLATION"):
+                st.error("### ⚠️ STAGFLATION — Trappola Peggiore")
+                st.write("**Diagnosi:** L'economia rallenta ma l'inflazione resta alta e persistente. Le banche centrali sono 'in trappola': non possono tagliare (inflazione) né stringere troppo (recessione). Scenario ostile per quasi tutto tranne beni rifugio reali. **Priorità alla preservazione del capitale.**")
             else:
-                st.success("### 🚀 ESPANSIONE FULL RISK-ON (Goldilocks)")
-                st.write("**Diagnosi Integrata:** Allineamento quantistico perfetto. Crescita reale, partecipazione di mercato ampia (Breadth), tassi stabili e iniezioni di liquidità (BTC).")
-                buys = ["Azionario Tecnologia & Semiconduttori (XLK)", "Terre Rare (REMX)", "Bitcoin e Crypto", "Small Caps USA (IWM)"]
-                sells = ["Asset Difensivi (Utilities - XLU)", "Dollaro Cash (UUP)", "Protezioni / VIX"]
+                st.info("### 🛡️ DEFLATION — Risk-Off Classico")
+                st.write("**Diagnosi:** Crescita e inflazione rallentano insieme. Domanda debole, aspettative in raffreddamento. Fase da recessione/bear market in cui dominano la duration lunga (i tassi scendono) e i beni rifugio. Le banche centrali si preparano a tagliare aggressivamente.")
 
-        with list_col:
+            st.markdown(f"**Nel contesto attuale, il Systemic Health Score è {health:.0f}/100** → allocazione **{alloc_regime}**.")
+
+        with pb2:
             st.markdown("#### ✅ FOCUS ACCUMULO")
-            for b in buys: st.write(f"- {b}")
-            st.markdown("#### ❌ FOCUS DISTRIBUZIONE")
-            for s in sells: st.write(f"- {s}")
+            for a in regime_assets_pro.split(", "):
+                st.markdown(f"- {a}")
+            st.markdown("#### ❌ FOCUS RIDUZIONE")
+            for a in regime_assets_con.split(", "):
+                st.markdown(f"- {a}")
+
+        st.markdown("---")
+        st.caption("⚠️ Questo cruscotto sintetizza il posizionamento macro aggregato del mercato secondo framework istituzionali consolidati (regime quadrant di Dalio/Hedgeye, RORO della Fed di Kansas City, Financial Conditions Index). Non costituisce consulenza finanziaria: è un contesto probabilistico da confermare con la propria analisi. Dati da feed pubblico (Yahoo Finance), con i limiti di latenza e qualità che ne conseguono.")
 
 # --- CORE QUANT ENGINE ---
 def find_gamma_flip_robust(gex_func, spot, args, n_grid=250):
