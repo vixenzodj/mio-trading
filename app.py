@@ -742,16 +742,142 @@ Il punto **◉ SEI QUI** è calcolato aggregando gli Z-score dei pilastri Cresci
 
         if health < 35:
             alloc_regime = "🔴 RISK-OFF (Preservazione Capitale)"
-            weights = {'Cash / USD': 45, 'Bond lunghi (TLT)': 25, 'Oro (rifugio)': 20, 'Azioni difensive': 10}
             alloc_color_seq = px.colors.sequential.Reds_r
         elif health < 65:
             alloc_regime = "🟡 NEUTRAL (Transizione / Stock Picking)"
-            weights = {'Cash / USD': 20, 'Bond (TLT/IEF)': 25, 'Oro / Commodity': 15, 'Azioni broad (SPY)': 40}
             alloc_color_seq = px.colors.sequential.YlOrBr
         else:
             alloc_regime = "🟢 RISK-ON (Espansione)"
-            weights = {'Cash / USD': 5, 'Bond (TLT/IEF)': 15, 'Azioni broad (SPY)': 45, 'Tech / High Beta': 25, 'Crypto / Speculativo': 10}
             alloc_color_seq = px.colors.sequential.Greens_r
+
+        # ==================================================================
+        #  MODELLO DI PORTAFOGLIO ISTITUZIONALE PER REGIME
+        #  Framework accademico regime-based (ICPM/Robeco, Dalio All-Weather):
+        #  per ogni regime, un portafoglio completo dove ogni classe è popolata
+        #  da ETF specifici con pesi esatti (somma = 100%), modulato dal
+        #  Systemic Health Score per la quota difensiva (cash/liquidità).
+        # ==================================================================
+        institutional_portfolios = {
+            "GOLDILOCKS": {
+                "titolo": "Portafoglio Espansivo (Growth-Tilted)",
+                "filosofia": "Crescita solida e inflazione contenuta: si massimizza l'esposizione agli asset di rischio a lunga duration, con forte peso su tech/growth e small cap. Cash e bond ridotti al minimo tattico.",
+                "rows": [
+                    ("Azionario Core USA", 22, [("SPY", "S&P 500"), ("VOO", "Vanguard S&P 500")]),
+                    ("Tech & Growth", 20, [("QQQ", "Nasdaq 100"), ("XLK", "Tech USA"), ("VGT", "Vanguard Tech")]),
+                    ("Semiconduttori & AI", 10, [("SOXX", "Semiconduttori"), ("SMH", "VanEck Semis")]),
+                    ("Small Caps", 12, [("IWM", "Russell 2000"), ("IJR", "S&P SmallCap 600")]),
+                    ("Azionario Internazionale", 10, [("EFA", "Sviluppati ex-US"), ("VEA", "Vanguard Developed")]),
+                    ("Emergenti", 6, [("EEM", "Emergenti"), ("VWO", "Vanguard EM")]),
+                    ("Credito High Yield", 8, [("HYG", "High Yield"), ("JNK", "Junk Bonds")]),
+                    ("Crypto (satellite)", 5, [("IBIT", "Bitcoin ETF"), ("ETHA", "Ethereum ETF")]),
+                    ("Oro (diversificatore)", 4, [("GLD", "Oro fisico"), ("IAU", "Oro iShares")]),
+                    ("Cash / Liquidità", 3, [("SGOV", "T-Bill 0-3m"), ("BIL", "T-Bill 1-3m")]),
+                ],
+            },
+            "REFLATION": {
+                "titolo": "Portafoglio Ciclico (Real-Assets Tilted)",
+                "filosofia": "Crescita e inflazione salgono insieme: dominano commodity, energia, materiali e finanziari. Si privilegia il value ciclico e ci si protegge dai bond lunghi (che soffrono con i tassi in salita) tramite TIPS e duration breve.",
+                "rows": [
+                    ("Energia", 14, [("XLE", "Energia USA"), ("XOP", "Explor.&Prod."), ("VDE", "Vanguard Energy")]),
+                    ("Materiali & Miniere", 12, [("XLB", "Materiali"), ("XME", "Metals & Mining"), ("PICK", "Global Miners")]),
+                    ("Commodity Broad", 10, [("PDBC", "Commodity No-K1"), ("DBC", "Commodity Broad")]),
+                    ("Finanziari", 12, [("XLF", "Finanziari"), ("KRE", "Banche Regionali")]),
+                    ("Azionario Value", 12, [("VTV", "Vanguard Value"), ("IWD", "Russell 1000 Value")]),
+                    ("Industriali Ciclici", 10, [("XLI", "Industriali"), ("XLY", "Consumi Ciclici")]),
+                    ("Rame & Metalli Critici", 7, [("COPX", "Rame Miners"), ("CPER", "Rame")]),
+                    ("Uranio & Nucleare", 5, [("URA", "Uranio"), ("URNM", "Uranio Miners")]),
+                    ("TIPS (anti-inflazione)", 8, [("TIP", "TIPS"), ("VTIP", "TIPS Breve")]),
+                    ("Oro & Argento", 6, [("GLD", "Oro"), ("SLV", "Argento")]),
+                    ("Cash / Liquidità", 4, [("SGOV", "T-Bill 0-3m"), ("BIL", "T-Bill 1-3m")]),
+                ],
+            },
+            "STAGFLATION": {
+                "titolo": "Portafoglio Difensivo Reale (Capital Preservation)",
+                "filosofia": "Crescita debole ma inflazione persistente: il regime più ostile. Priorità assoluta alla preservazione del capitale con beni rifugio reali (oro in testa), commodity, TIPS e ampia liquidità. Esposizione azionaria minima e solo su settori resilienti.",
+                "rows": [
+                    ("Oro (rifugio primario)", 20, [("GLD", "Oro fisico"), ("IAU", "Oro iShares"), ("GDX", "Gold Miners")]),
+                    ("Argento & Preziosi", 8, [("SLV", "Argento"), ("SIL", "Silver Miners")]),
+                    ("TIPS (protezione inflazione)", 12, [("TIP", "TIPS"), ("SCHP", "TIPS Schwab")]),
+                    ("Commodity Broad", 10, [("PDBC", "Commodity No-K1"), ("DBC", "Commodity")]),
+                    ("Energia", 8, [("XLE", "Energia"), ("XOP", "Explor.&Prod.")]),
+                    ("Materie Prime Agricole", 6, [("DBA", "Agri Broad"), ("MOO", "Agribusiness")]),
+                    ("Azioni Difensive", 8, [("XLP", "Beni Prima Nec."), ("XLU", "Utilities"), ("XLV", "Sanità")]),
+                    ("Treasury Breve (cash+)", 8, [("SHY", "Treasury 1-3a"), ("SHV", "Treasury Breve")]),
+                    ("Cash / Liquidità", 20, [("SGOV", "T-Bill 0-3m"), ("BIL", "T-Bill 1-3m"), ("USFR", "Floating Treasury")]),
+                ],
+            },
+            "DEFLATION": {
+                "titolo": "Portafoglio Duration & Rifugio (Risk-Off)",
+                "filosofia": "Crescita e inflazione rallentano insieme: fase risk-off classica. Dominano i Treasury a lunga duration (i tassi scendono, i bond salgono), il dollaro forte, i settori difensivi e l'oro. Si evitano commodity e ciclici.",
+                "rows": [
+                    ("Treasury Lunghi (duration)", 22, [("TLT", "Treasury 20+a"), ("EDV", "Treasury Extended"), ("VGLT", "Treasury Lunghi")]),
+                    ("Treasury Intermedi", 12, [("IEF", "Treasury 7-10a"), ("GOVT", "Treasury Broad")]),
+                    ("Corporate Investment Grade", 8, [("LQD", "Corporate IG"), ("VCIT", "Corp. Intermedi")]),
+                    ("Dollaro USA", 10, [("UUP", "Bullish USD"), ("USDU", "USD WisdomTree")]),
+                    ("Oro (rifugio)", 10, [("GLD", "Oro fisico"), ("IAU", "Oro iShares")]),
+                    ("Azioni Difensive", 12, [("XLP", "Beni Prima Nec."), ("XLU", "Utilities"), ("XLV", "Sanità")]),
+                    ("Min Volatility Equity", 6, [("USMV", "Min Vol USA"), ("SPLV", "Low Vol S&P")]),
+                    ("Azionario Qualità", 5, [("QUAL", "Quality Factor"), ("SCHD", "Dividend Quality")]),
+                    ("Cash / Liquidità", 15, [("SGOV", "T-Bill 0-3m"), ("BIL", "T-Bill 1-3m"), ("USFR", "Floating Treasury")]),
+                ],
+            },
+        }
+
+        if "GOLDILOCKS" in regime_name:
+            regime_key = "GOLDILOCKS"
+        elif "REFLATION" in regime_name:
+            regime_key = "REFLATION"
+        elif "STAGFLATION" in regime_name:
+            regime_key = "STAGFLATION"
+        else:
+            regime_key = "DEFLATION"
+
+        portfolio_model = institutional_portfolios[regime_key]
+        base_rows = [list(r) for r in portfolio_model["rows"]]
+
+        # Modulazione difensiva sull'Health Score: un desk riduce il rischio quando la
+        # salute sistemica peggiora, anche a parità di regime, spostando peso verso la
+        # liquidità (e viceversa in caso di salute robusta).
+        if health < 35:
+            defensive_shift = 12
+        elif health < 50:
+            defensive_shift = 6
+        elif health < 65:
+            defensive_shift = 0
+        elif health < 80:
+            defensive_shift = -4
+        else:
+            defensive_shift = -8
+
+        risky_keywords = ("Tech", "Growth", "Small", "Crypto", "Semicondutt", "Emergenti",
+                          "High Yield", "Ciclici", "Materiali", "Energia", "Commodity",
+                          "Rame", "Uranio", "Value", "Finanziari")
+        cash_idx = None
+        risky_idxs = []
+        for idx, (cls, w, instr) in enumerate(base_rows):
+            if "Cash" in cls or "Liquidità" in cls:
+                cash_idx = idx
+            elif any(k in cls for k in risky_keywords):
+                risky_idxs.append(idx)
+
+        if cash_idx is not None and risky_idxs and defensive_shift != 0:
+            total_risky = sum(base_rows[i][1] for i in risky_idxs)
+            if total_risky > 0:
+                moved = 0
+                for i in risky_idxs:
+                    delta = defensive_shift * (base_rows[i][1] / total_risky)
+                    new_w = max(1.0, base_rows[i][1] - delta)
+                    moved += (base_rows[i][1] - new_w)
+                    base_rows[i][1] = new_w
+                base_rows[cash_idx][1] = max(0.0, base_rows[cash_idx][1] + moved)
+
+        total_w = sum(r[1] for r in base_rows)
+        if total_w > 0:
+            for r in base_rows:
+                r[1] = r[1] / total_w * 100.0
+
+        # weights per la torta di sintesi (classe → peso)
+        weights = {r[0]: r[1] for r in base_rows}
 
         st.markdown("")
         health_col1, health_col2 = st.columns([1, 1])
@@ -780,7 +906,55 @@ Il punto **◉ SEI QUI** è calcolato aggregando gli Z-score dei pilastri Cresci
                                   paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"}, showlegend=False)
             st.plotly_chart(fig_pie, use_container_width=True)
             with st.expander("❓ Come si legge l'Allocazione"):
-                st.write("L'allocazione suggerita si adatta automaticamente al Systemic Health Score. **Non è un consiglio di investimento** ma una traduzione meccanica del regime in pesi di portafoglio, secondo i principi dell'asset allocation basata su regimi (Dalio 'All Weather', Hedgeye). Il regime del quadrante sopra ti dice *quali* asset all'interno di ogni classe favorire.")
+                st.write("L'allocazione suggerita si adatta automaticamente al Systemic Health Score. **Non è un consiglio di investimento** ma una traduzione meccanica del regime in pesi di portafoglio, secondo i principi dell'asset allocation basata su regimi (Dalio 'All Weather', Hedgeye). La tabella dettagliata qui sotto mostra gli ETF specifici per ogni classe.")
+
+        # ==================================================================
+        #  PORTAFOGLIO ISTITUZIONALE DETTAGLIATO (ETF specifici + pesi esatti)
+        # ==================================================================
+        st.markdown("")
+        st.markdown(f"### 🏛️ Portafoglio Istituzionale — {portfolio_model['titolo']}")
+        st.markdown(f"<div style='padding:12px; border-radius:8px; background:rgba(255,255,255,0.04); border-left:4px solid {regime_color};'><b>Filosofia del regime {regime_key}:</b> {portfolio_model['filosofia']}</div>", unsafe_allow_html=True)
+        st.caption(f"Modello costruito come farebbe un desk istituzionale: pesi esatti per ogni classe (somma 100%), calibrati sul regime **{regime_key}** e modulati sul Systemic Health Score attuale ({health:.0f}/100). Ogni riga indica gli ETF concreti con cui implementare quella fetta di portafoglio.")
+
+        # Grafico a barre orizzontali + tabella dettagliata
+        detail_col1, detail_col2 = st.columns([1, 1.15])
+
+        with detail_col1:
+            # Barre orizzontali ordinate per peso (più leggibili della torta per molte classi)
+            sorted_rows = sorted(base_rows, key=lambda r: r[1], reverse=True)
+            bar_df = pd.DataFrame([{"Classe": r[0], "Peso": r[1]} for r in sorted_rows])
+            fig_alloc = px.bar(bar_df, x="Peso", y="Classe", orientation="h",
+                               color="Peso", color_continuous_scale=alloc_color_seq, text_auto='.1f')
+            fig_alloc.update_layout(height=max(320, 30*len(base_rows)), margin=dict(l=10, r=10, t=10, b=10),
+                                    showlegend=False, coloraxis_showscale=False,
+                                    xaxis_title="Peso %", yaxis_title="",
+                                    yaxis=dict(autorange="reversed"),
+                                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
+            st.plotly_chart(fig_alloc, use_container_width=True)
+
+        with detail_col2:
+            # Tabella: classe | peso | ETF concreti
+            st.markdown("**Allocazione dettagliata con strumenti**")
+            table_md = "| Classe | Peso | ETF da usare |\n|---|---:|---|\n"
+            for cls, w, instr in sorted(base_rows, key=lambda r: r[1], reverse=True):
+                etf_list = " · ".join([f"`{tk}`" for tk, nm in instr])
+                table_md += f"| {cls} | **{w:.1f}%** | {etf_list} |\n"
+            st.markdown(table_md)
+
+        with st.expander("📖 Dettaglio completo di ogni strumento (nomi estesi)"):
+            for cls, w, instr in sorted(base_rows, key=lambda r: r[1], reverse=True):
+                instr_str = " · ".join([f"`{tk}` ({nm})" for tk, nm in instr])
+                st.markdown(f"**{cls}** — {w:.1f}%  \n&nbsp;&nbsp;{instr_str}")
+
+        with st.expander("❓ Come uso questo portafoglio, passo per passo"):
+            st.write(f"""Questo è un **modello di portafoglio completo**, costruito come farebbe un gestore istituzionale per il regime **{regime_key}**:
+
+1. **Ogni riga è una classe di asset** con il suo **peso esatto** (es. "Tech & Growth 20%"). La somma fa sempre 100%: è un portafoglio intero, non una lista di spunti.
+2. **Gli ETF nella colonna "ETF da usare"** sono gli strumenti concreti per implementare quella fetta. Per la riga "Tech & Growth 20%", metteresti il 20% del capitale diviso tra `QQQ`, `XLK`, `VGT` (o anche solo uno di essi).
+3. **I pesi si adattano da soli** al Systemic Health Score: se la salute del sistema peggiora, il modello sposta automaticamente peso dalle classi rischiose verso la liquidità (cash), esattamente come farebbe un risk manager che riduce l'esposizione nei momenti di stress.
+4. **Il regime cambia il portafoglio intero**: se domani il quadrante passa da {regime_key} a un altro regime, l'intera struttura si riorganizza sui nuovi asset vincenti. Un vero desk non usa la stessa allocazione in tutte le stagioni macro.
+
+⚠️ *È un modello quantitativo illustrativo basato sul comportamento storico degli asset nei diversi regimi, non una raccomandazione personalizzata. Le composizioni degli ETF cambiano e ogni decisione va valutata sulla tua situazione e con un consulente.*""")
 
         # ==================================================================
         #  HELPER per widget-metrica uniforme (valore + Z + sparkline + help)
