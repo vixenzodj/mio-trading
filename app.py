@@ -48,6 +48,178 @@ yf.config.network.retries = 3          # Retry automatico con backoff esponenzia
 yf.config.debug.hide_exceptions = False  # Mostra l'eccezione REALE (non più genericamente "Rate Limit") finché stiamo diagnosticando
 # --- FINE SISTEMA ANTI-RATE-LIMIT ---
 
+# ============================================================================
+#  LIVELLO DI RESILIENZA DI RETE (standard usati in sistemi banking/trading)
+#  ------------------------------------------------------------------------
+#  Il caching Streamlit da solo NON basta: quando il TTL scade, con l'autorefresh
+#  tutte le chiamate ripartono insieme ("thundering herd") e Yahoo risponde 429.
+#  Qui aggiungiamo QUATTRO strati che lavorano in sinergia:
+#    1) TOKEN BUCKET RATE LIMITER  -> spaziatura proattiva delle richieste uscenti
+#    2) RETRY + EXPONENTIAL BACKOFF + FULL JITTER -> assorbe i 429/timeout transitori
+#       senza risincronizzare i client (il jitter è ciò che spezza il thundering herd)
+#    3) CIRCUIT BREAKER            -> dopo N fallimenti smette di colpire Yahoo (fail-fast),
+#       lasciando rientrare il ban invece di aggravarlo
+#    4) STALE-WHILE-REVALIDATE     -> se il refresh fallisce, serve l'ultimo dato valido
+#       invece di rompere la dashboard (graceful degradation)
+#  Tutto è thread-safe e non usa dipendenze esterne oltre a quelle già presenti.
+# ============================================================================
+import random as _random
+import threading as _threading
+from collections import OrderedDict as _OrderedDict
+
+
+class _TokenBucketRateLimiter:
+    def __init__(self, rate_per_sec=2.5, burst=6):
+        self.rate = float(rate_per_sec); self.capacity = float(burst)
+        self.tokens = float(burst); self.last = time.monotonic(); self._lock = _threading.Lock()
+    def acquire(self, timeout=30.0):
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                now = time.monotonic(); elapsed = now - self.last; self.last = now
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0; return True
+                needed = (1.0 - self.tokens) / self.rate
+            if time.monotonic() + needed > deadline:
+                return False
+            time.sleep(min(needed, 0.25))
+
+
+class _CircuitBreaker:
+    CLOSED, OPEN, HALF_OPEN = "CLOSED", "OPEN", "HALF_OPEN"
+    def __init__(self, fail_threshold=5, recovery_timeout=60.0, success_threshold=2):
+        self.fail_threshold = fail_threshold; self.recovery_timeout = recovery_timeout
+        self.success_threshold = success_threshold; self.state = self.CLOSED
+        self.failures = 0; self.successes = 0; self.opened_at = 0.0; self._lock = _threading.Lock()
+    def allow(self):
+        with self._lock:
+            if self.state == self.OPEN:
+                if time.monotonic() - self.opened_at >= self.recovery_timeout:
+                    self.state = self.HALF_OPEN; self.successes = 0; return True
+                return False
+            return True
+    def record_success(self):
+        with self._lock:
+            if self.state == self.HALF_OPEN:
+                self.successes += 1
+                if self.successes >= self.success_threshold:
+                    self.state = self.CLOSED; self.failures = 0
+            else:
+                self.failures = 0
+    def record_failure(self):
+        with self._lock:
+            self.failures += 1
+            if self.state == self.HALF_OPEN:
+                self.state = self.OPEN; self.opened_at = time.monotonic()
+            elif self.failures >= self.fail_threshold:
+                self.state = self.OPEN; self.opened_at = time.monotonic()
+    def time_until_retry(self):
+        with self._lock:
+            if self.state == self.OPEN:
+                return max(0.0, self.recovery_timeout - (time.monotonic() - self.opened_at))
+            return 0.0
+
+
+def _is_transient_error(exc):
+    s = str(exc).lower()
+    return any(m in s for m in ("429", "too many", "rate", "timeout", "timed out",
+               "connection", "temporarily", "503", "502", "500", "504",
+               "reset by peer", "max retries", "unavailable"))
+
+
+def _is_rate_limit_error(exc):
+    s = str(exc).lower()
+    return ("429" in s or "too many requests" in s or "rate limit" in s or
+            "ratelimit" in s or "yfratelimit" in s)
+
+
+def _retry_with_backoff(fn, max_attempts=4, base_delay=1.0, max_delay=30.0,
+                        breaker=None, limiter=None):
+    if breaker is not None and not breaker.allow():
+        raise RuntimeError(f"CircuitBreaker OPEN: richieste sospese per ~{breaker.time_until_retry():.0f}s per proteggere dal ban di Yahoo")
+    last_exc = None
+    for attempt in range(max_attempts):
+        if limiter is not None:
+            limiter.acquire()
+        try:
+            result = fn()
+            if breaker is not None: breaker.record_success()
+            return result
+        except Exception as e:
+            last_exc = e
+            if breaker is not None: breaker.record_failure()
+            if not _is_transient_error(e):
+                raise
+            if attempt == max_attempts - 1:
+                raise
+            capped = min(max_delay, base_delay * (2 ** attempt))
+            time.sleep(_random.random() * capped)  # full jitter
+    if last_exc:
+        raise last_exc
+
+
+class _StaleWhileRevalidateCache:
+    def __init__(self, maxsize=256):
+        self._store = _OrderedDict(); self.maxsize = maxsize; self._lock = _threading.Lock()
+    def get(self, key):
+        with self._lock:
+            if key in self._store:
+                value, ts = self._store[key]; self._store.move_to_end(key); return value, ts
+            return None, None
+    def set(self, key, value):
+        with self._lock:
+            self._store[key] = (value, time.monotonic()); self._store.move_to_end(key)
+            while len(self._store) > self.maxsize:
+                self._store.popitem(last=False)
+    def get_or_call(self, key, fn, fresh_ttl, breaker=None, limiter=None,
+                    max_attempts=4, base_delay=1.0):
+        value, ts = self.get(key)
+        age = (time.monotonic() - ts) if ts is not None else None
+        if value is not None and age is not None and age < fresh_ttl:
+            return value
+        try:
+            fresh = _retry_with_backoff(fn, max_attempts=max_attempts, base_delay=base_delay,
+                                        breaker=breaker, limiter=limiter)
+            self.set(key, fresh); return fresh
+        except Exception:
+            if value is not None:
+                return value  # stale: meglio un dato vecchio che una UI rotta
+            raise
+
+
+# Istanze SINGLETON condivise fra tutti i rerun/thread di Streamlit.
+# st.cache_resource garantisce UNA sola istanza per l'intera app (non ricreata ad ogni rerun),
+# così rate limiter, circuit breaker e cache mantengono lo stato tra le interazioni.
+@st.cache_resource
+def _get_net_guardians():
+    return {
+        "limiter": _TokenBucketRateLimiter(rate_per_sec=2.5, burst=6),
+        "breaker": _CircuitBreaker(fail_threshold=5, recovery_timeout=45.0, success_threshold=2),
+        "swr": _StaleWhileRevalidateCache(maxsize=512),
+    }
+
+
+def resilient_yf_call(cache_key, fn, fresh_ttl, max_attempts=4, base_delay=1.0):
+    """
+    Punto d'ingresso UNICO per ogni chiamata di rete a Yahoo dalla dashboard.
+    Applica in ordine: cache fresca -> rate limiter -> retry/backoff/jitter ->
+    circuit breaker -> stale-while-revalidate. Ritorna sempre il miglior dato
+    disponibile o solleva l'eccezione solo se non c'è proprio nulla da servire.
+    """
+    g = _get_net_guardians()
+    return g["swr"].get_or_call(cache_key, fn, fresh_ttl=fresh_ttl,
+                                breaker=g["breaker"], limiter=g["limiter"],
+                                max_attempts=max_attempts, base_delay=base_delay)
+
+
+def net_circuit_status():
+    """Ritorna (stato, secondi_al_retry) del circuit breaker, per la UI."""
+    g = _get_net_guardians()
+    b = g["breaker"]
+    return b.state, b.time_until_retry()
+
+
 # --- 0DTE PRECISION & DYNAMIC RISK-FREE RATE ---
 def get_precise_dte(exp_str):
     try:
@@ -2158,39 +2330,61 @@ def get_greeks_pro(df, S, r=DYNAMIC_R, q=0.0):
 # in pochi secondi. (Nessun session= custom passato: lo gestisce yfinance).
 @st.cache_data(ttl=8, show_spinner=False)
 def get_spot_price_cached(ticker_symbol):
-    """Cache 8s dedicata al prezzo spot intraday: separata da get_history_cached perché per lo scalping serve la massima reattività su questa singola chiamata leggera, senza forzare lo stesso ritmo sullo storico mensile (HV) che non ne ha bisogno."""
-    return yf.Ticker(ticker_symbol).history(period='1d')
+    """Prezzo spot intraday. Cache Streamlit 8s per i rerun ravvicinati; sotto,
+    il livello di resilienza (rate limiter + backoff + circuit breaker + stale)
+    assorbe i 429 e serve l'ultimo valido se Yahoo ci blocca temporaneamente."""
+    return resilient_yf_call(
+        f"spot::{ticker_symbol}",
+        lambda: yf.Ticker(ticker_symbol).history(period='1d'),
+        fresh_ttl=6.0, max_attempts=4, base_delay=1.0)
 
 @st.cache_data(ttl=20, show_spinner=False)
 def get_history_cached(ticker_symbol, period):
-    """Cache 20s su .history(): assorbe i rerun ravvicinati senza percepibile perdita di freschezza."""
-    return yf.Ticker(ticker_symbol).history(period=period)
+    """Storico prezzi. Resiliente ai 429 con retry/backoff e fallback su stale."""
+    return resilient_yf_call(
+        f"hist::{ticker_symbol}::{period}",
+        lambda: yf.Ticker(ticker_symbol).history(period=period),
+        fresh_ttl=18.0, max_attempts=4, base_delay=1.0)
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_options_cached(ticker_symbol):
-    """Cache 15 min sulle scadenze disponibili: cambiano poche volte al giorno, non ad ogni rerun."""
-    return yf.Ticker(ticker_symbol).options
+    """Scadenze opzioni disponibili. Cambiano poche volte al giorno; forte resilienza."""
+    return resilient_yf_call(
+        f"opts::{ticker_symbol}",
+        lambda: yf.Ticker(ticker_symbol).options,
+        fresh_ttl=600.0, max_attempts=5, base_delay=1.5)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_info_cached(ticker_symbol):
-    """Cache 1h su .info: è la chiamata più pesante (quoteSummary multi-modulo) e i dati fondamentali/dividendi non cambiano in pochi secondi."""
-    return yf.Ticker(ticker_symbol).info
+    """.info (endpoint quoteSummary, il più pesante). Resiliente + stale-while-revalidate."""
+    return resilient_yf_call(
+        f"info::{ticker_symbol}",
+        lambda: yf.Ticker(ticker_symbol).info,
+        fresh_ttl=3000.0, max_attempts=4, base_delay=1.5)
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _download_close_cached(tickers_tuple, period):
     """Cache 15 min sui prezzi Close multi-ticker (usata es. dalla matrice di correlazione)."""
-    return yf.download(list(tickers_tuple), period=period)['Close']
+    return resilient_yf_call(
+        f"dlclose::{'-'.join(tickers_tuple)}::{period}",
+        lambda: yf.download(list(tickers_tuple), period=period)['Close'],
+        fresh_ttl=600.0, max_attempts=4, base_delay=1.5)
 # --- FINE PATCH ANTI RATE-LIMIT ---
 
 @st.cache_data(ttl=30, show_spinner=False)  # PATCH: portato da 60s a 30s su richiesta esplicita (scalping/intraday)
 def fetch_data(ticker, dates):
-    t = yf.Ticker(ticker)
+    """Option chain per una lista di scadenze. Ogni scadenza passa dal livello di
+    resilienza: rate-limited, con backoff sui 429 e fallback su stale per singola scadenza."""
     frames = []
     for d in dates:
         try:
-            oc = t.option_chain(d)
+            oc = resilient_yf_call(
+                f"chain::{ticker}::{d}",
+                lambda d=d: yf.Ticker(ticker).option_chain(d),
+                fresh_ttl=25.0, max_attempts=4, base_delay=1.0)
             frames.append(pd.concat([oc.calls.assign(type='call', exp=d), oc.puts.assign(type='put', exp=d)]))
-        except: continue
+        except Exception:
+            continue
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 # --- FUNZIONE PROTETTIVA PER LO SCANNER (Evita Ban IP da Yahoo) ---
@@ -3480,16 +3674,29 @@ if menu == "🏟️ DASHBOARD SINGOLA":
     elif any(x in asset for x in ["NVDA", "MSTR", "SMCI"]): default_gran = 5.0
     
     ticker_obj = yf.Ticker(current_ticker)
-    h = get_spot_price_cached(current_ticker)  # PATCH: cache 8s dedicata, separata dallo storico mensile
-    if h.empty: st.stop()
+    try:
+        h = get_spot_price_cached(current_ticker)
+    except Exception as e:
+        cb_state, cb_wait = net_circuit_status()
+        if cb_state == "OPEN" or _is_rate_limit_error(e):
+            st.warning(f"⏳ Protezione anti-blocco attiva: Yahoo Finance ha segnalato troppe richieste. Il sistema si mette in pausa automatica per ~{max(cb_wait, 5):.0f} secondi e riprova da solo, così l'IP non viene bannato. Attendi qualche istante — la pagina si aggiornerà.")
+        else:
+            st.error(f"⚠️ Errore nel recupero del prezzo per {current_ticker}. Dettaglio: {e}")
+        st.stop()
+    if h is None or h.empty:
+        st.warning(f"⏳ Dati di prezzo momentaneamente non disponibili per {current_ticker}. Se hai appena caricato molti ticker, il sistema sta rispettando i limiti di Yahoo e riproverà automaticamente tra pochi secondi.")
+        st.stop()
     spot = h['Close'].iloc[-1]
 
     try:
-        available_dates = get_options_cached(current_ticker)  # PATCH: prima era ticker_obj.options senza cache
+        available_dates = get_options_cached(current_ticker)  # resiliente: rate-limit + backoff + stale
     except Exception as e:
         err_str = str(e)
-        if "429" in err_str or "too many" in err_str.lower() or "rate" in err_str.lower():
-            st.error(f"⚠️ Yahoo Finance ti ha temporaneamente bloccato per troppe richieste (Rate Limit). Cambia rete/IP o attendi qualche minuto prima di riprovare.\n\nDettaglio tecnico: {err_str}")
+        cb_state, cb_wait = net_circuit_status()
+        if cb_state == "OPEN":
+            st.warning(f"⏳ Protezione anti-blocco attiva (Circuit Breaker). Dopo alcuni errori di rete consecutivi, il sistema ha sospeso le richieste a Yahoo per ~{max(cb_wait, 5):.0f}s per non farsi bannare l'IP, e riprenderà automaticamente. Questo è il comportamento corretto: evita il blocco prolungato. Attendi il countdown e la pagina si riprenderà da sola.")
+        elif _is_rate_limit_error(e):
+            st.warning(f"⏳ Yahoo Finance ha segnalato 'troppe richieste' (429). Il sistema sta già ritentando con attese progressive e jitter. Se persiste, attendi ~1 minuto: l'IP condiviso del cloud potrebbe essere temporaneamente limitato.\n\nDettaglio tecnico: {err_str}")
         else:
             st.error(f"⚠️ Errore nel recupero delle scadenze per {current_ticker} (non è un rate limit). Dettaglio tecnico: {err_str}")
         st.stop()
