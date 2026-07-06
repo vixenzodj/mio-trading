@@ -8639,27 +8639,105 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
     @st.cache_data(ttl=3600)
     def get_terminal_data(ticker):
         t = yf.Ticker(ticker)
-        try:
-            # Recupero info e valuta
-            inf = t.info
-            currency = inf.get('financialCurrency', inf.get('currency', '$'))
-            sym = '€' if currency == 'EUR' else ('$' if currency == 'USD' else currency + " ")
-            
-            return {
-                "info": inf,
-                "sym": sym,
-                "history": t.history(period="2y"),
-                "fin": t.financials,
-                "q_fin": t.quarterly_financials,  # <-- AGGIUNTO
-                "bs": t.balance_sheet,
-                "q_bs": t.quarterly_balance_sheet, # <-- AGGIUNTO
-                "cf": t.cashflow,
-                "q_cf": t.quarterly_cashflow,      # <-- AGGIUNTO
-                "inst": t.institutional_holders,
-                "insider": t.insider_transactions,
-                "news": t.news
-            }
-        except: return None
+
+        # -------------------------------------------------------------------
+        # STRATEGIA RESILIENTE PER IL RECUPERO DELLE INFO
+        # Problema noto e diffuso: nelle versioni recenti di yfinance/Yahoo, la
+        # proprietà `.info` (endpoint quoteSummary) è INAFFIDABILE per ETF e
+        # indici — spesso restituisce un dizionario vuoto o solleva eccezione,
+        # mentre per le AZIONI resta stabile (ecco perché le azioni funzionano
+        # e gli ETF/indici no). Le fonti affidabili per ETF/indici sono invece
+        # `.fast_info` e `.history_metadata`, che leggono dall'endpoint chart.
+        # Qui proviamo `.info`; se è vuoto lo ARRICCHIAMO/RICOSTRUIAMO da
+        # fast_info + history_metadata, così ETF e indici tornano a funzionare.
+        # -------------------------------------------------------------------
+        def _try(fn, fallback=None):
+            try:
+                r = fn()
+                return r if r is not None else fallback
+            except Exception:
+                return fallback
+
+        inf = _try(lambda: t.info, {}) or {}
+
+        # fast_info: prezzo/valuta/tipo affidabili anche per ETF/indici
+        fast = _try(lambda: dict(t.fast_info), {}) or {}
+        # history_metadata: valuta, exchange, tipo strumento (chart endpoint)
+        meta = _try(lambda: t.get_history_metadata(), {}) or {}
+
+        # Storico: la chiamata più affidabile in assoluto. La recuperiamo subito
+        # perché serve sia come dato sia come prova di validità del ticker.
+        hist = _try(lambda: t.history(period="2y"), pd.DataFrame())
+        if hist is None:
+            hist = pd.DataFrame()
+
+        # Se .info è povero (caso ETF/indice), ricostruiamo i campi essenziali.
+        # Consideriamo il ticker VALIDO se abbiamo almeno uno tra: info popolata,
+        # un prezzo da fast_info, o uno storico non vuoto.
+        def _fast_get(*keys):
+            for k in keys:
+                if k in fast and fast[k] is not None:
+                    return fast[k]
+            return None
+
+        last_price = _fast_get('lastPrice', 'last_price', 'regularMarketPrice')
+        if last_price is None and not hist.empty and 'Close' in hist.columns:
+            try:
+                last_price = float(hist['Close'].dropna().iloc[-1])
+            except Exception:
+                last_price = None
+
+        has_any_data = bool(inf) or (last_price is not None) or (not hist.empty)
+        if not has_any_data:
+            return None  # ticker realmente inesistente/non recuperabile
+
+        # Arricchiamo inf con i campi mancanti presi da fast_info/metadata, senza
+        # sovrascrivere quelli già presenti e validi in .info.
+        currency = (inf.get('currency') or _fast_get('currency') or meta.get('currency') or 'USD')
+        quote_type = (inf.get('quoteType') or meta.get('instrumentType') or fast.get('quoteType'))
+        if not quote_type:
+            # Heuristica di ultima istanza dal simbolo: ^ = indice
+            quote_type = 'INDEX' if str(ticker).startswith('^') else 'ETF'
+
+        # Nome leggibile: proviamo varie fonti, con fallback al ticker.
+        short_name = (inf.get('shortName') or inf.get('longName') or
+                      meta.get('shortName') or meta.get('longName') or
+                      meta.get('symbol') or ticker)
+
+        # Riempimento non distruttivo di inf
+        if not inf.get('currency'): inf['currency'] = currency
+        if not inf.get('quoteType'): inf['quoteType'] = quote_type
+        if not inf.get('shortName'): inf['shortName'] = short_name
+        if inf.get('currentPrice') is None and last_price is not None:
+            inf['currentPrice'] = last_price
+        if inf.get('previousClose') is None:
+            pc = _fast_get('previousClose', 'regularMarketPreviousClose')
+            if pc is not None:
+                inf['previousClose'] = pc
+        # Alcuni campi utili per il ramo fondi, se disponibili da fast_info
+        if inf.get('totalAssets') is None and _fast_get('totalAssets') is not None:
+            inf['totalAssets'] = _fast_get('totalAssets')
+
+        currency_sym = inf.get('financialCurrency', inf.get('currency', '$'))
+        sym = '€' if currency_sym == 'EUR' else ('$' if currency_sym == 'USD' else str(currency_sym) + " ")
+
+        # Campi opzionali (bilanci/news): isolati, con fallback neutro. Per ETF/indici
+        # normalmente non esistono e vanno lasciati vuoti senza far fallire nulla.
+        empty_df = pd.DataFrame()
+        return {
+            "info": inf,
+            "sym": sym,
+            "history": hist,
+            "fin": _try(lambda: t.financials, empty_df) if _try(lambda: t.financials) is not None else empty_df,
+            "q_fin": _try(lambda: t.quarterly_financials, empty_df) if _try(lambda: t.quarterly_financials) is not None else empty_df,
+            "bs": _try(lambda: t.balance_sheet, empty_df) if _try(lambda: t.balance_sheet) is not None else empty_df,
+            "q_bs": _try(lambda: t.quarterly_balance_sheet, empty_df) if _try(lambda: t.quarterly_balance_sheet) is not None else empty_df,
+            "cf": _try(lambda: t.cashflow, empty_df) if _try(lambda: t.cashflow) is not None else empty_df,
+            "q_cf": _try(lambda: t.quarterly_cashflow, empty_df) if _try(lambda: t.quarterly_cashflow) is not None else empty_df,
+            "inst": _try(lambda: t.institutional_holders, empty_df) if _try(lambda: t.institutional_holders) is not None else empty_df,
+            "insider": _try(lambda: t.insider_transactions, empty_df) if _try(lambda: t.insider_transactions) is not None else empty_df,
+            "news": _try(lambda: t.news, []) or []
+        }
 
     def format_big_num(val, sym):
         if pd.isna(val) or not isinstance(val, (int, float)): return "N/A"
@@ -8674,20 +8752,48 @@ elif menu == "🏛️ BLOOMBERG TERMINAL (Inst.)":
     
     # --- NORMALIZZAZIONE TICKER GLOBALE ---
     if t_code:
-        # Mappa rapida indici comuni
-        idx_map = {"SPX": "^GSPC", "NDX": "^IXIC", "DJI": "^DJI", "DAX": "^GDAXI", "FTSEMIB": "FTSEMIB.MI"}
+        # Mappa rapida indici comuni digitati senza prefisso (SPX → ^GSPC ecc.)
+        idx_map = {"SPX": "^GSPC", "NDX": "^IXIC", "DJI": "^DJI", "DAX": "^GDAXI", "FTSEMIB": "FTSEMIB.MI",
+                   "VIX": "^VIX", "RUT": "^RUT", "FTSE": "^FTSE", "N225": "^N225", "HSI": "^HSI"}
         if t_code in idx_map:
             t_code = idx_map[t_code]
-        
-        # Fallback: se non è un'azione (EQUITY) e non ha il prefisso, prova ad aggiungerlo
-        try:
-            check = get_info_cached(t_code)  # PATCH: prima era yf.Ticker(t_code).info senza cache, rifatto ad ogni rerun
-            if not check or 'quoteType' not in check:
-                if not t_code.startswith("^"):
-                    t_code = "^" + t_code
-        except:
-            if not t_code.startswith("^"):
-                t_code = "^" + t_code
+
+        # NON aggiungiamo più automaticamente il prefisso ^ a "tutto ciò che non è EQUITY":
+        # gli ETF (SPY, QQQ, GLD, TLT...) NON sono indici e hanno ticker semplice, quindi
+        # trasformarli in ^SPY li renderebbe invalidi (causa del messaggio di errore su ogni
+        # ETF). Il prefisso ^ si aggiunge SOLO se il ticker così com'è non restituisce alcun
+        # dato utilizzabile MA la sua versione con ^ sì - un caso raro, gestito qui sotto in
+        # modo verificato invece che a tentoni.
+        # Aggiunta del prefisso ^ SOLO se il ticker nudo non esiste ma la versione ^ sì.
+        # La validità si verifica con fast_info/history (affidabili per ETF e indici),
+        # NON con .info che per gli ETF è spesso vuoto e ci farebbe sbagliare diagnosi.
+        if not t_code.startswith("^") and "." not in t_code and "-" not in t_code:
+            def _ticker_has_data(sym):
+                try:
+                    tk = yf.Ticker(sym)
+                    try:
+                        fi = dict(tk.fast_info)
+                    except Exception:
+                        fi = {}
+                    price = None
+                    for k in ('lastPrice', 'last_price', 'regularMarketPrice', 'previousClose'):
+                        if fi.get(k) is not None:
+                            price = fi[k]; break
+                    if price is not None:
+                        return True
+                    # Ultima prova: uno storico breve non vuoto
+                    h = tk.history(period="5d")
+                    return h is not None and not h.empty
+                except Exception:
+                    return False
+
+            try:
+                if not _ticker_has_data(t_code):
+                    if _ticker_has_data("^" + t_code):
+                        t_code = "^" + t_code
+            except Exception:
+                # In caso di errore imprevisto lasciamo il ticker intatto (più sicuro).
+                pass
     
     if t_code:
         data = get_terminal_data(t_code)
