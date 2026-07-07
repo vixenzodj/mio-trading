@@ -77,14 +77,18 @@ yf.config.debug.hide_exceptions = False  # Mostra l'eccezione REALE (non più ge
 import threading as _threading
 import pickle as _pickle
 import hashlib as _hashlib
+from collections import OrderedDict as _OrderedDict
 
 _YF_DISK_CACHE_DIR = os.path.join(LOCAL_DB_DIR, "yf_cache")
 os.makedirs(_YF_DISK_CACHE_DIR, exist_ok=True)
 
 _yf_mem_lock = _threading.Lock()
-_yf_mem_cache = {}                      # key -> (value, timestamp)
+_yf_mem_cache = _OrderedDict()          # key -> (value, timestamp)  [LRU-bounded]
+_yf_mem_maxsize = 256                    # tetto anti-memory-leak sulla cache in RAM
 _yf_inflight = {}                       # key -> Event (single-flight)
 _yf_inflight_lock = _threading.Lock()
+_yf_disk_locks = {}                     # key -> Lock (serializza scritture sullo stesso file)
+_yf_disk_locks_guard = _threading.Lock()
 
 
 def _yf_disk_path(key):
@@ -92,8 +96,25 @@ def _yf_disk_path(key):
     return os.path.join(_YF_DISK_CACHE_DIR, h + ".pkl")
 
 
+def _yf_get_disk_lock(key):
+    with _yf_disk_locks_guard:
+        lk = _yf_disk_locks.get(key)
+        if lk is None:
+            lk = _threading.Lock()
+            _yf_disk_locks[key] = lk
+            # bound anche su questo dict per non crescere all'infinito
+            if len(_yf_disk_locks) > 1024:
+                # rimuovi un lock arbitrario non in uso (best-effort)
+                for k in list(_yf_disk_locks.keys())[:256]:
+                    if k != key and not _yf_disk_locks[k].locked():
+                        _yf_disk_locks.pop(k, None)
+        return lk
+
+
 def _yf_disk_read(key):
-    """Legge (value, timestamp) dal disco, o (None, None) se assente/corrotto."""
+    """Legge (value, timestamp) dal disco, o (None, None) se assente/corrotto.
+    Un file corrotto (troncato da una scrittura concorrente) viene rimosso silenziosamente:
+    non deve MAI propagare un'eccezione al rendering."""
     p = _yf_disk_path(key)
     try:
         if os.path.exists(p):
@@ -107,12 +128,28 @@ def _yf_disk_read(key):
 
 
 def _yf_disk_write(key, value):
+    """Scrittura ATOMICA: scrive su un file temporaneo univoco, poi rename atomico.
+    Il rename è atomico sui filesystem POSIX/Windows, quindi un lettore concorrente vede
+    o il vecchio file completo o il nuovo file completo, MAI un file troncato a metà.
+    Questo elimina la race condition che corrompeva la cache sotto auto-refresh."""
     p = _yf_disk_path(key)
+    lk = _yf_get_disk_lock(key)
+    tmp = None
     try:
-        with open(p, "wb") as f:
-            _pickle.dump((value, time.time()), f)
+        with lk:  # serializza le scritture sullo STESSO file
+            # file temporaneo univoco (pid+thread) nella stessa cartella (per rename atomico)
+            tmp = f"{p}.{os.getpid()}.{_threading.get_ident()}.tmp"
+            with open(tmp, "wb") as f:
+                _pickle.dump((value, time.time()), f)
+                f.flush()
+                os.fsync(f.fileno())  # forza la scrittura fisica prima del rename
+            os.replace(tmp, p)  # RENAME ATOMICO (sostituisce atomicamente il vecchio)
+            tmp = None
     except Exception:
-        pass
+        # Se qualcosa va storto, pulisci il temporaneo e non propagare
+        if tmp is not None:
+            try: os.remove(tmp)
+            except Exception: pass
 
 
 def _yf_cache_get(key):
@@ -120,11 +157,15 @@ def _yf_cache_get(key):
     with _yf_mem_lock:
         if key in _yf_mem_cache:
             value, ts = _yf_mem_cache[key]
+            _yf_mem_cache.move_to_end(key)  # LRU: marca come usato di recente
             return value, (time.time() - ts)
     value, ts = _yf_disk_read(key)
     if value is not None and ts is not None:
         with _yf_mem_lock:
             _yf_mem_cache[key] = (value, ts)   # ripopola la memoria
+            _yf_mem_cache.move_to_end(key)
+            while len(_yf_mem_cache) > _yf_mem_maxsize:
+                _yf_mem_cache.popitem(last=False)  # evacua il meno usato
         return value, (time.time() - ts)
     return None, None
 
@@ -132,7 +173,51 @@ def _yf_cache_get(key):
 def _yf_cache_set(key, value):
     with _yf_mem_lock:
         _yf_mem_cache[key] = (value, time.time())
+        _yf_mem_cache.move_to_end(key)
+        while len(_yf_mem_cache) > _yf_mem_maxsize:
+            _yf_mem_cache.popitem(last=False)  # LRU bound anti-leak
     _yf_disk_write(key, value)
+    _maybe_gc()  # manutenzione periodica best-effort della cache su disco
+
+
+def _yf_cache_gc(max_files=800, max_age_seconds=172800):
+    """Garbage collection best-effort della cache su disco: rimuove i file più vecchi di
+    max_age_seconds (default 48h) e, se sono comunque troppi (>max_files), i più vecchi in
+    eccesso. Rimuove anche i .tmp orfani lasciati da eventuali crash. Chiamata di rado
+    (probabilisticamente) per non appesantire il rendering."""
+    try:
+        entries = []
+        for fn in os.listdir(_YF_DISK_CACHE_DIR):
+            fp = os.path.join(_YF_DISK_CACHE_DIR, fn)
+            try:
+                if fn.endswith(".tmp"):
+                    # .tmp orfano: se più vecchio di 5 min, è residuo di un crash -> rimuovi
+                    if time.time() - os.path.getmtime(fp) > 300:
+                        os.remove(fp)
+                    continue
+                mtime = os.path.getmtime(fp)
+                if time.time() - mtime > max_age_seconds:
+                    os.remove(fp)
+                else:
+                    entries.append((mtime, fp))
+            except Exception:
+                continue
+        # Se restano troppi file, rimuovi i più vecchi in eccesso
+        if len(entries) > max_files:
+            entries.sort()  # dal più vecchio
+            for _, fp in entries[:len(entries) - max_files]:
+                try: os.remove(fp)
+                except Exception: pass
+    except Exception:
+        pass
+
+
+# Chiamata probabilistica alla GC (circa 1 volta ogni 200 chiamate di rete), così la
+# manutenzione avviene senza un thread dedicato e senza rallentare il caso comune.
+import random as _random_gc
+def _maybe_gc():
+    if _random_gc.random() < 0.005:
+        _yf_cache_gc()
 
 
 def _is_rate_limit_error(exc):
@@ -181,8 +266,11 @@ def resilient_yf_call(cache_key, fn, fresh_ttl, max_attempts=2, base_delay=0.4,
             _yf_inflight[cache_key] = ev
 
     if not is_leader:
-        # Un altro thread sta gia' rinfrescando: aspetta poco, poi usa la cache.
-        ev.wait(timeout=6.0)
+        # Un altro thread sta gia' rinfrescando: aspetta un tempo BREVE (non 6s, che sotto
+        # auto-refresh farebbe accumulare thread in attesa sovrapponibili ai refresh
+        # successivi), poi usa comunque la cache/stale. Meglio servire un dato leggermente
+        # vecchio subito che bloccare il rendering aspettando il leader.
+        ev.wait(timeout=2.5)
         v2, age2 = _yf_cache_get(cache_key)
         if v2 is not None:
             return v2
@@ -3716,21 +3804,34 @@ with st.sidebar.expander("🤖 SEGUGIO DIGITALE (Estrai Ticker)", expanded=False
 
 # --- REFRESH CONFIG ---
 # L'auto-refresh continuo è una delle CAUSE PRINCIPALI del rate limit su Streamlit
-# Cloud (IP condiviso): ogni refresh rigenera chiamate a Yahoo. Lo rendiamo quindi
-# OPZIONALE e spento di default, dando all'utente il controllo. Con la cache-first,
-# i dati restano comunque freschi a sufficienza per lo scalping senza martellare Yahoo.
+# Cloud (IP condiviso): ogni refresh rigenera chiamate a Yahoo. Lo rendiamo OPZIONALE
+# e spento di default. IMPORTANTE (fix schermo nero): un intervallo troppo BREVE fa
+# partire un nuovo refresh mentre il rendering pesante precedente (SVI, Greche, grafici
+# plotly complessi) è ancora in corso; i messaggi delta di Streamlit si sovrappongono e
+# il frontend collassa in schermo nero. Perciò: intervallo minimo prudente (45s) e
+# debounce=True, che ritarda il refresh finché l'utente sta interagendo/il rendering è
+# attivo, invece di interromperlo a metà.
 if menu == "🏟️ DASHBOARD SINGOLA":
     _auto_on = st.sidebar.toggle("🔄 Auto-aggiornamento", value=False,
                                  help="Se attivo, la dashboard si aggiorna da sola all'intervallo scelto. "
-                                      "Tienilo SPENTO se vedi errori di rate limit: su hosting condiviso, "
-                                      "il refresh continuo è la causa principale dei blocchi di Yahoo.")
+                                      "Con la cache i dati restano freschi a sufficienza per lo scalping. "
+                                      "Se noti instabilità, usa un intervallo più ampio.")
     if _auto_on:
         _auto_secs = st.sidebar.select_slider("Intervallo aggiornamento",
-                                              options=[30, 60, 120, 300], value=60,
+                                              options=[45, 60, 120, 300], value=60,
                                               format_func=lambda s: f"{s}s")
-        st_autorefresh(interval=_auto_secs * 1000, key="sentinel_dash_refresh")
+        # debounce=True: se l'utente interagisce o il rendering non è finito, il refresh
+        # viene ritardato invece di sovrapporsi (evita lo schermo nero da delta concorrenti).
+        # Fallback se la versione installata non supporta il parametro debounce.
+        try:
+            st_autorefresh(interval=_auto_secs * 1000, key="sentinel_dash_refresh", debounce=True)
+        except TypeError:
+            st_autorefresh(interval=_auto_secs * 1000, key="sentinel_dash_refresh")
 elif menu == "🔥 SCANNER HOT TICKERS":
-    st_autorefresh(interval=300000, key="sentinel_scan_refresh")
+    try:
+        st_autorefresh(interval=300000, key="sentinel_scan_refresh", debounce=True)
+    except TypeError:
+        st_autorefresh(interval=300000, key="sentinel_scan_refresh")
 # --------------------------
 
 today = datetime.now()
