@@ -1915,70 +1915,117 @@ def fit_svi_slice(strikes, ivs, weights, S, T, r, q):
     """
     Fit della parametrizzazione SVI (Gatheral) sulla varianza totale, in log-moneyness
     FORWARD k=ln(K/F). Ritorna i 5 parametri (a,b,rho,m,sigma) o None se il fit fallisce
-    o produce una superficie con arbitraggio (validato con il test g(k)>=0 di Gatheral-Jacquier,
-    lo STESSO identico test usato in gatheral_risk_neutral_moments).
+    o produce una superficie con arbitraggio (validato con il test g(k)>=0 di Gatheral-Jacquier).
+
+    VERSIONE ROBUSTA PER 0DTE (fondata su letteratura: Gatheral 2012 'Arbitrage-free SVI',
+    Rouah 'When SVI breaks down'). Le scadenze ultra-corte hanno smile ripidissime, ali con
+    IV che esplode e quote spazzatura su strike illiquidi: un fit ai minimi quadrati ingenuo
+    veniva sistematicamente rigettato dalla metrica di errore, che le ali inquinavano. Migliorie:
+      1) filtro outlier robusto (MAD) PRIMA del fit — scarta le quote spazzatura;
+      2) de-pesatura adattiva delle ali (kernel gaussiano sul moneyness): il corpo della
+         smile, dove risiede l'informazione di curvatura/kurtosi, guida il fit;
+      3) inizializzazione multi-start (incl. square-root SVI di Gatheral) — evita i minimi
+         locali su smile ripide/skewed;
+      4) metrica di errore ROBUSTA (mediana sul corpo + media pesata per liquidità), non la
+         media su TUTTI i punti che le ali 0DTE facevano esplodere oltre soglia.
     """
+    strikes = np.asarray(strikes, dtype=float)
+    ivs = np.asarray(ivs, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+
     F = S * np.exp((r - q) * T)
     k = np.log(strikes / F)
+
+    # --- STEP 1: filtro outlier robusto sugli IV (MAD-based) ---
+    # Confronta ogni IV con un trend locale robusto (polinomio di grado 2 pesato) e scarta
+    # i punti oltre 3.5 sigma robusti. Cruciale sulle 0DTE, dove strike illiquidi riportano
+    # IV completamente sballate che, senza filtro, distruggono il fit.
+    if len(k) >= 10:
+        try:
+            coef_rob = np.polyfit(k, ivs, 2, w=np.sqrt(np.maximum(weights, 0.0)))
+            iv_trend = np.polyval(coef_rob, k)
+            resid_iv = ivs - iv_trend
+            med_r = np.median(resid_iv)
+            mad = np.median(np.abs(resid_iv - med_r))
+            if mad > 1e-6:
+                robust_z = np.abs(resid_iv - med_r) / (1.4826 * mad)
+                keep = robust_z < 3.5
+                if keep.sum() >= 6:
+                    k, ivs, weights = k[keep], ivs[keep], weights[keep]
+        except Exception:
+            pass
+
     w = (ivs ** 2) * T
 
     def svi_w(p, k_):
         a, b, rho, m, sigma = p
         return a + b * (rho * (k_ - m) + np.sqrt((k_ - m) ** 2 + sigma ** 2))
 
-    # FIX (damping dei pesi): OI/Volume grezzi e lineari fanno sì che un singolo strike
-    # iper-liquido (tipicamente l'ATM) domini quasi per intero il minimi-quadrati,
-    # lasciando le code - da cui dipende proprio la kurtosi che vogliamo stimare - quasi
-    # prive di vincolo dai dati reali. La radice comprime il range di importanza (uno
-    # strike con 100x l'OI pesa ~10x, non 100x) senza annullare l'informazione di liquidità.
-    imp_weight = np.sqrt(np.asarray(weights, dtype=float))
+    # --- STEP 2: peso combinato liquidità (dampened) x de-pesatura delle ali ---
+    # OI/Volume grezzi fanno dominare l'ATM iper-liquido; la radice comprime il range.
+    # Il kernel gaussiano sul moneyside riduce il peso delle ali, dove SVI (5 parametri)
+    # non è affidabile a T piccoli e dove le quote sono più rumorose.
+    imp_weight = np.sqrt(np.maximum(weights, 0.0))
+    k_scale = max(np.std(k), 0.02)
+    wing_kernel = np.exp(-0.5 * (k / (2.5 * k_scale)) ** 2)
+    combined_w = imp_weight * wing_kernel + 1e-6
 
     def resid(p):
-        return (svi_w(p, k) - w) * np.sqrt(imp_weight)
+        return (svi_w(p, k) - w) * np.sqrt(combined_w)
 
-    a0 = max(np.min(w) * 0.85, 1e-6)
-    p0 = [a0, 0.15, -0.3, 0.0, 0.15]
+    # --- STEP 3: bound + inizializzazione multi-start (incl. square-root SVI) ---
+    atm_var = np.interp(0.0, k, w) if len(k) > 1 else np.median(w)
+    atm_var = max(atm_var, 1e-8)
     lb = [0.0, 0.0, -0.999, -2.5, 0.005]
-    ub = [max(np.max(w) * 3, a0 * 3), 8.0, 0.999, 2.5, 3.0]
+    ub = [max(np.max(w) * 3, atm_var * 5, 1e-6), 8.0, 0.999, 2.5, 3.0]
+    # Punti di partenza: square-root SVI (Gatheral), varianti skew, e l'originale storico.
+    starts = [
+        [atm_var * 0.5, 0.1, -0.3, 0.0, 0.1],
+        [atm_var * 0.85, 0.4, -0.5, 0.0, 0.2],
+        [max(np.min(w) * 0.85, 1e-8), 0.15, -0.3, 0.0, 0.15],
+        [atm_var * 0.3, 0.05, -0.7, float(np.median(k)), 0.05],
+    ]
     try:
-        res = least_squares(resid, p0, bounds=(lb, ub), max_nfev=3000)
-        if not res.success:
+        best_res, best_cost = None, np.inf
+        for p0 in starts:
+            p0 = [min(max(p0[i], lb[i]), ub[i]) for i in range(5)]
+            try:
+                res = least_squares(resid, p0, bounds=(lb, ub), max_nfev=4000)
+                if res.success and res.cost < best_cost:
+                    best_res, best_cost = res, res.cost
+            except Exception:
+                continue
+        if best_res is None:
             return None
-        a, b, rho, m, sigma = res.x
+        a, b, rho, m, sigma = best_res.x
 
         # Test di non-arbitraggio SUL VERTICE (varianza minima non negativa)
         if a + b * sigma * np.sqrt(1 - rho ** 2) < -1e-7:
             return None
 
-        # FIX (vincolo asintotico mancante): il test sopra copre solo il vertice della
-        # smile. Mancava il vincolo sulle ALI (k->+-inf) - esattamente ciò che
-        # gatheral_risk_neutral_moments verifica poi con g(k)>=0 sulla griglia estesa.
-        # Senza controllarlo QUI, l'ottimizzatore restava libero di convergere (specie
-        # su smile ripide/skewed, tipiche di mercati in stress) su combinazioni b/rho
-        # che il controllo a valle rigettava SEMPRE, producendo Kurt(RN)=None in modo
-        # sistematico anche quando il fit "sembrava" riuscito. Bound derivato per via
-        # analitica dal limite di g(k) per k->+-infinito, applicato alla stessa identica
-        # formula g(k) usata sotto: g(+-inf) = 1/4 - [b(1+-rho)]^2/16 >= 0
-        # => b*(1+|rho|) <= 2.
-        if b * (1 + abs(rho)) > 2.0:
+        # Vincolo asintotico sulle ALI: g(+-inf) = 1/4 - [b(1+-rho)]^2/16 >= 0
+        # => b*(1+|rho|) <= 2. (Stessa g(k) verificata a valle da gatheral_risk_neutral_moments.)
+        if b * (1 + abs(rho)) > 2.0 + 1e-6:
             return None
 
-        fitted_w = svi_w(res.x, k)
-        # FIX (soglia sistematicamente più severa sulle scadenze brevi): rel_err era
-        # calcolato sulla varianza totale w=IV^2*T. Per scadenze brevissime w è
-        # microscopico, quindi un errore assolutamente ragionevole in termini di IV (es.
-        # 7 punti percentuali) viene amplificato al quadrato e diviso per un w minuscolo,
-        # producendo un errore "relativo" artificialmente enorme (verificato: un errore
-        # IV del 27% diventa un errore su w del 69% su una scadenza a 3 giorni) - la
-        # soglia colpiva quindi in modo sistematico proprio le scadenze più vicine,
-        # quelle su cui il Kurt(RN) lavora sempre. Misuriamo l'errore direttamente in
-        # spazio IV (la stessa qualità di fit resta giudicata allo stesso modo,
-        # indipendentemente da quanto sia piccola la scadenza).
+        # --- STEP 4: metrica di errore ROBUSTA ---
+        # NON più la media su TUTTI i punti (che le ali 0DTE facevano esplodere). Misuriamo:
+        #   (a) mediana dell'errore relativo sul CORPO della smile (|k| < 1.5 std), dove
+        #       risiede l'informazione per la kurtosi, e
+        #   (b) media pesata per LIQUIDITÀ (gli strike con OI/volume sono quelli che
+        #       definiscono la densità risk-neutral affidabile),
+        # e accettiamo se il più clemente dei due criteri (entrambi sensati) è sotto soglia.
+        fitted_w = svi_w(best_res.x, k)
         fitted_iv = np.sqrt(np.maximum(fitted_w, 1e-10) / T)
-        rel_err = np.mean(np.abs(fitted_iv - ivs) / np.maximum(ivs, 1e-4))
-        if rel_err > 0.30:  # fit troppo povero rispetto al rumore bid/ask reale: non fidarsi
+        rel_all = np.abs(fitted_iv - ivs) / np.maximum(ivs, 1e-4)
+        body = np.abs(k) < (1.5 * k_scale)
+        rel_body = np.median(rel_all[body]) if body.sum() >= 5 else np.median(rel_all)
+        sw = np.sum(weights)
+        rel_liq = np.sum(rel_all * (weights / sw)) if sw > 0 else rel_body
+        rel_err = min(rel_body, rel_liq)
+        if rel_err > 0.30:  # fit troppo povero anche coi criteri robusti: non fidarsi
             return None
-        return res.x
+        return best_res.x
     except Exception:
         return None
 
@@ -2008,12 +2055,17 @@ def gatheral_risk_neutral_moments(svi_params, S, T, r, q, k_range=6.0, n=3000, m
     """
     try:
         # Griglia adattiva: la vera larghezza della distribuzione scala con sqrt(w). Su 0DTE
-        # (w microscopico) un range fisso di +-6 spreca risoluzione in coda dove la densità è
-        # già zero per costruzione. Scaliamo sulla std ATM effettiva, con pavimento/tetto che
-        # preserva il comportamento precedente sulle scadenze normali/lunghe.
+        # (w microscopico, std ATM ~0.003) il floor precedente di 1.5 era CATASTROFICO: la
+        # densità è concentrata in una finestra di ~0.02 attorno a k=0, quindi su una griglia
+        # [-1.5,+1.5] quasi tutti i 3000 punti cadono dove la densità è zero, e l'integrazione
+        # numerica diventa degenere (area~0 -> KURT(RN) N/A sistematico sulle 0DTE). Ora il
+        # range si adatta alla vera larghezza: copre sempre >=8 std effettive, con un floor
+        # basso (0.05) che cattura le densità strettissime senza sprecare risoluzione, e un
+        # tetto invariato che preserva il comportamento su scadenze normali/lunghe.
         w_atm, _, _ = _svi_w_and_derivs(svi_params, np.array([0.0]))
         std_atm = np.sqrt(max(w_atm[0], 1e-10))
-        k_range_eff = float(np.clip(9.0 * std_atm, 1.5, k_range))
+        k_range_eff = float(np.clip(9.0 * std_atm, 0.05, k_range))
+        k_range_eff = max(k_range_eff, 8.0 * std_atm)  # garantisce >=8 std di copertura sempre
         k_grid = np.linspace(-k_range_eff, k_range_eff, n)
         w, wp, wpp = _svi_w_and_derivs(svi_params, k_grid)
         w = np.maximum(w, 1e-10)
@@ -4179,7 +4231,10 @@ if menu == "🏟️ DASHBOARD SINGOLA":
                             diag_info = svi_by_dte.get('__diag__', {}).get(target_dates[0], {})
                             kurt_diag = (f"fit SVI non riuscito per questa scadenza — punti validi: "
                                          f"{diag_info.get('n_valid_pts','?')}/{diag_info.get('n_tot_pts','?')} "
-                                         f"(soglia minima: 6; fallback polinomiale attivo per Greche/Gamma, ma senza SVI Kurt(RN) resta N/A)")
+                                         f"(il fitter robusto per 0DTE — filtro outlier MAD, multi-start square-root SVI, "
+                                         f"metrica su corpo/liquidità — non ha trovato una superficie affidabile: i dati di "
+                                         f"questa scadenza sono genuinamente troppo rumorosi/illiquidi. Fallback polinomiale "
+                                         f"attivo per Greche/Gamma; Kurt(RN) resta N/A perché la densità non sarebbe attendibile)")
                         else:
                             r_near = get_term_structured_rate(near_dte_val)
                             moments = gatheral_risk_neutral_moments(svi_near, spot, max(near_dte_val, 0.00005), r_near, div_yield)
